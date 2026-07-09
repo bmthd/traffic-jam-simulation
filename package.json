@@ -1,0 +1,9 @@
+{
+  "name": "traffic-jam-simulation",
+  "version": "1.0.0",
+  "description": "6車線比較 渋滞シミュレーション",
+  "private": true,
+  "scripts": {
+    "test": "node traffic-simulation.test.js"
+  }
+}
