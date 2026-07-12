@@ -157,7 +157,9 @@
   }
 
   /* ---- lucide アイコン(絵文字を差し替えた線画アイコン) ---- */
-  .lucide{width:1.05em;height:1.05em;vertical-align:-.16em;stroke-width:2.2;flex:none;}
+  /* Tailwind の Preflight が svg{display:block} を当てるため、明示的に
+     inline-block へ戻してテキストと横並びに保つ(これが無いと改行して崩れる) */
+  .lucide{display:inline-block;width:1.05em;height:1.05em;vertical-align:-.16em;stroke-width:2.2;flex:none;}
   button .lucide{margin-right:6px;}
   .hint .lucide{margin-right:5px;color:#ffe9a8;}
   .fair-note .lucide{margin-right:5px;}
