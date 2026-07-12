@@ -6,6 +6,7 @@
 <title>6車線比較 渋滞シミュレーション</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://unpkg.com/lucide@0.475.0/dist/umd/lucide.min.js"></script>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;background:#cfe2ee;
     transition:background-color .9s ease;
@@ -54,7 +55,6 @@
   .mini-pair .mL{color:#c9f5dc;}
   .mini-pair .mR{color:#ffe1a8;}
   .mini-pair .sep{opacity:.6;font-weight:600;}
-  .mini-pair .win::before{content:'👑';font-size:10px;margin-right:2px;}
   .mini-pair .win{text-shadow:0 0 8px rgba(255,213,74,.9);}
 
   .panel-title{display:flex;align-items:center;gap:8px;font-weight:800;font-size:14px;
@@ -155,6 +155,26 @@
     .hint,.note{display:none;}
     .row{margin:4px 0;}
   }
+
+  /* ---- lucide アイコン(絵文字を差し替えた線画アイコン) ---- */
+  .lucide{width:1.05em;height:1.05em;vertical-align:-.16em;stroke-width:2.2;flex:none;}
+  button .lucide{margin-right:6px;}
+  .hint .lucide{margin-right:5px;color:#ffe9a8;}
+  .fair-note .lucide{margin-right:5px;}
+  .side-head .lucide,.status .lucide{margin-right:6px;}
+  .panel-title .lucide{flex:none;}
+  #messageBox .lucide,#errorBox .lucide{margin-right:7px;}
+  .chev{display:inline-flex;align-items:center;}
+  .chev .lucide{width:13px;height:13px;stroke-width:2.4;}
+  .crown .lucide{width:13px;height:13px;margin-right:3px;vertical-align:-.2em;color:#a87900;}
+  /* 義務あり/なしの識別ドット: 白い縁取り + 塗り色でどの背景でも視認できる */
+  .dot{width:14px;height:14px;stroke-width:2.5;}
+  .dot-green{color:#fff;fill:#2ecc71;}
+  .dot-amber{color:#fff;fill:#ffc24a;}
+  /* 勝者マーカー(折りたたみ時のミニ表示)は擬似要素のため lucide crown を埋め込む */
+  .mini-pair .win::before{
+    content:'';display:inline-block;width:1em;height:1em;margin-right:3px;vertical-align:-.15em;
+    background:no-repeat center/contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23ffd54a' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z'/%3E%3Cpath d='M5 21h14'/%3E%3C/svg%3E");}
 </style>
 </head>
 <body>
@@ -162,17 +182,17 @@
 
 <!-- コントロールパネル（左上） -->
 <div id="controlPanel" class="sign panel">
-  <div class="panel-title"><span class="route-badge">E6</span>渋滞シミュレーション<span class="chev">▼</span></div>
+  <div class="panel-title"><span class="route-badge">E6</span>渋滞シミュレーション<span class="chev"><i data-lucide="chevron-down"></i></span></div>
   <div class="panel-body">
   <div class="row">総車両数: <span class="num" id="vehicleCount">0</span> / <span class="num">200</span></div>
   <div class="row">
     車両ペア生成間隔: <span class="num" id="intervalLabel">800</span> ms
     <input type="range" id="intervalSlider" min="100" max="3000" step="50" value="800">
   </div>
-  <button id="resetBtn">🔄 リセット</button>
-  <button id="nightBtn">🌙 ナイトモード</button>
-  <button id="paramsBtn">⚙️ パラメータ調整室</button>
-  <div class="hint">🖱 ドラッグ: 視点回転 ／ ホイール: ズーム<br>📱 スワイプ: 回転 ／ ピンチ: ズーム</div>
+  <button id="resetBtn"><i data-lucide="rotate-ccw"></i>リセット</button>
+  <button id="nightBtn"><i data-lucide="moon"></i>ナイトモード</button>
+  <button id="paramsBtn"><i data-lucide="sliders-horizontal"></i>パラメータ調整室</button>
+  <div class="hint"><i data-lucide="mouse"></i>ドラッグ: 視点回転 ／ ホイール: ズーム<br><i data-lucide="smartphone"></i>スワイプ: 回転 ／ ピンチ: ズーム</div>
   </div>
 </div>
 
@@ -181,31 +201,31 @@
 <div id="infoPanel" class="sign panel" style="position:fixed;">
   <div class="panel-title"><span class="route-badge">比</span>渋滞スコア比較
     <span class="mini-pair"><span class="mL" id="miniLeft">0.0</span><span class="sep">vs</span><span class="mR" id="miniRight">0.0</span></span>
-    <span class="chev">▼</span></div>
+    <span class="chev"><i data-lucide="chevron-down"></i></span></div>
   <div class="panel-body">
     <div class="compare">
       <div class="side left">
-        <div class="crown" id="crownLeft">👑 こちらがスムーズ</div>
-        <div class="side-head"><span class="route-badge">義</span>🟢 義務あり</div>
+        <div class="crown" id="crownLeft"><i data-lucide="crown"></i>こちらがスムーズ</div>
+        <div class="side-head"><span class="route-badge">義</span><i data-lucide="circle" class="dot dot-green"></i>義務あり</div>
         <div class="row">車両数: <span class="num" id="countLeft">0</span> 台
           ／ 平均 <span class="num" id="avgLeft">0</span> km/h</div>
         <div class="row" style="margin-bottom:0;">渋滞スコア
           <div class="score-line"><span class="score-big" id="scoreLeft">0.0</span><span class="score-unit">/ 100</span></div>
           <div class="bar"><div id="barLeft"></div></div>
-          <div class="status" id="statusLeft">🚗💨 スイスイ</div>
+          <div class="status" id="statusLeft"><i data-lucide="gauge"></i>スイスイ</div>
         </div>
         <div class="note">※ 速い車が来たら走行車線へ譲り、追い越し後はすぐ戻る</div>
       </div>
       <div class="seam"></div>
       <div class="side right">
-        <div class="crown" id="crownRight">👑 こちらがスムーズ</div>
-        <div class="side-head"><span class="route-badge">自</span>🟠 義務なし</div>
+        <div class="crown" id="crownRight"><i data-lucide="crown"></i>こちらがスムーズ</div>
+        <div class="side-head"><span class="route-badge">自</span><i data-lucide="circle" class="dot dot-amber"></i>義務なし</div>
         <div class="row">車両数: <span class="num" id="countRight">0</span> 台
           ／ 平均 <span class="num" id="avgRight">0</span> km/h</div>
         <div class="row" style="margin-bottom:0;">渋滞スコア
           <div class="score-line"><span class="score-big" id="scoreRight">0.0</span><span class="score-unit">/ 100</span></div>
           <div class="bar"><div id="barRight"></div></div>
-          <div class="status" id="statusRight">🚗💨 スイスイ</div>
+          <div class="status" id="statusRight"><i data-lucide="gauge"></i>スイスイ</div>
         </div>
         <div class="note">※ 譲る義務がなく、追い越し車線に長居するマイペース派も混在</div>
       </div>
@@ -217,13 +237,13 @@
 <div id="paramOverlay">
   <div id="paramModal" class="sign">
     <div class="panel-title"><span class="route-badge">調</span>パラメータ調整室
-      <button id="paramClose" aria-label="閉じる">✕</button></div>
-    <div class="fair-note">🔍 <b>公平性について</b>: ここにある値はすべて<b>両区間のドライバーに共通</b>です。
+      <button id="paramClose" aria-label="閉じる"><i data-lucide="x"></i></button></div>
+    <div class="fair-note"><i data-lucide="scale"></i><b>公平性について</b>: ここにある値はすべて<b>両区間のドライバーに共通</b>です。
       左右の違いは「速い車に追いつかれたら譲るか」というルールだけ。
       値を自由に動かして、それでも差が出るか確かめてください。</div>
     <div id="paramList"></div>
     <div class="pactions">
-      <button id="paramApply">🔄 リセットして適用</button>
+      <button id="paramApply"><i data-lucide="rotate-ccw"></i>リセットして適用</button>
       <button id="paramDefaults">既定値に戻す</button>
     </div>
     <div class="apply-note">※ 交通量はすぐに反映されます。ドライバーの性格に関わる値は「リセットして適用」で全車両を作り直すと完全に反映されます。</div>
@@ -1047,12 +1067,20 @@ if (typeof globalThis !== 'undefined') globalThis.SimCore = SimCore;
 (function(){
 'use strict';
 
+/* ================= lucide アイコンヘルパー ================= */
+// 動的に差し替えるラベル用: プレースホルダ <i data-lucide> を生成し、
+// renderIcons() でまとめて SVG に変換する(変換済みの要素は再処理されない)
+function icon(name, cls){ return '<i data-lucide="' + name + '"' + (cls ? ' class="' + cls + '"' : '') + '></i>'; }
+function renderIcons(){ if (window.lucide && lucide.createIcons) lucide.createIcons(); }
+
 /* ================= エラーハンドリング ================= */
 const errorBox = document.getElementById('errorBox');
 function showError(msg){
   console.error('[Simulation Error]', msg);
-  errorBox.textContent = '⚠ エラーが発生しました: ' + msg;
+  errorBox.innerHTML = icon('triangle-alert');
+  errorBox.append('エラーが発生しました: ' + msg);
   errorBox.style.display = 'block';
+  renderIcons();
 }
 window.addEventListener('error', function(e){ showError(e.message); });
 
@@ -1581,7 +1609,7 @@ els.slider.addEventListener('input', function(){
 });
 document.getElementById('resetBtn').addEventListener('click', function(){
   world.reset();
-  showMessage('🔄 シミュレーションをリセットしました');
+  showMessage(icon('rotate-ccw') + 'シミュレーションをリセットしました');
 });
 
 /* ---- ナイトモード切替(約1.6秒の夕暮れクロスフェード) ---- */
@@ -1628,27 +1656,38 @@ function setNight(on){
     applyEnv();
   }
   document.body.classList.toggle('night', on);
-  nightBtn.textContent = on ? '☀️ デイモード' : '🌙 ナイトモード';
+  nightBtn.innerHTML = on ? icon('sun') + 'デイモード' : icon('moon') + 'ナイトモード';
+  renderIcons();
 }
 nightBtn.addEventListener('click', function(){
   setNight(!isNight);
-  showMessage(isNight ? '🌙 ナイトモードに切り替えました' : '☀️ デイモードに切り替えました');
+  showMessage(isNight ? icon('moon') + 'ナイトモードに切り替えました' : icon('sun') + 'デイモードに切り替えました');
 });
 
 let msgTimer = null;
 function showMessage(text){
-  els.messageBox.textContent = text;
+  els.messageBox.innerHTML = text;
   els.messageBox.classList.add('show');
+  renderIcons();
   clearTimeout(msgTimer);
   msgTimer = setTimeout(function(){ els.messageBox.classList.remove('show'); }, 2400);
 }
 
-function statusLabel(score){
-  if (score < 20) return '🚗💨 スイスイ';
-  if (score < 40) return '🙂 順調';
-  if (score < 60) return '😐 やや混雑';
-  if (score < 80) return '😣 渋滞';
-  return '🆘 大渋滞';
+// 渋滞スコアに応じた状態(段階が変わった時だけ DOM を書き換えてアイコンを再生成)
+function statusTier(score){
+  if (score < 20) return { icon: 'gauge', label: 'スイスイ' };
+  if (score < 40) return { icon: 'smile', label: '順調' };
+  if (score < 60) return { icon: 'meh', label: 'やや混雑' };
+  if (score < 80) return { icon: 'frown', label: '渋滞' };
+  return { icon: 'angry', label: '大渋滞' };
+}
+function setStatus(el, score){
+  const t = statusTier(score);
+  if (el._statusIcon === t.icon) return; // 段階が同じなら何もしない(毎フレームの再生成を回避)
+  el._statusIcon = t.icon;
+  el.innerHTML = icon(t.icon);
+  el.append(t.label);
+  renderIcons();
 }
 function scoreColor(score){
   if (score < 30) return '#7CFC9A';
@@ -1670,8 +1709,8 @@ function updateHUD(){
   els.barRight.style.width = R.score + '%';
   els.barLeft.style.backgroundColor = scoreColor(L.score);
   els.barRight.style.backgroundColor = scoreColor(R.score);
-  els.statusLeft.textContent = statusLabel(L.score);
-  els.statusRight.textContent = statusLabel(R.score);
+  setStatus(els.statusLeft, L.score);
+  setStatus(els.statusRight, R.score);
   const diff = L.score - R.score;
   els.crownLeft.classList.toggle('show', diff < -5 && L.n > 5);
   els.crownRight.classList.toggle('show', diff > 5 && R.n > 5);
@@ -1856,10 +1895,12 @@ try {
   world.populateInitial();
   els.intervalLabel.textContent = world.spawnInterval;
   applyEnv();
+  renderIcons(); // 静的な data-lucide プレースホルダを一括で SVG 化
   updateHUD();
   updateCamera();
   animate();
-  showMessage('🟢 緑 = 義務あり(ゆずる) ／ 🟠 オレンジ = 義務なし — 標識と路肩の色が目印');
+  showMessage(icon('circle', 'dot dot-green') + '緑 = 義務あり(ゆずる) ／ ' +
+              icon('circle', 'dot dot-amber') + 'オレンジ = 義務なし — 標識と路肩の色が目印');
 } catch (e) {
   showError(e.message);
   throw e;
