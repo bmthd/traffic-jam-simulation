@@ -96,6 +96,7 @@
   /* ---- カラーモード切替(右上の丸ボタン)。存在に気づけるよう発光リングで誘目 ---- */
   #nightBtn{position:fixed;top:14px;right:14px;z-index:30;width:56px;height:56px;padding:0;
     display:flex;align-items:center;justify-content:center;cursor:pointer;
+    -webkit-tap-highlight-color:transparent;-webkit-appearance:none;appearance:none;outline:none;
     border:3px solid #fff;border-radius:50%;color:#fff;
     background:radial-gradient(circle at 32% 28%, #ffe28f 0%, #ffb638 46%, #f59512 100%);
     box-shadow:0 6px 18px rgba(120,70,0,.42), inset 0 1px 0 rgba(255,255,255,.6);
@@ -1698,7 +1699,6 @@ function setNight(on){
 }
 nightBtn.addEventListener('click', function(){
   setNight(!isNight);
-  showMessage(isNight ? icon('moon') + 'ナイトモードに切り替えました' : icon('sun') + 'デイモードに切り替えました');
 });
 
 let msgTimer = null;
