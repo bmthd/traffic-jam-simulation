@@ -93,7 +93,7 @@
   #resetBtn:active{transform:translateY(2px);box-shadow:0 1px 0 #c8d6cd;}
   body.night{background:#070b16;}
 
-  /* ---- カラーモード切替(右上の丸ボタン)。存在に気づけるよう発光リングで誘目 ---- */
+  /* ---- カラーモード切替(右上の丸ボタン) ---- */
   #nightBtn{position:fixed;top:14px;right:14px;z-index:30;width:56px;height:56px;padding:0;
     display:flex;align-items:center;justify-content:center;cursor:pointer;
     -webkit-tap-highlight-color:transparent;-webkit-appearance:none;appearance:none;outline:none;
@@ -101,8 +101,6 @@
     background:radial-gradient(circle at 32% 28%, #ffe28f 0%, #ffb638 46%, #f59512 100%);
     box-shadow:0 6px 18px rgba(120,70,0,.42), inset 0 1px 0 rgba(255,255,255,.6);
     transition:transform .18s ease, box-shadow .3s ease, background .9s ease;}
-  #nightBtn::before{content:'';position:absolute;inset:-6px;border-radius:50%;pointer-events:none;
-    border:2px solid rgba(255,193,60,.55);animation:mode-pulse 2.6s ease-out infinite;}
   #nightBtn .lucide{width:26px;height:26px;stroke-width:2.4;margin:0;
     filter:drop-shadow(0 1px 1px rgba(0,0,0,.25));transition:transform .45s ease;}
   #nightBtn:hover{transform:scale(1.08) rotate(-6deg);
@@ -114,13 +112,6 @@
     background:radial-gradient(circle at 34% 26%, #35507f 0%, #1a2a4d 48%, #0d1730 100%);
     box-shadow:0 6px 18px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.32),
       0 0 22px rgba(255,214,120,.35);}
-  body.night #nightBtn::before{border-color:rgba(255,214,120,.5);}
-  @keyframes mode-pulse{
-    0%{transform:scale(1);opacity:.85;}
-    70%,100%{transform:scale(1.4);opacity:0;}}
-  @media (prefers-reduced-motion: reduce){
-    #nightBtn::before{animation:none;}
-  }
   @media (max-width:700px){
     #nightBtn{width:50px;height:50px;top:10px;right:10px;}
     #nightBtn .lucide{width:23px;height:23px;}
