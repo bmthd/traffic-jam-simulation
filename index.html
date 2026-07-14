@@ -87,12 +87,34 @@
   input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#fff;
     border:3px solid #ffd54a;cursor:pointer;}
 
-  #resetBtn,#nightBtn{width:100%;margin-top:8px;background:#fff;color:#05613b;font-weight:800;font-size:13px;
+  #resetBtn{width:100%;margin-top:8px;background:#fff;color:#05613b;font-weight:800;font-size:13px;
     border:none;border-radius:9px;padding:8px 0;cursor:pointer;box-shadow:0 3px 0 #c8d6cd;
     transition:transform .08s, box-shadow .08s;}
-  #resetBtn:active,#nightBtn:active{transform:translateY(2px);box-shadow:0 1px 0 #c8d6cd;}
-  #nightBtn{background:#15233f;color:#ffe9a8;box-shadow:0 3px 0 #060d1c;}
+  #resetBtn:active{transform:translateY(2px);box-shadow:0 1px 0 #c8d6cd;}
   body.night{background:#070b16;}
+
+  /* ---- カラーモード切替(右上の丸ボタン) ---- */
+  #nightBtn{position:fixed;top:14px;right:14px;z-index:30;width:56px;height:56px;padding:0;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    -webkit-tap-highlight-color:transparent;-webkit-appearance:none;appearance:none;outline:none;
+    border:3px solid #fff;border-radius:50%;color:#fff;
+    background:radial-gradient(circle at 32% 28%, #ffe28f 0%, #ffb638 46%, #f59512 100%);
+    box-shadow:0 6px 18px rgba(120,70,0,.42), inset 0 1px 0 rgba(255,255,255,.6);
+    transition:transform .18s ease, box-shadow .3s ease, background .9s ease;}
+  #nightBtn .lucide{width:26px;height:26px;stroke-width:2.4;margin:0;
+    filter:drop-shadow(0 1px 1px rgba(0,0,0,.25));}
+  #nightBtn:hover{transform:scale(1.08);
+    box-shadow:0 9px 24px rgba(120,70,0,.5), inset 0 1px 0 rgba(255,255,255,.7);}
+  #nightBtn:active{transform:scale(.93);}
+  /* ナイトモード時: 冷たい藍色 + 暖色の縁光の月ボタンへ */
+  body.night #nightBtn{color:#ffe9a8;
+    background:radial-gradient(circle at 34% 26%, #35507f 0%, #1a2a4d 48%, #0d1730 100%);
+    box-shadow:0 6px 18px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.32),
+      0 0 22px rgba(255,214,120,.35);}
+  @media (max-width:700px){
+    #nightBtn{width:50px;height:50px;top:10px;right:10px;}
+    #nightBtn .lucide{width:23px;height:23px;}
+  }
   .hint{font-size:10.5px;opacity:.85;margin-top:9px;line-height:1.6;border-top:1px dashed rgba(255,255,255,.4);padding-top:7px;}
 
   #messageBox{position:fixed;top:46%;left:50%;transform:translate(-50%,-50%);z-index:20;
@@ -182,6 +204,9 @@
 <body>
 <div id="container"></div>
 
+<!-- カラーモード切替（右上・丸ボタン） -->
+<button id="nightBtn" title="ナイトモードに切り替え" aria-label="ナイトモードに切り替え"><i data-lucide="sun"></i></button>
+
 <!-- コントロールパネル（左上） -->
 <div id="controlPanel" class="sign panel">
   <div class="panel-title"><span class="route-badge">E6</span>渋滞シミュレーション<span class="chev"><i data-lucide="chevron-down"></i></span></div>
@@ -192,7 +217,6 @@
     <input type="range" id="intervalSlider" min="100" max="3000" step="50" value="800">
   </div>
   <button id="resetBtn"><i data-lucide="rotate-ccw"></i>リセット</button>
-  <button id="nightBtn"><i data-lucide="moon"></i>ナイトモード</button>
   <button id="paramsBtn"><i data-lucide="sliders-horizontal"></i>パラメータ調整室</button>
   <div class="hint"><i data-lucide="mouse"></i>ドラッグ: 視点回転 ／ ホイール: ズーム<br><i data-lucide="smartphone"></i>スワイプ: 回転 ／ ピンチ: ズーム</div>
   </div>
@@ -1658,12 +1682,13 @@ function setNight(on){
     applyEnv();
   }
   document.body.classList.toggle('night', on);
-  nightBtn.innerHTML = on ? icon('sun') + 'デイモード' : icon('moon') + 'ナイトモード';
+  nightBtn.innerHTML = on ? icon('moon') : icon('sun'); // アイコンは現在のモードを表す
+  nightBtn.title = on ? 'デイモードに切り替え' : 'ナイトモードに切り替え';
+  nightBtn.setAttribute('aria-label', nightBtn.title);
   renderIcons();
 }
 nightBtn.addEventListener('click', function(){
   setNight(!isNight);
-  showMessage(isNight ? icon('moon') + 'ナイトモードに切り替えました' : icon('sun') + 'デイモードに切り替えました');
 });
 
 let msgTimer = null;
