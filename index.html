@@ -102,10 +102,9 @@
     box-shadow:0 6px 18px rgba(120,70,0,.42), inset 0 1px 0 rgba(255,255,255,.6);
     transition:transform .18s ease, box-shadow .3s ease, background .9s ease;}
   #nightBtn .lucide{width:26px;height:26px;stroke-width:2.4;margin:0;
-    filter:drop-shadow(0 1px 1px rgba(0,0,0,.25));transition:transform .45s ease;}
-  #nightBtn:hover{transform:scale(1.08) rotate(-6deg);
+    filter:drop-shadow(0 1px 1px rgba(0,0,0,.25));}
+  #nightBtn:hover{transform:scale(1.08);
     box-shadow:0 9px 24px rgba(120,70,0,.5), inset 0 1px 0 rgba(255,255,255,.7);}
-  #nightBtn:hover .lucide{transform:rotate(30deg);}
   #nightBtn:active{transform:scale(.93);}
   /* ナイトモード時: 冷たい藍色 + 暖色の縁光の月ボタンへ */
   body.night #nightBtn{color:#ffe9a8;
@@ -206,7 +205,7 @@
 <div id="container"></div>
 
 <!-- カラーモード切替（右上・丸ボタン） -->
-<button id="nightBtn" title="ナイトモードに切り替え" aria-label="ナイトモードに切り替え"><i data-lucide="moon"></i></button>
+<button id="nightBtn" title="ナイトモードに切り替え" aria-label="ナイトモードに切り替え"><i data-lucide="sun"></i></button>
 
 <!-- コントロールパネル（左上） -->
 <div id="controlPanel" class="sign panel">
@@ -1683,7 +1682,7 @@ function setNight(on){
     applyEnv();
   }
   document.body.classList.toggle('night', on);
-  nightBtn.innerHTML = on ? icon('sun') : icon('moon');
+  nightBtn.innerHTML = on ? icon('moon') : icon('sun'); // アイコンは現在のモードを表す
   nightBtn.title = on ? 'デイモードに切り替え' : 'ナイトモードに切り替え';
   nightBtn.setAttribute('aria-label', nightBtn.title);
   renderIcons();
