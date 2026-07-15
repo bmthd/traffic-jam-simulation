@@ -24,4 +24,9 @@ export default defineConfig({
     // シミュレーションを実時間で数百秒ぶん回すシナリオテストがあるため長め
     testTimeout: 300_000,
   },
+  // コミット時 (pre-commit hook → `vp staged`) にステージ済みファイルをフォーマットする。
+  // hooks 本体は `vp config` (pnpm install の prepare で自動実行) が .vite-hooks に導入する
+  staged: {
+    '*.{ts,tsx,js,jsx,css,html,json,md,yml,yaml}': 'vp fmt',
+  },
 });

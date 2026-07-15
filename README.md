@@ -5,22 +5,30 @@
 
 ## 開発
 
-ツールチェーンは [Vite+](https://viteplus.dev/) (`vp`) に統一している。
-ビルド (Vite) / テスト (Vitest) / lint (Oxlint) / フォーマット (Oxfmt) / 型チェックがすべて `vp` 経由で動く。
+- ランタイム: Node.js 26 (`.node-version` で固定)
+- パッケージマネージャ: pnpm (`package.json#packageManager` で固定)
+- ツールチェーン: [Vite+](https://viteplus.dev/) (`vp`) に統一。
+  ビルド (Vite) / テスト (Vitest) / lint (Oxlint) / フォーマット (Oxfmt) / 型チェックがすべて `vp` 経由で動く
 
 ```bash
-npm install
-npm run dev      # 開発サーバー (HMR付き)
-npm test         # シミュレーションコアのテスト (Vitest)
-npm run check    # フォーマット + lint + 型チェックを一括実行
-npm run lint     # lint のみ (Oxlint, 型情報を使ったルール込み)
-npm run fmt      # フォーマット適用 (Oxfmt)
-npm run build    # dist/ へバンドル出力
-npm run preview  # ビルド結果の確認サーバー
+pnpm install     # 依存導入 + git hooks 導入 (prepare で `vp config` が走る)
+pnpm dev         # 開発サーバー (HMR付き)
+pnpm test        # シミュレーションコアのテスト (Vitest)
+pnpm check       # フォーマット + lint + 型チェックを一括実行
+pnpm lint        # lint のみ (Oxlint, 型情報を使ったルール込み)
+pnpm fmt         # フォーマット適用 (Oxfmt)
+pnpm build       # dist/ へバンドル出力
+pnpm preview     # ビルド結果の確認サーバー
 ```
 
-依存 (three / lucide) は npm で管理し、Vite+ でバンドルする。CDN は使わない。
-lint / フォーマット / 型チェックの設定は `vite.config.ts` に集約している。
+依存 (three / lucide) は pnpm で管理し、Vite+ でバンドルする。CDN は使わない。
+lint / フォーマット / 型チェック / コミットフックの設定は `vite.config.ts` に集約している。
+
+### コミットフック
+
+`pnpm install` 時に `vp config` が `.vite-hooks` の pre-commit フックを有効化する。
+コミットすると `vp staged` がステージ済みファイルに `vp fmt` を適用するため、
+フォーマット漏れはコミットに入らない。スキップしたい場合は `VITE_GIT_HOOKS=0` を設定する。
 
 ## 構成と責務
 
