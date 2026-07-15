@@ -8,9 +8,22 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://unpkg.com/lucide@0.475.0/dist/umd/lucide.min.js"></script>
 <style>
+  /* ---- 公団ゴシック(GD-高速道路ゴシックJA) ----
+     高速道路の案内標識に使われる“公団文字(公団ゴシック)”を再現したフリーフォント。
+     (C) GroupD.B.P.'s / pumpCurry  https://542.jp/font/gdhwgoja/  CC BY-SA 4.0
+     ページ内で使用し、かつ実際に字形を持つ文字のみをサブセット化(woff2)して自前ホスト。
+     標識語彙(渋滞・出口・速度 等)・かな・数字・欧文は公団ゴシックで、
+     本フォントに字形の無い一般漢字は下の font-family 後続へ自動フォールバックする。 */
+  @font-face{
+    font-family:'GD-HighwayGothicJA';
+    src:url('fonts/kodan-gothic.woff2') format('woff2');
+    font-weight:400 900;   /* 収録は単一ウェイト。太字はブラウザ側で合成される */
+    font-style:normal;
+    font-display:swap;
+  }
   html,body{margin:0;height:100%;overflow:hidden;background:#cfe2ee;
     transition:background-color .9s ease;
-    font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Noto Sans JP','Yu Gothic UI',sans-serif;}
+    font-family:'GD-HighwayGothicJA','Hiragino Kaku Gothic ProN','Hiragino Sans','Noto Sans JP','Yu Gothic UI',sans-serif;}
   #container{position:fixed;inset:0;}
   canvas{display:block;touch-action:none;}
 
@@ -27,8 +40,17 @@
   }
   /* 夜は標識の照明を落とす(計器盤のような減光) */
   body.night .sign{filter:brightness(.62) saturate(.92);}
+
+  /* ---- Webフォント読み込み中のちらつき(FOUT)対策 ----
+     公団ゴシックが確定するまで data-fade を付けた標識パネルを不可視にしておき、
+     読み込み完了後に .3s で一斉フェードインさせる。素の書体で一瞬描画→差し替え、
+     という“ちらつき”を防ぐ。3D シーンと背景は常に表示されるため白画面は出ない。
+     opacity と併せて filter も指定し、.sign のナイトモード減光アニメを潰さない。 */
+  [data-fade]{transition:opacity .3s ease-out, filter .9s ease;}
+  html[data-fonts="loading"] [data-fade]{opacity:0;pointer-events:none;}
+
   @media (prefers-reduced-motion: reduce){
-    html,body,.sign{transition:none;}
+    html,body,.sign,[data-fade]{transition:none;}
   }
   .sign.amber .route-badge{color:#965c03;border-color:#965c03;}
   .panel{position:fixed;z-index:10;padding:12px 14px;user-select:none;-webkit-user-select:none;}
@@ -200,6 +222,24 @@
     content:'';display:inline-block;width:1em;height:1em;margin-right:3px;vertical-align:-.15em;
     background:no-repeat center/contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23ffd54a' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z'/%3E%3Cpath d='M5 21h14'/%3E%3C/svg%3E");}
 </style>
+<script>
+/* 公団ゴシックの読み込み完了(または3秒のタイムアウト)まで data-fade 要素を待機させ、
+   確定後に一斉フェードインさせる。<head> 内で body 描画前に data-fonts="loading" を
+   立てるので、最初の描画から確定まで標識パネルは不可視。フォントキャッシュヒット時も
+   同じ .3s のフェードを通し、1フレームだけ素の書体がちらつく現象をなくす。
+   document.fonts 非対応環境では何もせず(=常時表示)、グレースフルに劣化する。 */
+(function(){
+  if(!('fonts' in document)) return;
+  var html=document.documentElement;
+  html.dataset.fonts='loading';
+  function reveal(){ delete html.dataset.fonts; }
+  var loaded=document.fonts.load('1em "GD-HighwayGothicJA"')
+    .catch(function(){})
+    .then(function(){ return document.fonts.ready; });
+  var timeout=new Promise(function(resolve){ setTimeout(resolve, 3000); });
+  Promise.race([loaded, timeout]).then(reveal);
+})();
+</script>
 </head>
 <body>
 <div id="container"></div>
@@ -208,7 +248,7 @@
 <button id="nightBtn" title="ナイトモードに切り替え" aria-label="ナイトモードに切り替え"><i data-lucide="sun"></i></button>
 
 <!-- コントロールパネル（左上） -->
-<div id="controlPanel" class="sign panel">
+<div id="controlPanel" class="sign panel" data-fade>
   <div class="panel-title"><span class="route-badge">E6</span>渋滞シミュレーション<span class="chev"><i data-lucide="chevron-down"></i></span></div>
   <div class="panel-body">
   <div class="row">総車両数: <span class="num" id="vehicleCount">0</span> / <span class="num">200</span></div>
@@ -224,7 +264,7 @@
 
 <!-- 左下: 義務あり区間(緑) -->
 <!-- 下部: 2区間の比較パネル(1枚) -->
-<div id="infoPanel" class="sign panel" style="position:fixed;">
+<div id="infoPanel" class="sign panel" style="position:fixed;" data-fade>
   <div class="panel-title"><span class="route-badge">比</span>渋滞スコア比較
     <span class="mini-pair"><span class="mL" id="miniLeft">0.0</span><span class="sep">vs</span><span class="mR" id="miniRight">0.0</span></span>
     <span class="chev"><i data-lucide="chevron-down"></i></span></div>
