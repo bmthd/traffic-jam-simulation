@@ -2,15 +2,44 @@
    シミュレーションコア: ワールド（車両生成・時間発展・スコア）
    （DOM / THREE 非依存・テスト対象）
    ============================================================ */
-import { CONST, TYPES, TYPE_WEIGHTS } from './constants.js';
-import { clamp, wrapDelta, WRAP } from './utils.js';
-import { Vehicle } from './vehicle.js';
+import { CONST, TYPES, TYPE_WEIGHTS } from './constants';
+import type { Section, SimMode, VehicleTypeName } from './constants';
+import { clamp, wrapDelta, WRAP } from './utils';
+import type { Rng } from './utils';
+import { Vehicle } from './vehicle';
+
+export interface WorldOptions {
+  rng?: Rng;
+  mode?: SimMode;
+  spawnInterval?: number;
+}
+
+export interface SectionStats {
+  n: number;
+  avg: number;
+  score: number;
+}
 
 export class World {
-  constructor(opts){
-    opts = opts || {};
+  rng: Rng;
+  mode: SimMode;
+  spawnInterval: number;
+  vehicles: Vehicle[];
+  spawnAccum: number;
+  time: number;
+  _sec: Record<Section, Vehicle[]>;
+  stats: {
+    changes: Record<Section, number>;
+    yields: Record<Section, number>;
+    cancels: Record<Section, number>;
+  };
+  _absRR: number[] | null = null; // absorbモード: 吸収運転車を等間隔に混ぜるカウンタ
+  _laneRR = 0; // absorbモード: レーン割当のラウンドロビン
+  perturbT: number | null = null; // absorbモード: 次のよそ見ブレーキまでの残り時間
+
+  constructor(opts: WorldOptions = {}) {
     this.rng = opts.rng || Math.random;
-    this.mode = opts.mode || 'rules';   // 'rules' = ルール比較 / 'absorb' = 渋滞吸収運転
+    this.mode = opts.mode || 'rules'; // 'rules' = ルール比較 / 'absorb' = 渋滞吸収運転
     this.spawnInterval = opts.spawnInterval != null ? opts.spawnInterval : 800;
     this.vehicles = [];
     this.spawnAccum = 0;
@@ -19,12 +48,14 @@ export class World {
     this.stats = { changes: { L: 0, R: 0 }, yields: { L: 0, R: 0 }, cancels: { L: 0, R: 0 } };
   }
 
-  pickType(){
+  pickType(): VehicleTypeName {
     // absorbモード: 車種を統一(円周実験と同条件)。車長の違いが車線ごとの
     // 実効密度を準安定帯域から外し、波の比較を濁すのを防ぐ
     if (this.mode === 'absorb') return 'Sedan';
     let r = this.rng();
-    for (const [name, w] of TYPE_WEIGHTS) { if ((r -= w) <= 0) return name; }
+    for (const [name, w] of TYPE_WEIGHTS) {
+      if ((r -= w) <= 0) return name;
+    }
     return 'Sedan';
   }
 
@@ -32,12 +63,12 @@ export class World {
   // 道路はループ構造で車両が退出しないため、無条件に流入を続けると
   // どんな間隔でも最終的に飽和渋滞になり左右のルール差が消えてしまう。
   // そこで「間隔が短い = 交通需要が多い」と解釈し、間隔に応じた密度を維持する。
-  targetCount(){
+  targetCount(): number {
     const factor = this.mode === 'absorb' ? CONST.ABSORB_DENSITY_FACTOR : CONST.DEMAND_FACTOR;
     return clamp(Math.round(factor / this.spawnInterval / 2) * 2, 24, CONST.MAX_VEHICLES);
   }
 
-  isSpawnClear(section, lane, z, exclude){
+  isSpawnClear(section: Section, lane: number, z: number, exclude: Vehicle | null): boolean {
     for (const v of this.vehicles) {
       if (v === exclude || v.waiting || v.section !== section || !v.occupies(lane)) continue;
       if (Math.abs(wrapDelta(v.z - z)) < 15 + v.length) return false;
@@ -46,21 +77,38 @@ export class World {
   }
 
   // 指定地点から見た直近前方車の車間と速度(スポーン時の安全速度算出用・周回対応)
-  aheadInfo(section, lane, z, len, exclude){
-    let best = null, bestD = Infinity;
+  aheadInfo(
+    section: Section,
+    lane: number,
+    z: number,
+    len: number,
+    exclude: Vehicle | null,
+  ): { gap: number; speed: number } | null {
+    let best: Vehicle | null = null,
+      bestD = Infinity;
     for (const v of this.vehicles) {
       if (v === exclude || v.waiting || v.section !== section || !v.occupies(lane)) continue;
       let d = z - v.z; // 前方 = z が小さい側。周回を考慮して正の最短距離に
       d = ((d % WRAP) + WRAP) % WRAP;
       if (d < 0.001) continue;
-      if (d < bestD) { bestD = d; best = v; }
+      if (d < bestD) {
+        bestD = d;
+        best = v;
+      }
     }
     if (!best) return null;
     return { gap: bestD - (len + best.length) / 2, speed: best.speed };
   }
 
   // 車間内で物理的に止まれる速度に丸める(渋滞の列がスポーン地点まで伸びた場合の追突防止)
-  safeSpawnSpeed(section, lane, z, len, wantSpeed, exclude){
+  safeSpawnSpeed(
+    section: Section,
+    lane: number,
+    z: number,
+    len: number,
+    wantSpeed: number,
+    exclude: Vehicle | null,
+  ): number {
     const info = this.aheadInfo(section, lane, z, len, exclude);
     if (!info) return wantSpeed;
     const vmax = info.speed + Math.sqrt(Math.max(0, 2 * 7 * (info.gap - 4)));
@@ -68,7 +116,7 @@ export class World {
   }
 
   // 車両は左右に1台ずつ、同タイプ・同初期速度のペアで生成される
-  spawnPair(){
+  spawnPair(): boolean {
     if (this.vehicles.length >= Math.min(CONST.MAX_VEHICLES, this.targetCount()) - 1) return false;
     const typeName = this.pickType();
     const t = TYPES[typeName];
@@ -80,12 +128,11 @@ export class World {
     // absorbモードでは左右のレーン配置をミラー、かつラウンドロビンで均等にする
     // (車線変更がないため、各車線を準安定密度の帯域に揃える)
     // rulesモードは加速車線(レーン3)の始点から流入し、本線へ合流して入る
-    const laneL = this.mode === 'absorb'
-      ? (this._laneRR = ((this._laneRR || 0) + 1) % 3)
-      : 3;
+    const laneL = this.mode === 'absorb' ? (this._laneRR = (this._laneRR + 1) % 3) : 3;
     const laneR = this.mode === 'absorb' ? laneL : 3;
     const z = this.mode === 'absorb' ? CONST.ROAD_HALF + t.len : CONST.RAMP_Z_TOP;
-    if (!this.isSpawnClear('L', laneL, z, null) || !this.isSpawnClear('R', laneR, z, null)) return false;
+    if (!this.isSpawnClear('L', laneL, z, null) || !this.isSpawnClear('R', laneR, z, null))
+      return false;
     const vL = new Vehicle(this, 'L', laneL, z, typeName, speed);
     const vR = new Vehicle(this, 'R', laneR, z, typeName, speed);
     vL.speed = this.safeSpawnSpeed('L', laneL, z, vL.length, vL.speed, null);
@@ -95,10 +142,10 @@ export class World {
   }
 
   // 最大車両数の約12%をペアでランダム配置
-  populateInitial(){
+  populateInitial(): void {
     // 目標台数の7割を最初から本線に配置する(流入は残りをランプから)。
     // こうしないと混雑側のランプ詰まりが両側の流入を絞り、比較が成立しない
-    const pairs = Math.round(this.targetCount() * 0.7 / 2);
+    const pairs = Math.round((this.targetCount() * 0.7) / 2);
     for (let i = 0; i < pairs; i++) {
       for (let tries = 0; tries < 50; tries++) {
         const typeName = this.pickType();
@@ -108,9 +155,10 @@ export class World {
           speed = Math.max(speed, 32 + this.rng() * 4); // 飛ばし屋
         }
         const z = -CONST.ROAD_HALF + 25 + this.rng() * (CONST.ROAD_HALF * 2 - 40);
-        const laneL = this.mode === 'absorb'
-          ? (this._laneRR = ((this._laneRR || 0) + 1) % 3)
-          : Math.floor(this.rng() * 3);
+        const laneL =
+          this.mode === 'absorb'
+            ? (this._laneRR = (this._laneRR + 1) % 3)
+            : Math.floor(this.rng() * 3);
         const laneR = this.mode === 'absorb' ? laneL : Math.floor(this.rng() * 3);
         if (this.isSpawnClear('L', laneL, z, null) && this.isSpawnClear('R', laneR, z, null)) {
           this.vehicles.push(new Vehicle(this, 'L', laneL, z, typeName, speed));
@@ -121,15 +169,16 @@ export class World {
     }
   }
 
-  reset(){
+  reset(): void {
     this.vehicles.length = 0;
     this.spawnAccum = 0;
     this.time = 0;
     this.populateInitial();
   }
 
-  _rebuildIndex(){
-    const L = [], R = [];
+  _rebuildIndex(): void {
+    const L: Vehicle[] = [],
+      R: Vehicle[] = [];
     for (const v of this.vehicles) if (!v.waiting) (v.section === 'L' ? L : R).push(v);
     L.sort((a, b) => a.z - b.z);
     R.sort((a, b) => a.z - b.z);
@@ -139,7 +188,7 @@ export class World {
     this._sec.R = R;
   }
 
-  step(dt){
+  step(dt: number): void {
     this.time += dt;
     this.spawnAccum += dt * 1000;
     if (this.spawnAccum >= this.spawnInterval) {
@@ -153,10 +202,12 @@ export class World {
       this.perturbT -= dt;
       if (this.perturbT <= 0) {
         this.perturbT = CONST.PERTURB_INTERVAL;
-        const pairs = [];
+        const pairs: [Vehicle, Vehicle][] = [];
         for (let i = 0; i + 1 < this.vehicles.length; i += 2) {
-          const a = this.vehicles[i], b = this.vehicles[i + 1];
-          if (a.section === 'L' && b.section === 'R' && !a.waiting && !b.waiting) pairs.push([a, b]);
+          const a = this.vehicles[i],
+            b = this.vehicles[i + 1];
+          if (a.section === 'L' && b.section === 'R' && !a.waiting && !b.waiting)
+            pairs.push([a, b]);
         }
         if (pairs.length) {
           const [a, b] = pairs[Math.floor(this.rng() * pairs.length)];
@@ -170,8 +221,9 @@ export class World {
   }
 
   // 渋滞スコア: 平均速度(重み75%) + 密度(重み25%) → 0～100
-  computeSection(section){
-    let n = 0, sum = 0;
+  computeSection(section: Section): SectionStats {
+    let n = 0,
+      sum = 0;
     for (const v of this.vehicles) {
       if (v.section !== section) continue;
       n++;
@@ -183,6 +235,10 @@ export class World {
     const avg = sum / n;
     const speedFactor = clamp(1 - avg / CONST.REF_SPEED, 0, 1);
     const densityFactor = clamp(n / CONST.MAX_PER_SECTION, 0, 1);
-    return { n, avg, score: (CONST.SCORE_W_SPEED * speedFactor + CONST.SCORE_W_DENSITY * densityFactor) * 100 };
+    return {
+      n,
+      avg,
+      score: (CONST.SCORE_W_SPEED * speedFactor + CONST.SCORE_W_DENSITY * densityFactor) * 100,
+    };
   }
 }

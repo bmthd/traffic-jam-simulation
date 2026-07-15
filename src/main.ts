@@ -4,14 +4,16 @@
    モジュール読み込み時エラーも画面上のエラーボックスに表示できる
    ============================================================ */
 import './style.css';
-import { showError } from './ui/notify.js';
+import { showError } from './ui/notify';
 
-window.addEventListener('error', function(e){ showError(e.message); });
+window.addEventListener('error', function (e) {
+  showError(e.message);
+});
 
 try {
-  const { start } = await import('./app.js');
+  const { start } = await import('./app');
   start();
 } catch (e) {
-  showError(e.message);
+  showError((e as Error).message);
   throw e;
 }
