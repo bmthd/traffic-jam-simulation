@@ -2,25 +2,12 @@
 /**
  * 6車線比較 渋滞シミュレーション テスト
  *
- * index.html 内の <script id="sim-core"> ブロック
- * （DOM / THREE 非依存のシミュレーションロジック）を抽出して検証する。
+ * src/core/ のシミュレーションコア
+ * （DOM / THREE 非依存のシミュレーションロジック）を検証する。
  *
  * 実行方法:  node traffic-simulation.test.js
  */
-'use strict';
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
-
-/* ---------- sim-core の読み込み ---------- */
-const htmlPath = path.join(__dirname, 'index.html');
-const html = fs.readFileSync(htmlPath, 'utf8');
-const m = html.match(/<script id="sim-core">([\s\S]*?)<\/script>/);
-if (!m) { console.error('sim-core ブロックが見つかりません'); process.exit(1); }
-const ctx = vm.createContext({});
-vm.runInContext(m[1], ctx, { filename: 'sim-core.js' });
-const SimCore = ctx.SimCore;
-const { World, Vehicle, createRng, CONST } = SimCore;
+import { World, Vehicle, createRng, CONST } from './src/core/index.js';
 
 /* ---------- 簡易テストランナー ---------- */
 let passed = 0, failed = 0;

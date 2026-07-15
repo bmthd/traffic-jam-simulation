@@ -12,6 +12,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
       - name: Run simulation tests
-        run: node traffic-simulation.test.js
+        run: npm test
+      - name: Build bundle
+        run: npm run build
