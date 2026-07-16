@@ -12,7 +12,7 @@
     "lint": "vp lint",
     "fmt": "vp fmt",
     "check": "vp check",
-    "prepare": "vp config --no-agent"
+    "prepare": "vp config --no-agent || true"
   },
   "dependencies": {
     "lucide": "0.475.0",

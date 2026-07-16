@@ -1,0 +1,12 @@
+# Cloudflare Pages のデプロイ設定(リポジトリ側で管理)
+#
+# このプロジェクトは Vite+ でバンドルするため、配信するのはリポジトリの
+# ルートではなくビルド成果物 (dist/) になる。出力ディレクトリはこの
+# ファイルが設定のソースになるが、ビルドコマンドはダッシュボードでの
+# 設定が必要: Settings → Build → Build command に `pnpm build` を指定する。
+#
+# Node のバージョンは .node-version、pnpm のバージョンは
+# package.json#packageManager から自動で解決される。
+name = "traffic-jam-simulation"
+compatibility_date = "2026-07-15"
+pages_build_output_dir = "./dist"

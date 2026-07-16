@@ -30,6 +30,16 @@ lint / フォーマット / 型チェック / コミットフックの設定は 
 コミットすると `vp staged` がステージ済みファイルに `vp fmt` を適用するため、
 フォーマット漏れはコミットに入らない。スキップしたい場合は `VITE_GIT_HOOKS=0` を設定する。
 
+## デプロイ (Cloudflare Pages)
+
+リポジトリ連携で PR ごとにプレビューがデプロイされる。バンドル導入により
+配信対象はリポジトリのルートではなく **ビルド成果物 (`dist/`)** になった。
+
+- 出力ディレクトリ: `wrangler.toml` の `pages_build_output_dir` で管理
+- ビルドコマンド: ダッシュボード設定が必要
+  (Workers & Pages → traffic-jam-simulation → Settings → Build → Build command: `pnpm build`)
+- Node / pnpm のバージョンは `.node-version` と `package.json#packageManager` から自動解決
+
 ## 構成と責務
 
 ```
