@@ -1,9 +1,42 @@
 {
   "name": "traffic-jam-simulation",
   "version": "1.0.0",
-  "description": "6車線比較 渋滞シミュレーション",
   "private": true,
+  "description": "6車線比較 渋滞シミュレーション",
+  "type": "module",
   "scripts": {
-    "test": "node traffic-simulation.test.js"
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
+    "test": "vp test run",
+    "lint": "vp lint",
+    "fmt": "vp fmt",
+    "check": "vp check",
+    "prepare": "vp config --no-agent || true"
+  },
+  "dependencies": {
+    "lucide": "0.475.0",
+    "three": "0.128.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.128.0",
+    "typescript": "^7.0.2",
+    "vite-plus": "^0.2.4",
+    "vitest": "4.1.10"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=26.0.0",
+      "onFail": "warn"
+    }
+  },
+  "packageManager": "pnpm@11.13.0",
+  "pnpm": {
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "typescript": "7"
+      }
+    }
   }
 }

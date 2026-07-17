@@ -5,13 +5,26 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  # CI では prepare (vp config) による git hooks 導入をスキップする
+  VITE_GIT_HOOKS: '0'
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # package.json の packageManager からバージョンを読む
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format, lint and type check
+        run: pnpm check
       - name: Run simulation tests
-        run: node traffic-simulation.test.js
+        run: pnpm test
+      - name: Build bundle
+        run: pnpm build
