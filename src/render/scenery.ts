@@ -1,5 +1,6 @@
-/* ================= 背景美術(路側・並木・遠景) =================
+/* ================= 背景美術(路側・遠景) =================
    道路施設(track.js)とは別の「風景」を担当する。
+   道路の外は scene.js の地面(田んぼテクスチャ)が広がる。
    山・雲のマテリアルは materials.js にあり、昼夜の色は theme.js が補間する */
 import * as THREE from 'three';
 import { CONST as C } from '../core';
@@ -54,45 +55,6 @@ const ROAD_HALF = C.ROAD_HALF;
       scene.add(p);
     }
   }
-})();
-
-/* ---- 並木・雑木林(InstancedMeshで軽量に大量配置) ---- */
-(function buildTrees() {
-  const N = 130;
-  const trunkGeo = new THREE.CylinderGeometry(0.1, 0.18, 1, 5);
-  trunkGeo.translate(0, 0.5, 0);
-  const canopyGeo = new THREE.IcosahedronGeometry(1, 0);
-  const trunks = new THREE.InstancedMesh(
-    trunkGeo,
-    new THREE.MeshLambertMaterial({ color: 0x6b4e35 }),
-    N,
-  );
-  const canopies = new THREE.InstancedMesh(
-    canopyGeo,
-    new THREE.MeshLambertMaterial({ color: 0xffffff }),
-    N,
-  );
-  canopies.castShadow = true;
-  const m4 = new THREE.Matrix4(),
-    col = new THREE.Color();
-  for (let i = 0; i < N; i++) {
-    const sx = Math.random() < 0.5 ? -1 : 1;
-    const x = sx * (22 + Math.pow(Math.random(), 1.6) * 70);
-    const z = -ROAD_HALF + Math.random() * ROAD_HALF * 2;
-    const h = 2.4 + Math.random() * 3.6; // 幹の高さ
-    const r = h * (0.42 + Math.random() * 0.22); // 樹冠の半径
-    m4.makeScale(1 + r * 0.3, h, 1 + r * 0.3).setPosition(x, 0, z);
-    trunks.setMatrixAt(i, m4);
-    m4.makeScale(r, r * (0.9 + Math.random() * 0.5), r).setPosition(x, h + r * 0.5, z);
-    canopies.setMatrixAt(i, m4);
-    col.setHSL(
-      0.26 + Math.random() * 0.09,
-      0.35 + Math.random() * 0.25,
-      0.26 + Math.random() * 0.14,
-    );
-    canopies.setColorAt(i, col);
-  }
-  scene.add(trunks, canopies);
 })();
 
 /* ---- 遠景: 山並み(霧の外に置く書割り) ---- */

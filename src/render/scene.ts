@@ -1,6 +1,6 @@
 /* ================= Three.js セットアップ(シーン・カメラ・ライト) ================= */
 import * as THREE from 'three';
-import { makeGrassTexture } from './materials';
+import { makeRicePaddyTexture } from './materials';
 
 export const SKY = 0xcfe2ee;
 
@@ -40,10 +40,10 @@ sun.shadow.camera.far = 500;
 sun.shadow.bias = -0.0006;
 scene.add(sun);
 
-/* ---- 地面（草地。背景の透け防止のため広く・低く配置） ---- */
+/* ---- 地面（田んぼ。背景の透け防止のため広く・低く配置） ---- */
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(1600, 1600),
-  new THREE.MeshLambertMaterial({ color: 0xffffff, map: makeGrassTexture() }),
+  new THREE.MeshLambertMaterial({ color: 0xffffff, map: makeRicePaddyTexture() }),
 );
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.18;

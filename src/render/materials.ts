@@ -49,32 +49,70 @@ export const headMat = new THREE.MeshPhongMaterial({
 export const delinMat = new THREE.MeshBasicMaterial({ color: 0x9aa3ad }); // 視線誘導標
 export const lampHeadMat = new THREE.MeshLambertMaterial({ color: 0xd8d2b8, emissive: 0x000000 }); // 街灯灯具
 
-/* ---- 背景テクスチャ(草地・アスファルト) ---- */
-export function makeGrassTexture(): THREE.CanvasTexture {
+/* ---- 背景テクスチャ(田んぼ・アスファルト) ---- */
+export function makeRicePaddyTexture(): THREE.CanvasTexture {
+  // 2x2区画をひとつのタイルに描き、繰り返しても均一に見えないようにする
   const cv = document.createElement('canvas');
-  cv.width = cv.height = 256;
+  cv.width = cv.height = 512;
   const c2 = cv.getContext('2d')!;
-  c2.fillStyle = '#7c9a66';
-  c2.fillRect(0, 0, 256, 256);
-  // 濃淡のむら + 草の粒感
-  for (let i = 0; i < 2600; i++) {
-    const gr = 120 + Math.random() * 60;
-    c2.fillStyle =
-      'rgba(' +
-      Math.round(gr * 0.72) +
-      ',' +
-      Math.round(gr) +
-      ',' +
-      Math.round(gr * 0.52) +
-      ',' +
-      (0.08 + Math.random() * 0.16).toFixed(2) +
-      ')';
-    const s = 1 + Math.random() * 3;
-    c2.fillRect(Math.random() * 256, Math.random() * 256, s, s);
+  const CELL = 256;
+  for (let py = 0; py < 2; py++) {
+    for (let px = 0; px < 2; px++) {
+      const x0 = px * CELL,
+        y0 = py * CELL;
+      // 下地: 水と土がのぞく田面。区画ごとに明度を変え、田ごとの生育差を出す
+      const base = 92 + Math.random() * 30;
+      c2.fillStyle =
+        'rgb(' +
+        Math.round(base * 0.68) +
+        ',' +
+        Math.round(base) +
+        ',' +
+        Math.round(base * 0.6) +
+        ')';
+      c2.fillRect(x0, y0, CELL, CELL);
+      // 稲の条(すじ): 等間隔の植え付け列を粒で描く
+      for (let ry = 8; ry < CELL - 6; ry += 9) {
+        for (let rx = 5; rx < CELL - 5; rx += 6) {
+          const g = 115 + Math.random() * 70;
+          c2.fillStyle =
+            'rgba(' +
+            Math.round(g * 0.52) +
+            ',' +
+            Math.round(g) +
+            ',' +
+            Math.round(g * 0.4) +
+            ',' +
+            (0.55 + Math.random() * 0.35).toFixed(2) +
+            ')';
+          c2.fillRect(
+            x0 + rx + (Math.random() - 0.5) * 2,
+            y0 + ry + (Math.random() - 0.5) * 2,
+            3,
+            3,
+          );
+        }
+      }
+      // 畦(あぜ): 区画の縁を土色の帯で囲う(目立ちすぎないよう彩度低めに)
+      c2.fillStyle = 'rgba(140,130,95,0.8)';
+      c2.fillRect(x0, y0, CELL, 4);
+      c2.fillRect(x0, y0, 4, CELL);
+      c2.fillRect(x0, y0 + CELL - 4, CELL, 4);
+      c2.fillRect(x0 + CELL - 4, y0, 4, CELL);
+      // 畦の上の雑草
+      for (let i = 0; i < 90; i++) {
+        const onH = Math.random() < 0.5;
+        const t = Math.random() * CELL;
+        const edge = Math.random() < 0.5 ? 0 : CELL - 5;
+        c2.fillStyle = 'rgba(96,120,60,' + (0.2 + Math.random() * 0.3).toFixed(2) + ')';
+        if (onH) c2.fillRect(x0 + t, y0 + edge + Math.random() * 4, 2, 2);
+        else c2.fillRect(x0 + edge + Math.random() * 4, y0 + t, 2, 2);
+      }
+    }
   }
   const tex = new THREE.CanvasTexture(cv);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(56, 56);
+  tex.repeat.set(28, 28); // 1区画 ≒ 28.6m四方
   return tex;
 }
 export function makeAsphaltTexture(): THREE.CanvasTexture {
