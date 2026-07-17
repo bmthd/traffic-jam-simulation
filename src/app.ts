@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { World } from './core';
 import { scene, camera, renderer } from './render/scene';
 import './render/track';
+import './render/scenery';
 import { applyEnv, tickTheme } from './render/theme';
 import { syncMeshes } from './render/vehicle-mesh';
 import { updateCamera, setupCameraControls } from './render/camera';

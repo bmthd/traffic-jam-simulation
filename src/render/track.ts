@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { CONST as C } from '../core';
 import type { Section } from '../core';
 import { scene } from './scene';
-import { delinMat } from './materials';
+import { delinMat, asphaltTex } from './materials';
 
 const ROAD_HALF = C.ROAD_HALF;
 
@@ -15,16 +15,17 @@ export interface SectionTheme {
   title: string;
   sub: string;
 }
+// road はアスファルトテクスチャ(平均約0.73)と乗算されるため明るめに設定
 export const SECTION_THEME: Record<Section, SectionTheme> = {
   L: {
-    road: 0x3a463f,
+    road: 0x4d5c53,
     strip: 0x1fb46a,
     signBg: '#0d8c4d',
     title: '義務あり',
     sub: 'ゆずりあい区間',
   },
   R: {
-    road: 0x4a4238,
+    road: 0x60564a,
     strip: 0xf2a32b,
     signBg: '#c17a08',
     title: '義務なし',
@@ -32,14 +33,14 @@ export const SECTION_THEME: Record<Section, SectionTheme> = {
   },
 };
 
-/* ---- 道路(区間ごとに色味を変える) ---- */
+/* ---- 道路(アスファルト質感 + 区間ごとの色味) ---- */
 for (const [sec, cx] of [
   ['L', -7],
   ['R', 7],
 ] as [Section, number][]) {
   const road = new THREE.Mesh(
     new THREE.BoxGeometry(13.2, 0.12, ROAD_HALF * 2),
-    new THREE.MeshLambertMaterial({ color: SECTION_THEME[sec].road }),
+    new THREE.MeshLambertMaterial({ color: SECTION_THEME[sec].road, map: asphaltTex }),
   );
   road.position.set(cx, -0.06, 0);
   road.receiveShadow = true;
@@ -84,7 +85,7 @@ for (const [sec, sx] of [
     zc = (zTop + zEnd) / 2;
   const ramp = new THREE.Mesh(
     new THREE.BoxGeometry(3.6, 0.12, len),
-    new THREE.MeshLambertMaterial({ color: SECTION_THEME[sec].road }),
+    new THREE.MeshLambertMaterial({ color: SECTION_THEME[sec].road, map: asphaltTex }),
   );
   ramp.position.set(15 * sx, -0.055, zc);
   ramp.receiveShadow = true;

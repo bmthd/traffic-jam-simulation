@@ -13,6 +13,9 @@ import {
   bulbMat,
   beamMat,
   signGlowMat,
+  mtnFarMat,
+  mtnNearMat,
+  cloudMat,
 } from './materials';
 import { nightGroup, nightDome } from './night';
 
@@ -31,6 +34,8 @@ export interface EnvSpec {
   tailIdle: number;
   lampEmissive: number;
   delin: number;
+  mtnFar: number;
+  mtnNear: number;
 }
 
 export const ENV: Record<'day' | 'night', EnvSpec> = {
@@ -49,6 +54,8 @@ export const ENV: Record<'day' | 'night', EnvSpec> = {
     tailIdle: 0x4a0b0b,
     lampEmissive: 0x000000,
     delin: 0x9aa3ad,
+    mtnFar: 0xb9cbd9,
+    mtnNear: 0x93aabf,
   },
   night: {
     bg: 0x141d33,
@@ -65,6 +72,8 @@ export const ENV: Record<'day' | 'night', EnvSpec> = {
     tailIdle: 0x7a1212,
     lampEmissive: 0xffc36b,
     delin: 0xffb054,
+    mtnFar: 0x101a2e,
+    mtnNear: 0x0b1322,
   },
 };
 
@@ -106,6 +115,9 @@ export function applyEnv(): void {
   lerpColor(glassMat.emissive, d.glassEmissive, n.glassEmissive, t);
   lerpColor(lampHeadMat.emissive, d.lampEmissive, n.lampEmissive, t);
   lerpColor(delinMat.color, d.delin, n.delin, t);
+  lerpColor(mtnFarMat.color, d.mtnFar, n.mtnFar, t);
+  lerpColor(mtnNearMat.color, d.mtnNear, n.mtnNear, t);
+  cloudMat.opacity = 0.9 * (1 - t); // 雲は夜には見えない
   _ca.setHex(d.tailIdle);
   _cb.setHex(n.tailIdle);
   themeState.tailIdleHex = _ca.lerp(_cb, t).getHex();
