@@ -40,6 +40,7 @@ export interface VehicleMesh {
   blinkL: THREE.MeshBasicMaterial;
   blinkR: THREE.MeshBasicMaterial;
   beam: THREE.Mesh;
+  beamDist: number;
   bglow: THREE.Mesh;
   prevX: number;
   prevSpeed: number;
@@ -293,12 +294,16 @@ function buildVehicleMesh(v: Vehicle): VehicleMesh {
   const hGeo = new THREE.BoxGeometry(0.34, 0.16, 0.1);
   add(hGeo, headMat, -(W / 2 - 0.34), lightY, -L / 2 - 0.06);
   add(hGeo, headMat, W / 2 - 0.34, lightY, -L / 2 - 0.06);
-  // ヘッドライトの路面照射(夜のみ表示)
+  // ヘッドライトの路面照射(夜のみ表示)。車体グループの子にすると加減速の
+  // ピッチや操舵ロール(毎フレーム細かく揺れる)で光だまりの平面が路面下に
+  // 潜り、深度テストで見え隠れしてチラつくため、シーン直下に置いて常に
+  // 路面と平行を保つ(位置とヨーだけ syncMeshes で追従させる)
+  const beamDist = L / 2 + 4.2;
   const beam = new THREE.Mesh(beamGeo, beamMat);
-  beam.rotation.x = -Math.PI / 2;
-  beam.position.set(0, 0.04, -(L / 2 + 4.2));
+  beam.rotation.order = 'YXZ'; // 平面を伏せた後にヨーを世界のY軸まわりで適用する
+  beam.rotation.set(-Math.PI / 2, 0, 0);
   beam.visible = themeState.mix > 0.04;
-  g.add(beam);
+  scene.add(beam);
   // ブレーキランプ（後方 = +Z）
   // 灯火類は照明の影響を受けない発光体として描く(昼でもはっきり光って見える)
   const brakeMat = new THREE.MeshBasicMaterial({ color: 0x4a0b0b });
@@ -336,6 +341,7 @@ function buildVehicleMesh(v: Vehicle): VehicleMesh {
     blinkL,
     blinkR,
     beam,
+    beamDist,
     bglow,
     prevX: v.x + drv.bias,
     prevSpeed: v.speed,
@@ -356,7 +362,10 @@ export function syncMeshes(world: World, dt: number): void {
       scene.add(m.group);
     }
     m.group.visible = !v.waiting;
-    if (v.waiting) continue;
+    if (v.waiting) {
+      m.beam.visible = false;
+      continue;
+    }
     // ---- ハンドル操作の個性: 定位置のズレ + 無意識の蛇行(速度が低いほど収まる) ----
     const d = m.drv;
     d.t += dt;
@@ -376,7 +385,11 @@ export function syncMeshes(world: World, dt: number): void {
     m.prevSpeed = v.speed;
     m.pitch += (clamp(acc * 0.0075, -0.05, 0.03) - m.pitch) * Math.min(1, dt * 6);
     m.group.rotation.x = m.pitch;
+    // ヘッドライトの光だまり: 車体の揺れに追従させず、常に路面上へ平置きする
     m.beam.visible = themeState.mix > 0.04;
+    const yaw = m.group.rotation.y;
+    m.beam.position.set(x - Math.sin(yaw) * m.beamDist, 0.04, v.z - Math.cos(yaw) * m.beamDist);
+    m.beam.rotation.y = yaw;
     m.brakeMat.color.setHex(v.braking ? 0xff2a2a : themeState.tailIdleHex);
     m.bglow.visible = v.braking;
     if (v.braking) brakeGlowMat.opacity = 0.45 + 0.45 * themeState.mix;
@@ -394,6 +407,7 @@ export function syncMeshes(world: World, dt: number): void {
     for (const [v, m] of meshMap) {
       if (!alive.has(v)) {
         scene.remove(m.group);
+        scene.remove(m.beam); // 光だまりはシーン直下にあるため個別に外す
         meshMap.delete(v);
       }
     }
