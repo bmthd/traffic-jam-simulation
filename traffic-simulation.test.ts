@@ -195,6 +195,58 @@ describe('追い越し', () => {
 });
 
 /* ============================================================
+   3.5 加速復帰: 追いつかれた時、塞がれた復帰先へ加速して戻る (Issue #11)
+   ============================================================ */
+describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', () => {
+  // 共通シナリオ: 追い越し車線の a が後続の chaser に追いつかれ、復帰先の
+  // レーン1は並走車 side に塞がれている。blocker は side のキープレフトを封じる
+  function setup(sideAheadBlocked: boolean) {
+    const w = new World({ rng: createRng(9), spawnInterval: 1e9 });
+    const a = new Vehicle(w, 'L', 0, 0, 'Sedan', 25);
+    a.speed = 25;
+    const side = new Vehicle(w, 'L', 1, 0, 'Sedan', 25); // 同速の並走車 = 待っても抜けない
+    side.speed = 25;
+    const blocker = new Vehicle(w, 'L', 2, -18, 'Truck', 16);
+    blocker.speed = 16;
+    const chaser = new Vehicle(w, 'L', 0, 55, 'SportsCar', 34);
+    chaser.speed = 32;
+    w.vehicles.push(a, side, blocker, chaser);
+    if (sideAheadBlocked) {
+      // side の前方を塞ぎ「前に出ても戻るスペースがない」状況にする
+      const wall = new Vehicle(w, 'L', 1, -22, 'Sedan', 24.5);
+      wall.speed = 24.5;
+      wall.keepLeft = false; // wall がレーン2へ逸れて前方が空いてしまうのを防ぐ
+      w.vehicles.push(wall);
+    }
+    return { w, a, side };
+  }
+
+  test('並走車との速度差が小さく前方が空いていれば、加速して前に出て復帰する', () => {
+    const { w, a } = setup(false);
+    let boosted = false,
+      returned = false;
+    for (let i = 0; i < Math.round(25 / DT); i++) {
+      w.step(DT);
+      if (a.returnBoostT > 0) boosted = true;
+      if (a.lane === 1 || (a.lc.state !== 'none' && a.lc.to === 1)) {
+        returned = true;
+        break;
+      }
+    }
+    expect(boosted, '加速復帰(returnBoostT)が発動しなかった').toBe(true);
+    expect(returned, '加速しても走行車線へ復帰できなかった').toBe(true);
+  });
+
+  test('並走車の前方が塞がっている(戻る見込みがない)場合は加速しない', () => {
+    const { w, a } = setup(true);
+    for (let i = 0; i < Math.round(10 / DT); i++) {
+      w.step(DT);
+      expect(a.returnBoostT, '見込みがないのに加速復帰が発動した').toBe(0);
+    }
+  });
+});
+
+/* ============================================================
    4. 安全性: 車両の貫通防止
    ============================================================ */
 describe('衝突回避・貫通防止', () => {

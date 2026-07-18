@@ -28,6 +28,13 @@ export const CONST = {
   CAMPER_RETURN_TIME_MAX: 35,
   CAMPER_RATIO: 0.7, // 義務なし区間: 譲らない人のうちマイペース派の割合
   VOLUNTARY_YIELD_RATIO: 0.15, // 義務なし区間でも自発的に譲る人の割合
+  // ---- 加速復帰: 復帰先が並走車に塞がれている時、加速して前に出て戻る ----
+  RETURN_BOOST_MAX_SPEED_DIFF: 2.5, // 並走車との速度差がこれ未満なら「加速すれば抜ける」と判断 (m/s)
+  RETURN_BOOST_TARGET_CLEARANCE: 35, // 並走車の前方にこれ以上の空きがあれば「前に出れば戻れる」見込みあり (m)
+  RETURN_BOOST_AHEAD_CLEARANCE: 30, // 自車線前方にこれ以上の空きがなければ加速しない (m)
+  RETURN_BOOST_SPEED_DELTA: 2.5, // 加速復帰中に希望速度へ上乗せする加速量の上限 (m/s)
+  RETURN_BOOST_DURATION: 6.0, // 加速して前に出ることを試みる時間 (s)
+  RETURN_BOOST_RETRY_COOLDOWN: 8.0, // 加速しても抜けなかった後、再挑戦するまでの間 (s)
   REF_SPEED: 25, // スコア算出の基準速度 (m/s ≒ 90km/h)
   SCORE_W_SPEED: 0.75,
   SCORE_W_DENSITY: 0.25,
