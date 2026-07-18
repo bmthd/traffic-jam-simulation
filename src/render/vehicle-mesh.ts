@@ -1,7 +1,12 @@
-/* ================= 車両メッシュ(生成とワールドとの同期) ================= */
+/* ================= 車両メッシュ(生成とワールドとの同期) =================
+   パフォーマンス: 車両1台を約30個のメッシュで組むとdraw callが車両数×30に
+   膨らみ、GPU/CPUの発熱源になる。そこで車種ごとに「マテリアル単位で結合した
+   ジオメトリ(ブループリント)」を一度だけ作ってキャッシュし、1台あたりの
+   メッシュ数を約1/3に抑える(見た目は結合前と同一)。 */
 import * as THREE from 'three';
-import { CONST as C, clamp } from '../core';
-import type { Vehicle, World } from '../core';
+import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils';
+import { CONST as C, TYPES, clamp } from '../core';
+import type { Vehicle, VehicleTypeName, World } from '../core';
 import { scene } from './scene';
 import {
   paint,
@@ -65,58 +70,81 @@ function profileGeo(pts: [number, number][], width: number, bevel: number): THRE
   geo.rotateY(Math.PI / 2);
   return geo;
 }
-const wheelGeoCache: Record<string, THREE.CylinderGeometry> = {};
 function wheelGeo(r: number, w: number): THREE.CylinderGeometry {
-  const key = r + '_' + w;
-  if (!wheelGeoCache[key]) {
-    const geo = new THREE.CylinderGeometry(r, r, w, 14);
-    geo.rotateZ(Math.PI / 2); // 車軸をX方向へ
-    wheelGeoCache[key] = geo;
-  }
-  return wheelGeoCache[key];
+  const geo = new THREE.CylinderGeometry(r, r, w, 14);
+  geo.rotateZ(Math.PI / 2); // 車軸をX方向へ
+  return geo;
 }
 const plateGeo = new THREE.BoxGeometry(0.34, 0.16, 0.04);
 const mirrorGeo = new THREE.BoxGeometry(0.1, 0.11, 0.2);
+const taxiGeo = new THREE.BoxGeometry(0.5, 0.22, 0.3);
+const taxiMat = paint(0xffa400);
 
-function buildVehicleMesh(v: Vehicle): VehicleMesh {
-  const t = v.type,
+/* ---- 車種ブループリント(マテリアル単位で結合済みのジオメトリ) ---- */
+// スロット = 共有マテリアル1つに対応する結合ジオメトリ。
+// body(車体色)・brake/blink(車両ごとに個別マテリアル)以外は全車で共有される
+type PartSlot =
+  | 'body'
+  | 'glass'
+  | 'trim'
+  | 'tire'
+  | 'hub'
+  | 'cargo'
+  | 'plate'
+  | 'head'
+  | 'brake'
+  | 'blinkL'
+  | 'blinkR';
+
+interface Blueprint {
+  parts: Partial<Record<PartSlot, THREE.BufferGeometry>>;
+  lightY: number;
+}
+
+const blueprintCache: Partial<Record<VehicleTypeName, Blueprint>> = {};
+
+function buildBlueprint(typeName: VehicleTypeName): Blueprint {
+  const t = TYPES[typeName],
     L = t.len,
     W = t.w,
     H = t.h,
     l = L / 2;
-  const g = new THREE.Group();
-  function add(
+  const acc: Partial<Record<PartSlot, THREE.BufferGeometry[]>> = {};
+  // ジオメトリをローカル変換(回転→平行移動)込みでスロットへ蓄積する。
+  // 結合にはindexの有無を揃える必要があるため、indexed形状は展開する
+  function put(
+    slot: PartSlot,
     geo: THREE.BufferGeometry,
-    mat: THREE.Material,
     x: number,
     y: number,
     z: number,
-    cast?: boolean,
-  ): THREE.Mesh {
-    const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y, z);
-    if (cast) m.castShadow = true;
-    g.add(m);
-    return m;
+    rx?: number,
+  ): void {
+    const g = geo.index ? geo.toNonIndexed() : geo;
+    if (rx) g.rotateX(rx);
+    g.translate(x, y, z);
+    (acc[slot] ||= []).push(g);
   }
   function wheels(r: number, wzs: number[]): void {
     const wx = W / 2 - 0.14;
+    const tGeo = wheelGeo(r, 0.3),
+      hGeo = wheelGeo(r * 0.55, 0.34);
     for (const wz of wzs)
       for (const s of [-1, 1]) {
-        add(wheelGeo(r, 0.3), tireMat, s * wx, r, wz, true);
-        add(wheelGeo(r * 0.55, 0.34), hubMat, s * wx, r, wz);
+        put('tire', tGeo, s * wx, r, wz);
+        put('hub', hGeo, s * wx, r, wz);
       }
   }
-  function mirrors(mat: THREE.Material, y: number, z: number): void {
-    add(mirrorGeo, mat, -(W / 2 + 0.06), y, z);
-    add(mirrorGeo, mat, W / 2 + 0.06, y, z);
+  function mirrors(slot: PartSlot, y: number, z: number): void {
+    put(slot, mirrorGeo, -(W / 2 + 0.06), y, z);
+    put(slot, mirrorGeo, W / 2 + 0.06, y, z);
   }
-  const body = paint(v.color);
 
-  switch (v.typeName) {
+  switch (typeName) {
     case 'Sedan': {
       // 3ボックス(ボンネット・キャビン・トランク)の下半身
-      add(
+      put(
+        'body',
         profileGeo(
           [
             [-l, 0.32],
@@ -132,14 +160,13 @@ function buildVehicleMesh(v: Vehicle): VehicleMesh {
           W,
           0.06,
         ),
-        body,
         0,
         0,
         0,
-        true,
       );
       // キャビン(スモークガラスのキャノピー)
-      add(
+      put(
+        'glass',
         profileGeo(
           [
             [-l * 0.62, H * 0.64],
@@ -150,22 +177,19 @@ function buildVehicleMesh(v: Vehicle): VehicleMesh {
           W * 0.84,
           0.05,
         ),
-        glassMat,
         0,
         0,
         0,
-        true,
       );
-      add(new THREE.BoxGeometry(0.1, 0.08, 0.26), body, 0, H * 0.99, l * 0.4); // シャークフィン
-      mirrors(body, H * 0.66, -l * 0.3);
+      put('body', new THREE.BoxGeometry(0.1, 0.08, 0.26), 0, H * 0.99, l * 0.4); // シャークフィン
+      mirrors('body', H * 0.66, -l * 0.3);
       wheels(0.33, [-(l - 0.85), l - 0.85]);
-      if (v.isTaxi)
-        add(new THREE.BoxGeometry(0.5, 0.22, 0.3), paint(0xffa400), 0, H * 0.97 + 0.14, l * 0.15);
       break;
     }
     case 'SportsCar': {
       // 低く長いウェッジシェイプ
-      add(
+      put(
+        'body',
         profileGeo(
           [
             [-l, 0.3],
@@ -181,13 +205,12 @@ function buildVehicleMesh(v: Vehicle): VehicleMesh {
           W,
           0.06,
         ),
-        body,
         0,
         0,
         0,
-        true,
       );
-      add(
+      put(
+        'glass',
         profileGeo(
           [
             [-l * 0.52, H * 0.66],
@@ -198,51 +221,48 @@ function buildVehicleMesh(v: Vehicle): VehicleMesh {
           W * 0.78,
           0.04,
         ),
-        glassMat,
         0,
         0,
         0,
-        true,
       );
       // リアウイング
-      add(new THREE.BoxGeometry(W * 0.92, 0.05, 0.36), body, 0, H * 0.92, l * 0.88, true);
-      add(new THREE.BoxGeometry(0.07, 0.2, 0.16), body, -W * 0.32, H * 0.79, l * 0.9);
-      add(new THREE.BoxGeometry(0.07, 0.2, 0.16), body, W * 0.32, H * 0.79, l * 0.9);
-      mirrors(body, H * 0.68, -l * 0.28);
+      put('body', new THREE.BoxGeometry(W * 0.92, 0.05, 0.36), 0, H * 0.92, l * 0.88);
+      put('body', new THREE.BoxGeometry(0.07, 0.2, 0.16), -W * 0.32, H * 0.79, l * 0.9);
+      put('body', new THREE.BoxGeometry(0.07, 0.2, 0.16), W * 0.32, H * 0.79, l * 0.9);
+      mirrors('body', H * 0.68, -l * 0.28);
       wheels(0.33, [-(l - 0.8), l - 0.8]);
       break;
     }
     case 'Truck': {
       const cabL = 2.2;
       // キャブ
-      add(new THREE.BoxGeometry(W, 1.85, cabL), body, 0, 1.775, -(l - cabL / 2), true);
-      const tw = add(new THREE.BoxGeometry(W * 0.9, 0.85, 0.07), glassMat, 0, 2.3, -(l + 0.01));
-      tw.rotation.x = 0.1; // フロントガラスをわずかに寝かせる
-      add(new THREE.BoxGeometry(W + 0.02, 0.6, 1.0), glassMat, 0, 2.25, -(l - cabL / 2) + 0.1);
-      add(new THREE.BoxGeometry(W * 0.9, 0.55, 0.08), trimMat, 0, 1.35, -(l + 0.02)); // グリル
-      add(new THREE.BoxGeometry(W, 0.3, 0.14), hubMat, 0, 0.45, -(l + 0.03)); // 金属バンパー
+      put('body', new THREE.BoxGeometry(W, 1.85, cabL), 0, 1.775, -(l - cabL / 2));
+      // フロントガラスをわずかに寝かせる
+      put('glass', new THREE.BoxGeometry(W * 0.9, 0.85, 0.07), 0, 2.3, -(l + 0.01), 0.1);
+      put('glass', new THREE.BoxGeometry(W + 0.02, 0.6, 1.0), 0, 2.25, -(l - cabL / 2) + 0.1);
+      put('trim', new THREE.BoxGeometry(W * 0.9, 0.55, 0.08), 0, 1.35, -(l + 0.02)); // グリル
+      put('hub', new THREE.BoxGeometry(W, 0.3, 0.14), 0, 0.45, -(l + 0.03)); // 金属バンパー
       // 導風板(キャブ屋根から荷箱の高さへつなぐ)
-      const defl = add(new THREE.BoxGeometry(W * 0.9, 1.45, 0.06), body, 0, 3.07, -(l - 1.55));
-      defl.rotation.x = 1.05;
+      put('body', new THREE.BoxGeometry(W * 0.9, 1.45, 0.06), 0, 3.07, -(l - 1.55), 1.05);
       // 荷箱
-      add(
+      put(
+        'cargo',
         new THREE.BoxGeometry(W, H - 0.65, L - cabL - 0.35),
-        cargoMat,
         0,
         0.62 + (H - 0.65) / 2,
         (cabL + 0.35) / 2,
-        true,
       );
-      add(new THREE.BoxGeometry(W * 0.94, 0.5, L * 0.3), trimMat, 0, 0.5, 0.1); // サイドスカート
-      add(new THREE.BoxGeometry(W * 0.9, 0.45, 0.05), trimMat, 0, 0.32, l - 0.15); // 泥除け
-      add(new THREE.BoxGeometry(W * 0.9, 0.12, 0.1), hubMat, 0, 0.55, l + 0.02); // 突入防止装置
-      mirrors(trimMat, 2.35, -(l - 0.25));
+      put('trim', new THREE.BoxGeometry(W * 0.94, 0.5, L * 0.3), 0, 0.5, 0.1); // サイドスカート
+      put('trim', new THREE.BoxGeometry(W * 0.9, 0.45, 0.05), 0, 0.32, l - 0.15); // 泥除け
+      put('hub', new THREE.BoxGeometry(W * 0.9, 0.12, 0.1), 0, 0.55, l + 0.02); // 突入防止装置
+      mirrors('trim', 2.35, -(l - 0.25));
       wheels(0.48, [-(l - 1.15), l - 1.35, l - 2.45]);
       break;
     }
     case 'Van': {
       // ワンボックス
-      add(
+      put(
+        'body',
         profileGeo(
           [
             [-l, 0.34],
@@ -258,42 +278,92 @@ function buildVehicleMesh(v: Vehicle): VehicleMesh {
           W,
           0.06,
         ),
-        body,
         0,
         0,
         0,
-        true,
       );
       // 傾斜したフロントガラス
-      const ws = add(
-        new THREE.BoxGeometry(W * 0.86, 1.15, 0.06),
-        glassMat,
-        0,
-        H * 0.785,
-        -l * 0.43,
-      );
-      ws.rotation.x = 0.86;
+      put('glass', new THREE.BoxGeometry(W * 0.86, 1.15, 0.06), 0, H * 0.785, -l * 0.43, 0.86);
       // サイドウィンドウ帯・リアガラス
-      add(new THREE.BoxGeometry(W + 0.02, H * 0.2, L * 0.55), glassMat, 0, H * 0.76, l * 0.18);
-      add(new THREE.BoxGeometry(W * 0.8, H * 0.22, 0.05), glassMat, 0, H * 0.72, l + 0.01);
-      mirrors(body, H * 0.62, -l * 0.42);
+      put('glass', new THREE.BoxGeometry(W + 0.02, H * 0.2, L * 0.55), 0, H * 0.76, l * 0.18);
+      put('glass', new THREE.BoxGeometry(W * 0.8, H * 0.22, 0.05), 0, H * 0.72, l + 0.01);
+      mirrors('body', H * 0.62, -l * 0.42);
       wheels(0.35, [-(l - 1.0), l - 1.1]);
       break;
     }
   }
   // 樹脂バンパー・グリル・ナンバープレート(トラック以外の共通装備)
-  if (v.typeName !== 'Truck') {
-    add(new THREE.BoxGeometry(W * 0.98, 0.17, 0.12), trimMat, 0, 0.38, -(l + 0.01));
-    add(new THREE.BoxGeometry(W * 0.98, 0.17, 0.12), trimMat, 0, 0.38, l + 0.01);
-    add(new THREE.BoxGeometry(W * 0.5, 0.13, 0.05), trimMat, 0, 0.55, -(l + 0.04));
+  if (typeName !== 'Truck') {
+    put('trim', new THREE.BoxGeometry(W * 0.98, 0.17, 0.12), 0, 0.38, -(l + 0.01));
+    put('trim', new THREE.BoxGeometry(W * 0.98, 0.17, 0.12), 0, 0.38, l + 0.01);
+    put('trim', new THREE.BoxGeometry(W * 0.5, 0.13, 0.05), 0, 0.55, -(l + 0.04));
   }
-  add(plateGeo, plateMat, 0, 0.4, -(l + 0.1));
-  add(plateGeo, plateMat, 0, 0.4, l + 0.1);
+  put('plate', plateGeo, 0, 0.4, -(l + 0.1));
+  put('plate', plateGeo, 0, 0.4, l + 0.1);
   // ヘッドライト（前方 = -Z）。マテリアルは全車共有で昼夜一括切替
-  const lightY = v.typeName === 'Truck' ? 1.05 : 0.66;
+  const lightY = typeName === 'Truck' ? 1.05 : 0.66;
   const hGeo = new THREE.BoxGeometry(0.34, 0.16, 0.1);
-  add(hGeo, headMat, -(W / 2 - 0.34), lightY, -L / 2 - 0.06);
-  add(hGeo, headMat, W / 2 - 0.34, lightY, -L / 2 - 0.06);
+  put('head', hGeo, -(W / 2 - 0.34), lightY, -L / 2 - 0.06);
+  put('head', hGeo, W / 2 - 0.34, lightY, -L / 2 - 0.06);
+  // ブレーキランプ（後方 = +Z）
+  const bGeo = new THREE.BoxGeometry(0.52, 0.22, 0.1);
+  put('brake', bGeo, -(W / 2 - 0.34), lightY + 0.06, L / 2 + 0.04);
+  put('brake', bGeo, W / 2 - 0.34, lightY + 0.06, L / 2 + 0.04);
+  // ウインカー（車線変更時に点滅）
+  const kGeo = new THREE.BoxGeometry(0.22, 0.2, 0.22);
+  put('blinkL', kGeo, -(W / 2 + 0.02), lightY, L / 2 - 0.12);
+  put('blinkL', kGeo, -(W / 2 + 0.02), lightY, -(L / 2 - 0.12));
+  put('blinkR', kGeo, W / 2 + 0.02, lightY, L / 2 - 0.12);
+  put('blinkR', kGeo, W / 2 + 0.02, lightY, -(L / 2 - 0.12));
+
+  const parts: Blueprint['parts'] = {};
+  for (const slot of Object.keys(acc) as PartSlot[]) {
+    parts[slot] = BufferGeometryUtils.mergeBufferGeometries(acc[slot]!);
+  }
+  return { parts, lightY };
+}
+
+function blueprint(typeName: VehicleTypeName): Blueprint {
+  return (blueprintCache[typeName] ||= buildBlueprint(typeName));
+}
+
+function buildVehicleMesh(v: Vehicle): VehicleMesh {
+  const bp = blueprint(v.typeName);
+  const L = v.type.len;
+  const g = new THREE.Group();
+  // 各パーツはブループリント側で位置決め済み(ローカル変換は恒等)なので、
+  // 毎フレームの行列再計算を止めて描画コストを下げる
+  function addPart(slot: PartSlot, mat: THREE.Material, cast?: boolean): void {
+    const geo = bp.parts[slot];
+    if (!geo) return;
+    const m = new THREE.Mesh(geo, mat);
+    if (cast) m.castShadow = true;
+    m.matrixAutoUpdate = false;
+    g.add(m);
+  }
+  addPart('body', paint(v.color), true);
+  addPart('glass', glassMat, true);
+  addPart('trim', trimMat);
+  addPart('tire', tireMat, true);
+  addPart('hub', hubMat);
+  addPart('cargo', cargoMat, true);
+  addPart('plate', plateMat);
+  addPart('head', headMat);
+  if (v.isTaxi) {
+    const sign = new THREE.Mesh(taxiGeo, taxiMat);
+    sign.position.set(0, v.type.h * 0.97 + 0.14, (L / 2) * 0.15);
+    sign.matrixAutoUpdate = false;
+    sign.updateMatrix();
+    g.add(sign);
+  }
+  // 灯火類は照明の影響を受けない発光体として描く(昼でもはっきり光って見える)。
+  // 色を車両ごとに切り替えるため、マテリアルだけ個別に持つ
+  const brakeMat = new THREE.MeshBasicMaterial({ color: 0x4a0b0b });
+  const blinkL = new THREE.MeshBasicMaterial({ color: 0x6b4a10 });
+  const blinkR = new THREE.MeshBasicMaterial({ color: 0x6b4a10 });
+  addPart('brake', brakeMat);
+  addPart('blinkL', blinkL);
+  addPart('blinkR', blinkR);
   // ヘッドライトの路面照射(夜のみ表示)。車体グループの子にすると加減速の
   // ピッチや操舵ロール(毎フレーム細かく揺れる)で光だまりの平面が路面下に
   // 潜り、深度テストで見え隠れしてチラつくため、シーン直下に置いて常に
@@ -304,25 +374,14 @@ function buildVehicleMesh(v: Vehicle): VehicleMesh {
   beam.rotation.set(-Math.PI / 2, 0, 0);
   beam.visible = themeState.mix > 0.04;
   scene.add(beam);
-  // ブレーキランプ（後方 = +Z）
-  // 灯火類は照明の影響を受けない発光体として描く(昼でもはっきり光って見える)
-  const brakeMat = new THREE.MeshBasicMaterial({ color: 0x4a0b0b });
-  const bGeo = new THREE.BoxGeometry(0.52, 0.22, 0.1);
-  add(bGeo, brakeMat, -(W / 2 - 0.34), lightY + 0.06, L / 2 + 0.04);
-  add(bGeo, brakeMat, W / 2 - 0.34, lightY + 0.06, L / 2 + 0.04);
-  // ウインカー（車線変更時に点滅）
-  const blinkL = new THREE.MeshBasicMaterial({ color: 0x6b4a10 });
-  const blinkR = new THREE.MeshBasicMaterial({ color: 0x6b4a10 });
-  const kGeo = new THREE.BoxGeometry(0.22, 0.2, 0.22);
-  add(kGeo, blinkL, -(W / 2 + 0.02), lightY, L / 2 - 0.12);
-  add(kGeo, blinkL, -(W / 2 + 0.02), lightY, -(L / 2 - 0.12));
-  add(kGeo, blinkR, W / 2 + 0.02, lightY, L / 2 - 0.12);
-  add(kGeo, blinkR, W / 2 + 0.02, lightY, -(L / 2 - 0.12));
   // ブレーキ時に背面へにじむ赤いグロー(視認性アップ)
   const bglow = new THREE.Mesh(brakeGlowGeo, brakeGlowMat);
-  bglow.position.set(0, lightY + 0.04, L / 2 + 0.18);
+  bglow.position.set(0, bp.lightY + 0.04, L / 2 + 0.18);
+  bglow.matrixAutoUpdate = false;
+  bglow.updateMatrix();
   bglow.visible = false;
   g.add(bglow);
+  const W = v.type.w;
   const margin = Math.max(0, (3.7 - W) / 2 - 0.42); // 車線内で安全に振れる余白
   const drv: DriverHabit = {
     bias: (Math.random() * 2 - 1) * margin * 0.9,
@@ -408,6 +467,10 @@ export function syncMeshes(world: World, dt: number): void {
       if (!alive.has(v)) {
         scene.remove(m.group);
         scene.remove(m.beam); // 光だまりはシーン直下にあるため個別に外す
+        // ジオメトリはブループリント共有なので破棄しない(マテリアルのみ個別)
+        m.brakeMat.dispose();
+        m.blinkL.dispose();
+        m.blinkR.dispose();
         meshMap.delete(v);
       }
     }

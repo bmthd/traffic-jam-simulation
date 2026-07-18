@@ -4,6 +4,7 @@ import { CONST as C } from '../core';
 import type { Section } from '../core';
 import { scene } from './scene';
 import { delinMat, asphaltTex } from './materials';
+import { instancedAt, instancedWith } from './instancing';
 
 const ROAD_HALF = C.ROAD_HALF;
 
@@ -61,18 +62,15 @@ function solidLine(x: number): void {
   m.position.set(x, 0.01, 0);
   scene.add(m);
 }
-function dashedLine(x: number): void {
+// 車線境界の破線は全車線ぶんを1つのInstancedMeshに(draw call削減)
+function dashedLines(xs: number[]): void {
   const geo = new THREE.BoxGeometry(0.15, 0.02, 4);
-  for (let z = -ROAD_HALF + 2; z < ROAD_HALF; z += 12) {
-    const d = new THREE.Mesh(geo, lineMatW);
-    d.position.set(x, 0.01, z);
-    d.matrixAutoUpdate = false;
-    d.updateMatrix();
-    scene.add(d);
-  }
+  const at: [number, number, number][] = [];
+  for (const x of xs) for (let z = -ROAD_HALF + 2; z < ROAD_HALF; z += 12) at.push([x, 0.01, z]);
+  scene.add(instancedAt(geo, lineMatW, at));
 }
 [-1, -13, 1, 13].forEach(solidLine);
-[-5, -9, 5, 9].forEach(dashedLine);
+dashedLines([-5, -9, 5, 9]);
 
 /* ---- 合流ランプ(加速車線) ---- */
 for (const [sec, sx] of [
@@ -95,22 +93,21 @@ for (const [sec, sx] of [
   scene.add(edge);
   // 本線との境界は破線(合流可)
   const dGeo = new THREE.BoxGeometry(0.15, 0.02, 3);
-  for (let z = zEnd + 12; z < zTop - 6; z += 9) {
-    const d = new THREE.Mesh(dGeo, lineMatW);
-    d.position.set(13 * sx, 0.012, z);
-    d.matrixAutoUpdate = false;
-    d.updateMatrix();
-    scene.add(d);
-  }
-  // 終端の導流帯(先細りのゼブラ)
+  const dashAt: [number, number, number][] = [];
+  for (let z = zEnd + 12; z < zTop - 6; z += 9) dashAt.push([13 * sx, 0.012, z]);
+  scene.add(instancedAt(dGeo, lineMatW, dashAt));
+  // 終端の導流帯(先細りのゼブラ)。単位ボックスをX方向スケールで先細りに
+  const zebraGeo = new THREE.BoxGeometry(1, 0.02, 1.3);
+  const zebraMs: THREE.Matrix4[] = [];
   for (let i = 0; i < 5; i++) {
     const w = 3.0 * (1 - i / 5);
-    const zb = new THREE.Mesh(new THREE.BoxGeometry(w, 0.02, 1.3), lineMatW);
-    zb.position.set((13.1 + w / 2) * sx, 0.012, zEnd + 9 - i * 3.2);
-    zb.matrixAutoUpdate = false;
-    zb.updateMatrix();
-    scene.add(zb);
+    zebraMs.push(
+      new THREE.Matrix4()
+        .makeScale(w, 1, 1)
+        .setPosition((13.1 + w / 2) * sx, 0.012, zEnd + 9 - i * 3.2),
+    );
   }
+  scene.add(instancedWith(zebraGeo, lineMatW, zebraMs));
 }
 
 /* ---- 中央分離帯（ガードレール付き） ---- */
@@ -131,21 +128,15 @@ for (const [sec, sx] of [
   }
   const postGeo = new THREE.BoxGeometry(0.12, 0.55, 0.12);
   const delinGeo = new THREE.BoxGeometry(0.16, 0.16, 0.06); // 視線誘導標(デリネーター)
+  const postAt: [number, number, number][] = [];
+  const delinAt: [number, number, number][] = [];
   for (let z = -ROAD_HALF + 6; z < ROAD_HALF; z += 18) {
-    const p = new THREE.Mesh(postGeo, railMat);
-    p.position.set(0, 0.75, z);
-    p.matrixAutoUpdate = false;
-    p.updateMatrix();
-    scene.add(p);
-    for (const dz of [-0.09, 0.09]) {
-      // 両進行方向から見えるよう両面に
-      const d = new THREE.Mesh(delinGeo, delinMat);
-      d.position.set(0, 1.12, z + dz);
-      d.matrixAutoUpdate = false;
-      d.updateMatrix();
-      scene.add(d);
-    }
+    postAt.push([0, 0.75, z]);
+    // 両進行方向から見えるよう両面に
+    for (const dz of [-0.09, 0.09]) delinAt.push([0, 1.12, z + dz]);
   }
+  scene.add(instancedAt(postGeo, railMat, postAt));
+  scene.add(instancedAt(delinGeo, delinMat, delinAt));
 })();
 
 /* ---- 路面ペイント（区間ルールの表示・遊び心） ---- */

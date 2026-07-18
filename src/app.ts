@@ -38,10 +38,18 @@ export function start(): void {
   /* ---- メインループ ---- */
   const clock = new THREE.Clock();
   let hudAccum = 0;
+  // 高リフレッシュレート端末(120Hz等)ではrequestAnimationFrameが毎秒120回以上
+  // 呼ばれ、消費電力と発熱が倍増する。描画は約60fpsまでに間引く
+  // (60Hz環境では1フレーム≈16.7ms > 14msなので従来どおり毎フレーム描画される)
+  const MIN_FRAME_TIME = 0.014;
+  let frameAccum = 0;
 
   function animate(): void {
     requestAnimationFrame(animate);
-    const dt = Math.min(clock.getDelta(), 0.05);
+    frameAccum += clock.getDelta();
+    if (frameAccum < MIN_FRAME_TIME) return; // このリフレッシュ周期は描画を休む
+    const dt = Math.min(frameAccum, 0.05);
+    frameAccum = 0;
     tickTheme(dt); // 夕暮れ/夜明けのクロスフェード
     world.step(dt);
     syncMeshes(world, dt);
