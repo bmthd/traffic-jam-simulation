@@ -42,7 +42,6 @@ canvas {
   box-shadow:
     0 8px 22px rgba(0, 30, 20, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.25);
-  transition: filter 0.9s ease;
 }
 .sign.amber {
   background: linear-gradient(180deg, #d1860c 0%, #965c03 100%);
@@ -50,14 +49,9 @@ canvas {
     0 8px 22px rgba(40, 25, 0, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
-/* 夜は標識の照明を落とす(計器盤のような減光) */
-body.night .sign {
-  filter: brightness(0.62) saturate(0.92);
-}
 @media (prefers-reduced-motion: reduce) {
   html,
-  body,
-  .sign {
+  body {
     transition: none;
   }
 }
