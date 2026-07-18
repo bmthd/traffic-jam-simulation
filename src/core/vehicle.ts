@@ -216,9 +216,8 @@ export class Vehicle {
   // 見込みがある」なら一時的に加速して並走車を抜き、車線復帰を狙う
   tryStartReturnBoost(ahead: NeighborInfo | null): boolean {
     const C = CONST;
-    // 「後続のために加速してでも戻る」のは追いつかれた車両の義務がある区間の
-    // 文化(塞がれた時に減速して後ろへ入る工夫と同じく、義務を果たすための行動)
-    if (this.section !== 'L' || !this.yields) return false;
+    // ロジックは左右共通。区間差は「戻ろうとする早さ」(returnTime = 義務の有無に
+    // 由来する気質)からのみ生まれ、この判定自体は両区間とも同じ条件で発動する。
     // 流れが悪い時に加速すると自分がブレーキ連鎖の起点になる。ほぼ自分の
     // ペースで走れている(=本当に並走車だけが障害)時に限って踏み込む
     if (this.speed < this.desiredSpeed * 0.85) return false;
