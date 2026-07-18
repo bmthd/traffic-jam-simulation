@@ -20,6 +20,8 @@ interface ScenarioOptions {
 interface ScenarioResult {
   L: number;
   R: number;
+  nL: number;
+  nR: number;
   minGap: number;
   world: World;
 }
@@ -31,6 +33,8 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
   w.populateInitial();
   let sumL = 0,
     sumR = 0,
+    sumNL = 0,
+    sumNR = 0,
     samples = 0,
     minGap = Infinity;
   const steps = Math.round(seconds / DT);
@@ -51,26 +55,38 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
         }
       }
       if (t >= measureFrom) {
-        sumL += w.computeSection('L').score;
-        sumR += w.computeSection('R').score;
+        const sL = w.computeSection('L'),
+          sR = w.computeSection('R');
+        sumL += sL.score;
+        sumR += sR.score;
+        sumNL += sL.n;
+        sumNR += sR.n;
         samples++;
       }
     }
   }
-  return { L: sumL / samples, R: sumR / samples, minGap, world: w };
+  return {
+    L: sumL / samples,
+    R: sumR / samples,
+    nL: sumNL / samples,
+    nR: sumNR / samples,
+    minGap,
+    world: w,
+  };
 }
 
 /* ============================================================
    1. メイン要件: 渋滞スコアに約10ポイントの差が出ること
-   人間らしい運転モデル(ブレーキ連鎖・渋滞波)導入後は渋滞が準安定
-   状態を持つため、シードごとの差は±4〜5程度ゆらぐ。個別シードは
-   10±4.5、5シード平均は10±2で判定する。
+   人間らしい運転モデル(ブレーキ連鎖・渋滞波)に加え、Issue #12 で
+   流入・流出(混雑側への滞留)が入り台数自体も揺らぐようになったため、
+   シードごとの差は±7程度ゆらぐ。個別シードは 10±7、
+   10シード平均は 10±2 で判定する。
    ============================================================ */
-const SEEDS = [11, 22, 33, 44, 55];
+const SEEDS = [11, 22, 33, 44, 55, 66, 77, 88, 99, 110];
 const DIFF_TARGET = 10,
-  DIFF_TOL = 4.5;
+  DIFF_TOL = 7;
 
-// 5シードのシナリオは重い(シミュレーション内時間300秒×5)ので、
+// 10シードのシナリオは重い(シミュレーション内時間300秒×10)ので、
 // 最初に必要になった時に一度だけ計算して全テストで共有する
 let _results: ({ seed: number } & ScenarioResult)[] | null = null;
 function getResults(): ({ seed: number } & ScenarioResult)[] {
@@ -92,7 +108,7 @@ describe('渋滞スコア差（義務あり vs 義務なし）', () => {
     ).toBeLessThanOrEqual(DIFF_TOL);
   });
 
-  test(`5シード平均のスコア差が ${DIFF_TARGET}±2 に収まる`, () => {
+  test(`10シード平均のスコア差が ${DIFF_TARGET}±2 に収まる`, () => {
     const results = getResults();
     const avg = results.reduce((s, r) => s + (r.R - r.L), 0) / results.length;
     expect(Math.abs(avg - DIFF_TARGET), `平均差 ${avg.toFixed(1)} が範囲外`).toBeLessThanOrEqual(2);
@@ -249,7 +265,76 @@ describe('渋滞スコア算出', () => {
 });
 
 /* ============================================================
-   7. ペア生成
+   7. 流入・流出と滞留 (Issue #12)
+   流入需要は左右で同ペースだが、流出は各道路の交通状況に従う。
+   混んでいる側は捌けが遅いぶん車両が滞留し、台数が多くなる。
+   ============================================================ */
+describe('流入・流出と滞留 (Issue #12)', () => {
+  test('流入需要は左右同ペース(混雑側の流入が上回ることはない)', () => {
+    for (const r of getResults()) {
+      expect(
+        r.world.stats.inflow.L,
+        `seed=${r.seed}: 混雑側(R)の流入 ${r.world.stats.inflow.R} が L ${r.world.stats.inflow.L} を上回った`,
+      ).toBeGreaterThanOrEqual(r.world.stats.inflow.R);
+    }
+  });
+
+  test('流出は交通状況に従う: 流れの良い義務あり側の方が多く捌ける', () => {
+    let outL = 0,
+      outR = 0;
+    for (const r of getResults()) {
+      outL += r.world.stats.outflow.L;
+      outR += r.world.stats.outflow.R;
+    }
+    expect(outL, `流出台数 L=${outL} <= R=${outR}: 混雑側の方が捌けている`).toBeGreaterThan(outR);
+    expect(outR, '流出が発生していない').toBeGreaterThan(0);
+  });
+
+  test('混雑側(義務なし)に車両が滞留し、平均台数が多くなる', () => {
+    const results = getResults();
+    const avgGap = results.reduce((s, r) => s + (r.nR - r.nL), 0) / results.length;
+    expect(avgGap, `平均台数差 R-L = ${avgGap.toFixed(1)} 台で滞留が見えない`).toBeGreaterThan(2);
+  });
+
+  test('入口が受け入れ不能な間は入口待ち(waiting)の列に並ぶ', () => {
+    const w = new World({ rng: createRng(9), spawnInterval: 1e9 }); // targetCount=24 (下限) → 片側12台
+    for (let i = 0; i < 12; i++) {
+      w.vehicles.push(new Vehicle(w, 'L', i % 3, -350 + i * 25, 'Sedan', 25));
+    }
+    expect(w.spawnPair(), 'spawnPairが失敗').toBe(true);
+    const waitL = w.vehicles.filter((v) => v.section === 'L' && v.waiting);
+    const activeR = w.vehicles.filter((v) => v.section === 'R' && !v.waiting);
+    expect(waitL.length, '満杯の側が入口待ちにならない').toBe(1);
+    expect(activeR.length, '空いている側がそのまま流入できない').toBe(1);
+    // 席が空いたら入口待ちの車が流入する
+    w.vehicles.splice(0, 1); // L側の1台が捌けたとする
+    w.admitWaiting();
+    expect(waitL[0].waiting, '空きができても入口待ちが解消されない').toBe(false);
+  });
+
+  test('終端まで走った車は一定割合で出口から流出する', () => {
+    const w = new World({ rng: () => 0, spawnInterval: 1e9 }); // rng=0 → 必ず流出側の抽選
+    const v = new Vehicle(w, 'L', 1, -CONST.ROAD_HALF - 7.9, 'Sedan', 25);
+    v.speed = 25;
+    w.vehicles.push(v);
+    w.step(DT);
+    expect(w.vehicles.length, '出口で流出しなかった').toBe(0);
+    expect(w.stats.outflow.L, '流出が計上されていない').toBe(1);
+  });
+
+  test('流出しなかった車は環状線のように周回を続ける', () => {
+    const w = new World({ rng: () => 0.99, spawnInterval: 1e9 }); // rng=0.99 → 必ず周回側の抽選
+    const v = new Vehicle(w, 'L', 1, -CONST.ROAD_HALF - 7.9, 'Sedan', 25);
+    v.speed = 25;
+    w.vehicles.push(v);
+    w.step(DT);
+    expect(w.vehicles.length, '周回すべき車が消えた').toBe(1);
+    expect(v.z, '反対側へ回り込んでいない').toBeGreaterThan(CONST.ROAD_HALF - 20);
+  });
+});
+
+/* ============================================================
+   8. ペア生成
    ============================================================ */
 describe('車両ペア生成', () => {
   test('ペアは同タイプ・同初期速度で左右に1台ずつ生成される', () => {

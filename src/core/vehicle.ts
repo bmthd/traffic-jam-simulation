@@ -45,6 +45,7 @@ export class Vehicle {
   braking: boolean;
   emergency: boolean;
   waiting: boolean;
+  exited: boolean;
   waitT: number;
   perturbT: number;
   _idx: number;
@@ -106,7 +107,8 @@ export class Vehicle {
     this.yieldSlowT = 0; // 譲り先が塞がっている時に少し減速して後ろに入るための時間
     this.braking = false;
     this.emergency = false;
-    this.waiting = false; // ループ再出現の待機中
+    this.waiting = false; // 入口(ランプ)が塞がっている間の流入待ち
+    this.exited = false; // 出口まで走り切って流出した(Worldが回収する)
     this.waitT = 0;
     this.perturbT = 0; // よそ見ブレーキの残り時間(absorbモードでWorldが設定)
     this._idx = 0;
@@ -646,8 +648,19 @@ export class Vehicle {
     }
     this.hazard = queueTail || this.hazardT > 0;
 
-    // --- 周回路: 手前端まで来たら反対側へ連続的に回り込む(波は継ぎ目なく通過) ---
-    if (this.z < -C.ROAD_HALF - 8) this.z += WRAP;
+    // --- 終端処理 ---
+    // rulesモード: 終端 = 出口。一定割合の車がここで流出する(捌けた分だけ出る)。
+    // 流出量は「出口を通過する交通量 × 割合」なので、混んでいる側ほど捌けるのが
+    // 遅くなり、同じ流入ペースでも道路上に車両が自然に滞留する(Issue #12)。
+    // 残りは都市高速の環状線のように周回を続ける(波は継ぎ目なく通過)。
+    // absorbモード: 円周実験なので全車が反対側へ連続的に回り込む
+    if (this.z < -C.ROAD_HALF - 8) {
+      if (this.world.mode !== 'absorb' && this.world.rng() < CONST.EXIT_RATIO) {
+        this.exited = true;
+      } else {
+        this.z += WRAP;
+      }
+    }
 
     this.updateX();
   }
