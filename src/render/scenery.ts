@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { CONST as C } from '../core';
 import { scene } from './scene';
 import { mtnFarMat, mtnNearMat, cloudMat } from './materials';
+import { instancedAt } from './instancing';
 
 const ROAD_HALF = C.ROAD_HALF;
 
@@ -13,18 +14,14 @@ const ROAD_HALF = C.ROAD_HALF;
   const railMat = new THREE.MeshPhongMaterial({ color: 0xdfe4e8, shininess: 60 });
   const postMat = new THREE.MeshLambertMaterial({ color: 0xb8bfc6 });
   const postGeo = new THREE.BoxGeometry(0.12, 0.8, 0.12);
+  const postAt: [number, number, number][] = [];
   for (const sx of [-1, 1]) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, ROAD_HALF * 2), railMat);
     rail.position.set(18.2 * sx, 0.62, 0);
     scene.add(rail);
-    for (let z = -ROAD_HALF + 4; z < ROAD_HALF; z += 12) {
-      const p = new THREE.Mesh(postGeo, postMat);
-      p.position.set(18.2 * sx, 0.4, z);
-      p.matrixAutoUpdate = false;
-      p.updateMatrix();
-      scene.add(p);
-    }
+    for (let z = -ROAD_HALF + 4; z < ROAD_HALF; z += 12) postAt.push([18.2 * sx, 0.4, z]);
   }
+  scene.add(instancedAt(postGeo, postMat, postAt));
   // 遮音壁: 下段コンクリート + 上段の半透明パネル(高速道路らしさ)
   const wallMat = new THREE.MeshLambertMaterial({ color: 0xb4b9bd });
   const panelMat = new THREE.MeshLambertMaterial({
@@ -34,6 +31,7 @@ const ROAD_HALF = C.ROAD_HALF;
   });
   const wpostMat = new THREE.MeshLambertMaterial({ color: 0x7c858d });
   const wpostGeo = new THREE.BoxGeometry(0.22, 3.2, 0.22);
+  const wpostAt: [number, number, number][] = [];
   for (const sx of [-1, 1]) {
     const z0 = -380,
       z1 = -130,
@@ -46,14 +44,9 @@ const ROAD_HALF = C.ROAD_HALF;
     const panel = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.7, len), panelMat);
     panel.position.set(19.2 * sx, 2.35, zc);
     scene.add(panel);
-    for (let z = z0; z <= z1; z += 10) {
-      const p = new THREE.Mesh(wpostGeo, wpostMat);
-      p.position.set(19.2 * sx, 1.6, z);
-      p.matrixAutoUpdate = false;
-      p.updateMatrix();
-      scene.add(p);
-    }
+    for (let z = z0; z <= z1; z += 10) wpostAt.push([19.2 * sx, 1.6, z]);
   }
+  scene.add(instancedAt(wpostGeo, wpostMat, wpostAt));
 })();
 
 /* ---- 並木・雑木林(InstancedMeshで軽量に大量配置) ---- */
