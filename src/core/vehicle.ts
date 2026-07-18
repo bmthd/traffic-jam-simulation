@@ -75,6 +75,8 @@ export class Vehicle {
   slowAheadT: number;
   noiseAmp: number;
   keepRightT = 0; // マイペース派が追い越し車線へ戻るまでの計時
+  returnBoostT = 0; // 加速復帰(塞がれた復帰先の並走車を抜くための一時加速)の残り時間
+  returnBoostCd = 0; // 加速復帰を諦めた後の再挑戦クールダウン
 
   constructor(
     world: World,
@@ -191,6 +193,53 @@ export class Vehicle {
         return true;
     }
     return false;
+  }
+
+  // 復帰先車線で自分の真横(±車体+8m)を占有し、車線変更を物理的に塞ぐ並走車を返す
+  findAlongside(lane: number): Vehicle | null {
+    const arr = this.world._sec[this.section];
+    let best: Vehicle | null = null,
+      bestD = Infinity;
+    for (const v of arr) {
+      if (v === this || !v.occupies(lane)) continue;
+      const d = Math.abs(wrapDelta(v.z - this.z));
+      if (d < (this.length + v.length) / 2 + 8 && d < bestD) {
+        bestD = d;
+        best = v;
+      }
+    }
+    return best;
+  }
+
+  // 加速復帰の開始判定: 追い越し車線で後続に追いつかれ、復帰先(レーン1)が並走車に
+  // 塞がれている時、「速度差が小さく、並走車の前方が空いていて前に出れば戻れる
+  // 見込みがある」なら一時的に加速して並走車を抜き、車線復帰を狙う
+  tryStartReturnBoost(ahead: NeighborInfo | null): boolean {
+    const C = CONST;
+    // ロジックは左右共通。区間差は「戻ろうとする早さ」(returnTime = 義務の有無に
+    // 由来する気質)からのみ生まれ、この判定自体は両区間とも同じ条件で発動する。
+    // 流れが悪い時に加速すると自分がブレーキ連鎖の起点になる。ほぼ自分の
+    // ペースで走れている(=本当に並走車だけが障害)時に限って踏み込む
+    if (this.speed < this.desiredSpeed * 0.85) return false;
+    // (a) 明確に速い後続に追いつかれている(=どいてあげたい動機がある)時だけ
+    //     発動する(閾値は「追いつかれた車両の義務」の譲り判定と同一)
+    const behind = this.findBehind(this.lane);
+    if (!behind) return false;
+    const rel = behind.v.speed - this.speed;
+    if (rel < 2.5 || behind.gap > 24 + rel * 4.5) return false;
+    // (b) 復帰先を並走車が塞いでおり、待っていても抜けず(相手が同速以上)、
+    //     かつ速度差が小さい(少し加速すれば前に出られる)
+    const side = this.findAlongside(1);
+    if (!side) return false;
+    const sideRel = side.speed - this.speed;
+    if (sideRel < -0.5 || sideRel > C.RETURN_BOOST_MAX_SPEED_DIFF) return false;
+    // (c) 並走車の前方に空きがあり、前に出れば戻るスペースができる見込みがある
+    const sideAhead = side.findAhead(1);
+    if (sideAhead && sideAhead.gap < C.RETURN_BOOST_TARGET_CLEARANCE) return false;
+    // (d) 自車線の前方にも加速の余地がある(前が詰まっているのに踏まない)
+    if (ahead && ahead.gap < C.RETURN_BOOST_AHEAD_CLEARANCE + this.speed * 0.5) return false;
+    this.returnBoostT = C.RETURN_BOOST_DURATION;
+    return true;
   }
 
   // 前方車探索（z昇順インデックスを利用。ahead = z が小さい側。周回路として探索）
@@ -445,8 +494,15 @@ export class Vehicle {
       if (!slowAhead) this.returnTimer += dt;
       else this.returnTimer = 0;
       if (this.returnTimer > this.returnTime && flowing) {
-        if (this.tryLaneChange(1)) this.returnTimer = 0;
-        else if (this.section === 'L' && this.hasDeadlockAlongside(1)) this.yieldSlowT = 1.0;
+        if (this.tryLaneChange(1)) {
+          this.returnTimer = 0; // 加速中なら残り時間だけ速度を維持したまま戻る
+        } else if (this.returnBoostT <= 0) {
+          // 復帰先が塞がっている: まず「加速して並走車の前に出て戻る」を試み、
+          // 見込みがなければ従来どおり少し減速して並走車の後ろに入る
+          if (this.returnBoostCd > 0 || !this.tryStartReturnBoost(ahead)) {
+            if (this.section === 'L' && this.hasDeadlockAlongside(1)) this.yieldSlowT = 1.0;
+          }
+        }
       }
       this.keepLeftTimer = 0;
     } else if (this.keepLeft && flowing && this.lane === 1) {
@@ -477,6 +533,16 @@ export class Vehicle {
     this.cooldown = Math.max(0, this.cooldown - dt);
     this.noOvertakeT = Math.max(0, this.noOvertakeT - dt);
     this.yieldSlowT = Math.max(0, this.yieldSlowT - dt);
+    this.returnBoostCd = Math.max(0, this.returnBoostCd - dt);
+    if (this.returnBoostT > 0) {
+      this.returnBoostT -= dt;
+      // 復帰(車線変更)開始後もタイマーが切れるまでは速度を維持し、元の並走車
+      // (=戻った先の後続)との車間を開けてから元のペースへ戻す(急な割り込みで
+      // 後続にブレーキを踏ませ、渋滞波の起点になるのを防ぐ)
+      if (this.returnBoostT <= 0 && this.lane === 0 && this.lc.state === 'none') {
+        this.returnBoostCd = C.RETURN_BOOST_RETRY_COOLDOWN; // 抜けなかったので一旦諦める
+      }
+    }
     this.updateLaneChange(dt);
 
     // --- 衝突回避: 前方車両追従 ---
@@ -508,6 +574,9 @@ export class Vehicle {
     if (isAbsorbMode && this.z > CONST.SAG_Z_MIN && this.z < CONST.SAG_Z_MAX) {
       desire *= this.absorber ? CONST.SAG_SLOWDOWN_ABSORBER : CONST.SAG_SLOWDOWN;
     }
+    // 加速復帰中は希望速度を一時的に上乗せして並走車の前に出る(上限 RETURN_BOOST_SPEED_DELTA)。
+    // 前方車への追従・緊急ブレーキはこの後の通常ロジックがそのまま制限するため安全は保たれる
+    if (this.returnBoostT > 0) desire += CONST.RETURN_BOOST_SPEED_DELTA;
     let ts = this.yieldSlowT > 0 ? Math.max(8, desire - 2.5) : desire;
     // 加速車線: 終端で止まれる速度に常に制限(合流できなければ端で待つ)
     if (this.lane === 3 || (this.lc.state !== 'none' && this.lc.from === 3 && this.lc.t < 0.5)) {

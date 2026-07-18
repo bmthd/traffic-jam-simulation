@@ -195,6 +195,75 @@ describe('追い越し', () => {
 });
 
 /* ============================================================
+   3.5 加速復帰: 追いつかれた時、塞がれた復帰先へ加速して戻る (Issue #11)
+   ============================================================ */
+describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', () => {
+  // 共通シナリオ: 追い越し車線の a が後続の chaser に追いつかれ、復帰先の
+  // レーン1は並走車 side に塞がれている。ロジックは左右共通(区間差は
+  // returnTime のみ)なので、両区間で同じ挙動になることを検証する
+  function setup(sec: 'L' | 'R', sideAheadBlocked: boolean) {
+    const w = new World({ rng: createRng(9), spawnInterval: 1e9 });
+    const a = new Vehicle(w, sec, 0, 0, 'Sedan', 25);
+    a.speed = 25;
+    // 義務なし区間は「戻る気になるまで」が長いだけでロジックは同じ。
+    // 戻る気になった後の挙動を比較するため復帰判定時間を揃える
+    a.returnTime = CONST.OVERTAKE_LANE_RETURN_TIME;
+    const side = new Vehicle(w, sec, 1, 0, 'Sedan', 25); // 同速の並走車 = 待っても抜けない
+    side.speed = 25;
+    side.keepLeft = false; // side がレーン移動して前方が空いてしまうのを防ぐ
+    side.camper = false;
+    const chaser = new Vehicle(w, sec, 0, 55, 'SportsCar', 34);
+    chaser.speed = 32;
+    w.vehicles.push(a, side, chaser);
+    if (sideAheadBlocked) {
+      // side の前方を塞ぎ「前に出ても戻るスペースがない」状況にする
+      const wall = new Vehicle(w, sec, 1, -22, 'Sedan', 24.5);
+      wall.speed = 24.5;
+      wall.keepLeft = false; // wall がレーン移動して前方が空いてしまうのを防ぐ
+      wall.camper = false;
+      w.vehicles.push(wall);
+    }
+    return { w, a, side };
+  }
+
+  test.each([
+    ['義務あり', 'L'],
+    ['義務なし', 'R'],
+  ] as const)(
+    '%s区間: 並走車との速度差が小さく前方が空いていれば、加速して前に出て復帰する',
+    (_name, sec) => {
+      const { w, a } = setup(sec, false);
+      let boosted = false,
+        returned = false;
+      for (let i = 0; i < Math.round(25 / DT); i++) {
+        w.step(DT);
+        if (a.returnBoostT > 0) boosted = true;
+        if (a.lane === 1 || (a.lc.state !== 'none' && a.lc.to === 1)) {
+          returned = true;
+          break;
+        }
+      }
+      expect(boosted, '加速復帰(returnBoostT)が発動しなかった').toBe(true);
+      expect(returned, '加速しても走行車線へ復帰できなかった').toBe(true);
+    },
+  );
+
+  test.each([
+    ['義務あり', 'L'],
+    ['義務なし', 'R'],
+  ] as const)(
+    '%s区間: 並走車の前方が塞がっている(戻る見込みがない)場合は加速しない',
+    (_name, sec) => {
+      const { w, a } = setup(sec, true);
+      for (let i = 0; i < Math.round(10 / DT); i++) {
+        w.step(DT);
+        expect(a.returnBoostT, '見込みがないのに加速復帰が発動した').toBe(0);
+      }
+    },
+  );
+});
+
+/* ============================================================
    4. 安全性: 車両の貫通防止
    ============================================================ */
 describe('衝突回避・貫通防止', () => {
