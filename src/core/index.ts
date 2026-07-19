@@ -17,4 +17,4 @@ export type { Rng } from './utils';
 export { Vehicle } from './vehicle';
 export type { LaneChange, LaneChangeState, NeighborInfo } from './vehicle';
 export { World } from './world';
-export type { WorldOptions, SectionStats } from './world';
+export type { WorldOptions, SectionStats, SmoothTime } from './world';

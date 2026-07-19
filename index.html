@@ -102,6 +102,23 @@
             <div class="note">※ 譲る義務がなく、追い越し車線に長居するマイペース派も混在</div>
           </div>
         </div>
+        <!-- 開始からの累積: どちらがスムーズだった時間が長いか -->
+        <div class="smooth-time">
+          <div class="smooth-time-head">
+            <i data-lucide="timer"></i>スムーズだった時間(開始から)
+            <span class="smooth-lead" id="smoothLead">互角</span>
+          </div>
+          <div class="smooth-time-bars">
+            <span class="smooth-side">義</span>
+            <div class="smooth-bar"><div id="smoothBarLeft"></div></div>
+            <span class="num" id="smoothTimeLeft">0:00</span>
+          </div>
+          <div class="smooth-time-bars">
+            <span class="smooth-side">自</span>
+            <div class="smooth-bar"><div id="smoothBarRight"></div></div>
+            <span class="num" id="smoothTimeRight">0:00</span>
+          </div>
+        </div>
       </div>
     </div>
 

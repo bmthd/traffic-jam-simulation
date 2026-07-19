@@ -445,3 +445,78 @@ describe('車両ペア生成', () => {
     ).toBeLessThanOrEqual(CONST.MAX_VEHICLES);
   });
 });
+
+/* ============================================================
+   9. 「こちらがスムーズだった時間」の累積 (Issue #26)
+   渋滞するかはランダムなので、一時的な優劣ではなく開始からの
+   累積時間でどちらが混みやすい道路かを判断できるようにする。
+   ============================================================ */
+describe('スムーズだった時間の累積 (Issue #26)', () => {
+  // 指定区間に、速度を揃えた車両を n 台置く(スコアを狙った値に作るため)
+  function fill(world: World, section: 'L' | 'R', count: number, speed: number): void {
+    for (let i = 0; i < count; i++) {
+      const vehicle = new Vehicle(world, section, i % 3, i * 30, 'Sedan', speed);
+      vehicle.speed = speed;
+      world.vehicles.push(vehicle);
+    }
+  }
+  function makeWorld(): World {
+    return new World({ rng: createRng(26), spawnInterval: 1e9 });
+  }
+
+  test('スコアが明確に低い(スムーズな)側に時間が積まれる', () => {
+    const world = makeWorld();
+    fill(world, 'L', 10, 25); // L は流れている
+    fill(world, 'R', 10, 10); // R は詰まっている
+    expect(world.smootherSection(), 'スムーズな側の判定が不正').toBe('L');
+    world.accumulateSmoothTime(2);
+    expect(world.smoothTime.L, 'L に時間が積まれていない').toBeCloseTo(2, 10);
+    expect(world.smoothTime.R, 'R に時間が積まれた').toBe(0);
+    expect(world.smoothTime.draw, '引き分けに時間が積まれた').toBe(0);
+  });
+
+  test('スコア差がデッドゾーン以内なら引き分けとして扱う', () => {
+    const world = makeWorld();
+    // 速度差 1m/s ≒ スコア差3ポイント(デッドゾーン5未満)。
+    // この程度の揺らぎで優勢側が入れ替わらないことを保証する
+    fill(world, 'L', 10, 25);
+    fill(world, 'R', 10, 24);
+    const diff = world.computeSection('L').score - world.computeSection('R').score;
+    expect(Math.abs(diff), 'テスト前提: スコア差がデッドゾーン内でない').toBeLessThan(
+      CONST.SMOOTH_SCORE_DEADZONE,
+    );
+    expect(world.smootherSection(), '僅差なのに優勢と判定された').toBe(null);
+    world.accumulateSmoothTime(2);
+    expect(world.smoothTime.draw, '引き分け時間が積まれていない').toBeCloseTo(2, 10);
+    expect(world.smoothTime.L + world.smoothTime.R, '僅差なのに片側へ積まれた').toBe(0);
+  });
+
+  test('台数が少なすぎる間は判定を保留する(引き分け扱い)', () => {
+    const world = makeWorld();
+    fill(world, 'L', CONST.SMOOTH_MIN_COUNT, 25);
+    fill(world, 'R', CONST.SMOOTH_MIN_COUNT, 5); // 大差だが台数不足
+    expect(world.smootherSection(), '台数不足でも判定してしまった').toBe(null);
+    world.accumulateSmoothTime(1);
+    expect(world.smoothTime.draw, '判定保留分が引き分けに積まれていない').toBeCloseTo(1, 10);
+  });
+
+  test('累積時間の合計は経過時間に一致する', () => {
+    const world = new World({ rng: createRng(27), spawnInterval: 800 });
+    world.populateInitial();
+    const steps = Math.round(30 / TIME_STEP);
+    for (let i = 0; i < steps; i++) world.step(TIME_STEP);
+    const { L, R, draw } = world.smoothTime;
+    expect(L + R + draw, '累積時間の合計が経過時間と不一致').toBeCloseTo(world.time, 6);
+    expect(world.time, 'シミュレーション時間が進んでいない').toBeGreaterThan(0);
+  });
+
+  test('リセットで累積時間もクリアされる', () => {
+    const world = new World({ rng: createRng(28), spawnInterval: 800 });
+    world.populateInitial();
+    for (let i = 0; i < Math.round(20 / TIME_STEP); i++) world.step(TIME_STEP);
+    const { L, R, draw } = world.smoothTime;
+    expect(L + R + draw, 'テスト前提: 累積が発生していない').toBeGreaterThan(0);
+    world.reset();
+    expect(world.smoothTime, 'リセット後も累積が残っている').toEqual({ L: 0, R: 0, draw: 0 });
+  });
+});
