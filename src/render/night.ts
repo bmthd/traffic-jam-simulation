@@ -11,7 +11,7 @@ import {
   bulbMaterial,
   signGlowMaterial,
 } from './materials';
-import { GANTRY_Z } from './track';
+import { GANTRY_Z, SECTIONS, sectionX } from './track';
 import { instancedAt, instancedWith } from './instancing';
 
 const ROAD_HALF = CONST.ROAD_HALF;
@@ -104,11 +104,11 @@ nightDome.material.opacity = 0;
   nightGroup.add(halo);
 })();
 
-// 街灯(中央分離帯から両側へアームを伸ばすダブルアーム式・ナトリウム灯)
+// 街灯(各区間の右路肩から車道側へアームを伸ばすシングルアーム式・ナトリウム灯)
 (function buildStreetLamps() {
   const poleMaterial = new THREE.MeshLambertMaterial({ color: 0x6f7780 });
   const poleGeometry = new THREE.BoxGeometry(0.2, 7.2, 0.2);
-  const armGeometry = new THREE.BoxGeometry(5.4, 0.16, 0.16);
+  const armGeometry = new THREE.BoxGeometry(2.7, 0.16, 0.16);
   const headGeometry = new THREE.BoxGeometry(0.9, 0.22, 0.42);
   const glowGeometry = new THREE.PlaneGeometry(13, 13);
   const polePositions: [number, number, number][] = [];
@@ -117,17 +117,17 @@ nightDome.material.opacity = 0;
   const glowMatrices: THREE.Matrix4[] = [];
   const glowRotation = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
   for (let z = -ROAD_HALF + 14; z < ROAD_HALF; z += 42) {
-    polePositions.push([0, 3.6, z]);
-    armPositions.push([0, 7.1, z]);
-    for (const side of [-1, 1]) {
-      headPositions.push([side * 2.6, 7.0, z]);
+    for (const section of SECTIONS) {
+      polePositions.push([sectionX(section, 0), 3.6, z]);
+      armPositions.push([sectionX(section, -1.35), 7.1, z]);
+      headPositions.push([sectionX(section, -2.6), 7.0, z]);
       // 電球のにじみ(夜のみ): 灯具が光源として「光って見える」ように
       const bulb = new THREE.Sprite(bulbMaterial);
       bulb.scale.set(2.6, 2.6, 1);
-      bulb.position.set(side * 2.6, 6.92, z);
+      bulb.position.set(sectionX(section, -2.6), 6.92, z);
       nightGroup.add(bulb);
       // 路面の光だまり(夜のみ)
-      glowMatrices.push(glowRotation.clone().setPosition(side * 3.2, 0.03, z));
+      glowMatrices.push(glowRotation.clone().setPosition(sectionX(section, -3.2), 0.03, z));
     }
   }
   scene.add(instancedAt(poleGeometry, poleMaterial, polePositions));
@@ -140,7 +140,7 @@ nightDome.material.opacity = 0;
 {
   const signGlowPositions: [number, number, number][] = [];
   for (const z of GANTRY_Z)
-    for (const centerX of [-7, 7]) signGlowPositions.push([centerX, 8.3, z]);
+    for (const section of SECTIONS) signGlowPositions.push([sectionX(section, -7), 8.3, z]);
   nightGroup.add(
     instancedAt(new THREE.PlaneGeometry(13.5, 5.6), signGlowMaterial, signGlowPositions),
   );
