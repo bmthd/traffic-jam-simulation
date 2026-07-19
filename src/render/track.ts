@@ -141,16 +141,52 @@ for (const [section, side] of [
 })();
 
 /* ---- 路面ペイント（区間ルールの表示・遊び心） ---- */
+// 縦書きでは横倒しのままだと不自然な約物。90度回転させて描く(長音符・波ダッシュ・括弧類)
+const VERTICAL_ROTATED_CHARS = new Set([
+  'ー',
+  '～',
+  '〜',
+  '（',
+  '）',
+  '(',
+  ')',
+  '「',
+  '」',
+  '『',
+  '』',
+]);
+const ROAD_TEXT_CANVAS_WIDTH = 256;
+const ROAD_TEXT_CANVAS_HEIGHT = 640;
+const ROAD_TEXT_FONT_SIZE = 118;
+const ROAD_TEXT_LINE_HEIGHT = 128;
+
 function roadText(text: string, x: number, z: number): void {
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 640;
+  canvas.width = ROAD_TEXT_CANVAS_WIDTH;
+  canvas.height = ROAD_TEXT_CANVAS_HEIGHT;
   const ctx = canvas.getContext('2d')!;
-  ctx.clearRect(0, 0, 256, 640);
+  ctx.clearRect(0, 0, ROAD_TEXT_CANVAS_WIDTH, ROAD_TEXT_CANVAS_HEIGHT);
   ctx.fillStyle = 'rgba(255,255,255,0.92)';
-  ctx.font = 'bold 118px sans-serif';
+  ctx.font = `bold ${ROAD_TEXT_FONT_SIZE}px sans-serif`;
   ctx.textAlign = 'center';
-  text.split('').forEach((char, i) => ctx.fillText(char, 128, 140 + i * 128));
+  // 文字の中心を基準に配置し、文字列全体を上下中央に収める(はみ出し防止)
+  ctx.textBaseline = 'middle';
+  const characters = text.split('');
+  const centerX = ROAD_TEXT_CANVAS_WIDTH / 2;
+  const topOffset = (ROAD_TEXT_CANVAS_HEIGHT - characters.length * ROAD_TEXT_LINE_HEIGHT) / 2;
+  characters.forEach((char, i) => {
+    const centerY = topOffset + (i + 0.5) * ROAD_TEXT_LINE_HEIGHT;
+    if (!VERTICAL_ROTATED_CHARS.has(char)) {
+      ctx.fillText(char, centerX, centerY);
+      return;
+    }
+    // 縦書き字形は横書き字形を時計回りに90度回転したもの
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    ctx.rotate(Math.PI / 2);
+    ctx.fillText(char, 0, 0);
+    ctx.restore();
+  });
   const texture = new THREE.CanvasTexture(canvas);
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(5, 12.5),

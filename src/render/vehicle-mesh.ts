@@ -340,11 +340,11 @@ function buildBlueprint(typeName: VehicleTypeName): Blueprint {
         profileGeometry(
           [
             [-halfLength, 0.34],
-            [-halfLength, bodyHeight * 0.92],
-            [-halfLength * 0.86, bodyHeight * 0.97],
-            [halfLength * 0.26, bodyHeight * 0.97],
-            [halfLength * 0.6, bodyHeight * 0.6],
-            [halfLength, 0.42],
+            [-halfLength, bodyHeight * 0.84],
+            [-halfLength * 0.9, bodyHeight * 0.96],
+            [halfLength * 0.72, bodyHeight * 0.96],
+            [halfLength * 0.96, bodyHeight * 0.82],
+            [halfLength, 0.58],
             [halfLength, 0.32],
             [halfLength * 0.9, 0.25],
             [-halfLength * 0.9, 0.25],
@@ -356,22 +356,30 @@ function buildBlueprint(typeName: VehicleTypeName): Blueprint {
         0,
         0,
       );
-      // 傾斜したフロントガラス
+      // キャブオーバーらしく、前面のすぐ上に立ったフロントガラス
       put(
         'glass',
-        new THREE.BoxGeometry(bodyWidth * 0.86, 1.15, 0.06),
+        new THREE.BoxGeometry(bodyWidth * 0.86, bodyHeight * 0.3, 0.06),
         0,
-        bodyHeight * 0.785,
-        -halfLength * 0.43,
-        0.86,
+        bodyHeight * 0.76,
+        -(halfLength + 0.02),
+        0.08,
+      );
+      // ボンネットの代わりの低いグリル
+      put(
+        'trim',
+        new THREE.BoxGeometry(bodyWidth * 0.8, bodyHeight * 0.16, 0.06),
+        0,
+        bodyHeight * 0.5,
+        -(halfLength + 0.03),
       );
       // サイドウィンドウ帯・リアガラス
       put(
         'glass',
-        new THREE.BoxGeometry(bodyWidth + 0.02, bodyHeight * 0.2, bodyLength * 0.55),
+        new THREE.BoxGeometry(bodyWidth + 0.02, bodyHeight * 0.22, bodyLength * 0.58),
         0,
-        bodyHeight * 0.76,
-        halfLength * 0.18,
+        bodyHeight * 0.78,
+        halfLength * 0.12,
       );
       put(
         'glass',
@@ -380,8 +388,8 @@ function buildBlueprint(typeName: VehicleTypeName): Blueprint {
         bodyHeight * 0.72,
         halfLength + 0.01,
       );
-      mirrors('body', bodyHeight * 0.62, -halfLength * 0.42);
-      wheels(0.35, [-(halfLength - 1.0), halfLength - 1.1]);
+      mirrors('body', bodyHeight * 0.68, -(halfLength - 0.22));
+      wheels(0.35, [-(halfLength - 0.75), halfLength - 1.1]);
       break;
     }
   }
