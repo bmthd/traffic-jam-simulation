@@ -6,7 +6,7 @@ function byId<T extends HTMLElement = HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
 
-export const els = {
+export const elements = {
   count: byId('vehicleCount'),
   intervalLabel: byId('intervalLabel'),
   slider: byId<HTMLInputElement>('intervalSlider'),
@@ -35,12 +35,12 @@ function statusTier(score: number): { icon: string; label: string } {
   return { icon: 'angry', label: '大渋滞' };
 }
 const statusIconOf = new WeakMap<HTMLElement, string>();
-function setStatus(el: HTMLElement, score: number): void {
-  const t = statusTier(score);
-  if (statusIconOf.get(el) === t.icon) return; // 段階が同じなら何もしない(毎フレームの再生成を回避)
-  statusIconOf.set(el, t.icon);
-  el.innerHTML = icon(t.icon);
-  el.append(t.label);
+function setStatus(element: HTMLElement, score: number): void {
+  const tier = statusTier(score);
+  if (statusIconOf.get(element) === tier.icon) return; // 段階が同じなら何もしない(毎フレームの再生成を回避)
+  statusIconOf.set(element, tier.icon);
+  element.innerHTML = icon(tier.icon);
+  element.append(tier.label);
   renderIcons();
 }
 function scoreColor(score: number): string {
@@ -51,26 +51,26 @@ function scoreColor(score: number): string {
 }
 
 export function updateHUD(world: World): void {
-  els.count.textContent = String(world.vehicles.length);
-  const L = world.computeSection('L'),
-    R = world.computeSection('R');
-  els.countLeft.textContent = String(L.n);
-  els.countRight.textContent = String(R.n);
-  els.avgLeft.textContent = String(Math.round(L.avg * 3.6));
-  els.avgRight.textContent = String(Math.round(R.avg * 3.6));
-  els.scoreLeft.textContent = L.score.toFixed(1);
-  els.scoreRight.textContent = R.score.toFixed(1);
-  els.barLeft.style.width = L.score + '%';
-  els.barRight.style.width = R.score + '%';
-  els.barLeft.style.backgroundColor = scoreColor(L.score);
-  els.barRight.style.backgroundColor = scoreColor(R.score);
-  setStatus(els.statusLeft, L.score);
-  setStatus(els.statusRight, R.score);
-  const diff = L.score - R.score;
-  els.crownLeft.classList.toggle('show', diff < -5 && L.n > 5);
-  els.crownRight.classList.toggle('show', diff > 5 && R.n > 5);
-  els.miniLeft.textContent = L.score.toFixed(1);
-  els.miniRight.textContent = R.score.toFixed(1);
-  els.miniLeft.classList.toggle('win', diff < -5 && L.n > 5);
-  els.miniRight.classList.toggle('win', diff > 5 && R.n > 5);
+  elements.count.textContent = String(world.vehicles.length);
+  const left = world.computeSection('L'),
+    right = world.computeSection('R');
+  elements.countLeft.textContent = String(left.count);
+  elements.countRight.textContent = String(right.count);
+  elements.avgLeft.textContent = String(Math.round(left.averageSpeed * 3.6));
+  elements.avgRight.textContent = String(Math.round(right.averageSpeed * 3.6));
+  elements.scoreLeft.textContent = left.score.toFixed(1);
+  elements.scoreRight.textContent = right.score.toFixed(1);
+  elements.barLeft.style.width = left.score + '%';
+  elements.barRight.style.width = right.score + '%';
+  elements.barLeft.style.backgroundColor = scoreColor(left.score);
+  elements.barRight.style.backgroundColor = scoreColor(right.score);
+  setStatus(elements.statusLeft, left.score);
+  setStatus(elements.statusRight, right.score);
+  const diff = left.score - right.score;
+  elements.crownLeft.classList.toggle('show', diff < -5 && left.count > 5);
+  elements.crownRight.classList.toggle('show', diff > 5 && right.count > 5);
+  elements.miniLeft.textContent = left.score.toFixed(1);
+  elements.miniRight.textContent = right.score.toFixed(1);
+  elements.miniLeft.classList.toggle('win', diff < -5 && left.count > 5);
+  elements.miniRight.classList.toggle('win', diff > 5 && right.count > 5);
 }

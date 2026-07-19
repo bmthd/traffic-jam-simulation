@@ -40,8 +40,8 @@ export const CONST = {
   RETURN_BOOST_DURATION: 6.0, // 加速して前に出ることを試みる時間 (s)
   RETURN_BOOST_RETRY_COOLDOWN: 8.0, // 加速しても抜けなかった後、再挑戦するまでの間 (s)
   REF_SPEED: 25, // スコア算出の基準速度 (m/s ≒ 90km/h)
-  SCORE_W_SPEED: 0.75,
-  SCORE_W_DENSITY: 0.25,
+  SCORE_WEIGHT_SPEED: 0.75,
+  SCORE_WEIGHT_DENSITY: 0.25,
   // ---- 渋滞吸収運転モード (mode: 'absorb') ----
   ABSORBER_RATIO: 0.3, // 吸収側区間で渋滞吸収運転をするドライバーの割合
   ABSORBER_HEADWAY: 3.0, // 吸収運転が維持したい車間倍率(波を吸うバッファ)
@@ -69,51 +69,51 @@ export type NumericSimParam = {
 
 /* ---------------- 車両タイプ ---------------- */
 export interface VehicleTypeSpec {
-  len: number;
-  w: number;
-  h: number;
-  vmin: number;
-  vmax: number;
-  acc: number;
+  length: number;
+  width: number;
+  height: number;
+  minSpeed: number;
+  maxSpeed: number;
+  acceleration: number;
   colors: number[];
 }
 export type VehicleTypeName = 'Sedan' | 'Truck' | 'SportsCar' | 'Van';
 
 export const TYPES: Record<VehicleTypeName, VehicleTypeSpec> = {
   Sedan: {
-    len: 4.6,
-    w: 1.8,
-    h: 1.42,
-    vmin: 22,
-    vmax: 30,
-    acc: 6.0,
+    length: 4.6,
+    width: 1.8,
+    height: 1.42,
+    minSpeed: 22,
+    maxSpeed: 30,
+    acceleration: 6.0,
     colors: [0x3b6fd4, 0xb8bec9, 0x27313f, 0x8c1d2c, 0xe8e6e0],
   },
   Truck: {
-    len: 9.2,
-    w: 2.5,
-    h: 3.5,
-    vmin: 15,
-    vmax: 21,
-    acc: 3.2,
+    length: 9.2,
+    width: 2.5,
+    height: 3.5,
+    minSpeed: 15,
+    maxSpeed: 21,
+    acceleration: 3.2,
     colors: [0x2e8b57, 0x4a5568, 0x9aa5b1, 0x7c4a1e],
   },
   SportsCar: {
-    len: 4.2,
-    w: 1.9,
-    h: 1.12,
-    vmin: 28,
-    vmax: 38,
-    acc: 9.0,
+    length: 4.2,
+    width: 1.9,
+    height: 1.12,
+    minSpeed: 28,
+    maxSpeed: 38,
+    acceleration: 9.0,
     colors: [0xd6452c, 0xf2c200, 0x1450c8, 0xff7a00, 0x111418],
   },
   Van: {
-    len: 5.4,
-    w: 2.0,
-    h: 2.15,
-    vmin: 18,
-    vmax: 25,
-    acc: 4.5,
+    length: 5.4,
+    width: 2.0,
+    height: 2.15,
+    minSpeed: 18,
+    maxSpeed: 25,
+    acceleration: 4.5,
     colors: [0xeeeeee, 0x88a0b8, 0x445566, 0x99c2a2],
   },
 };

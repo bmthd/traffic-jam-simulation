@@ -9,7 +9,7 @@ export interface CameraController {
   radius: number;
   target: THREE.Vector3;
 }
-export const camCtrl: CameraController = {
+export const cameraController: CameraController = {
   theta: 0,
   phi: 1.06,
   radius: 105,
@@ -17,46 +17,51 @@ export const camCtrl: CameraController = {
 };
 
 export function updateCamera(): void {
-  const c = camCtrl;
+  const controller = cameraController;
   camera.position.set(
-    c.target.x + c.radius * Math.sin(c.phi) * Math.sin(c.theta),
-    c.target.y + c.radius * Math.cos(c.phi),
-    c.target.z + c.radius * Math.sin(c.phi) * Math.cos(c.theta),
+    controller.target.x + controller.radius * Math.sin(controller.phi) * Math.sin(controller.theta),
+    controller.target.y + controller.radius * Math.cos(controller.phi),
+    controller.target.z + controller.radius * Math.sin(controller.phi) * Math.cos(controller.theta),
   );
-  camera.lookAt(c.target);
+  camera.lookAt(controller.target);
 }
 
 export function setupCameraControls(): void {
   const dom = renderer.domElement;
   const pointers = new Map<number, { x: number; y: number }>();
-  let pinchDist = 0;
+  let pinchDistance = 0;
   dom.addEventListener('pointerdown', function (e) {
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     dom.setPointerCapture(e.pointerId);
     if (pointers.size === 2) {
-      const p = Array.from(pointers.values());
-      pinchDist = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      const points = Array.from(pointers.values());
+      pinchDistance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
     }
   });
   dom.addEventListener('pointermove', function (e) {
     if (!pointers.has(e.pointerId)) return;
-    const prev = pointers.get(e.pointerId)!;
-    const dx = e.clientX - prev.x,
-      dy = e.clientY - prev.y;
+    const previous = pointers.get(e.pointerId)!;
+    const deltaX = e.clientX - previous.x,
+      deltaY = e.clientY - previous.y;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 1) {
-      camCtrl.theta -= dx * 0.005;
-      camCtrl.phi = clamp(camCtrl.phi - dy * 0.004, 0.25, 1.45);
+      cameraController.theta -= deltaX * 0.005;
+      cameraController.phi = clamp(cameraController.phi - deltaY * 0.004, 0.25, 1.45);
     } else if (pointers.size === 2) {
-      const p = Array.from(pointers.values());
-      const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
-      if (pinchDist > 0) camCtrl.radius = clamp(camCtrl.radius * (pinchDist / d), 30, 240);
-      pinchDist = d;
+      const points = Array.from(pointers.values());
+      const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+      if (pinchDistance > 0)
+        cameraController.radius = clamp(
+          cameraController.radius * (pinchDistance / distance),
+          30,
+          240,
+        );
+      pinchDistance = distance;
     }
   });
   function release(e: PointerEvent): void {
     pointers.delete(e.pointerId);
-    pinchDist = 0;
+    pinchDistance = 0;
   }
   dom.addEventListener('pointerup', release);
   dom.addEventListener('pointercancel', release);
@@ -64,7 +69,7 @@ export function setupCameraControls(): void {
     'wheel',
     function (e) {
       e.preventDefault();
-      camCtrl.radius = clamp(camCtrl.radius * (1 + e.deltaY * 0.0011), 30, 240);
+      cameraController.radius = clamp(cameraController.radius * (1 + e.deltaY * 0.0011), 30, 240);
     },
     { passive: false },
   );

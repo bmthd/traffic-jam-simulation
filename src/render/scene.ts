@@ -2,11 +2,11 @@
 import * as THREE from 'three';
 import { makeGrassTexture } from './materials';
 
-export const SKY = 0xcfe2ee;
+export const SKY_COLOR = 0xcfe2ee;
 
 export const scene = new THREE.Scene();
-scene.background = new THREE.Color(SKY);
-scene.fog = new THREE.Fog(SKY, 140, 420); // 遠景処理: 遠方が背景に溶け込む
+scene.background = new THREE.Color(SKY_COLOR);
+scene.fog = new THREE.Fog(SKY_COLOR, 140, 420); // 遠景処理: 遠方が背景に溶け込む
 
 export const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.5, 1200);
 
@@ -25,8 +25,8 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.getElementById('container')!.appendChild(renderer.domElement);
 
 /* ---- ライティング ---- */
-export const hemi = new THREE.HemisphereLight(0xeaf4ff, 0x55694f, 0.85);
-scene.add(hemi);
+export const hemiLight = new THREE.HemisphereLight(0xeaf4ff, 0x55694f, 0.85);
+scene.add(hemiLight);
 export const sun = new THREE.DirectionalLight(0xfff3df, 0.95);
 sun.position.set(70, 130, 50);
 sun.castShadow = true;

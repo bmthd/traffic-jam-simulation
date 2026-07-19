@@ -2,99 +2,107 @@
    道路施設(track.js)とは別の「風景」を担当する。
    山・雲のマテリアルは materials.js にあり、昼夜の色は theme.js が補間する */
 import * as THREE from 'three';
-import { CONST as C } from '../core';
+import { CONST } from '../core';
 import { scene } from './scene';
-import { mtnFarMat, mtnNearMat, cloudMat } from './materials';
+import { mountainFarMaterial, mountainNearMaterial, cloudMaterial } from './materials';
 import { instancedAt } from './instancing';
 
-const ROAD_HALF = C.ROAD_HALF;
+const ROAD_HALF = CONST.ROAD_HALF;
 
 /* ---- 路側の防護柵(ガードレール) ---- */
 (function buildRoadside() {
-  const railMat = new THREE.MeshPhongMaterial({ color: 0xdfe4e8, shininess: 60 });
-  const postMat = new THREE.MeshLambertMaterial({ color: 0xb8bfc6 });
-  const postGeo = new THREE.BoxGeometry(0.12, 0.8, 0.12);
-  const postAt: [number, number, number][] = [];
-  for (const sx of [-1, 1]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, ROAD_HALF * 2), railMat);
-    rail.position.set(18.2 * sx, 0.62, 0);
+  const railMaterial = new THREE.MeshPhongMaterial({ color: 0xdfe4e8, shininess: 60 });
+  const postMaterial = new THREE.MeshLambertMaterial({ color: 0xb8bfc6 });
+  const postGeometry = new THREE.BoxGeometry(0.12, 0.8, 0.12);
+  const postPositions: [number, number, number][] = [];
+  for (const side of [-1, 1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, ROAD_HALF * 2), railMaterial);
+    rail.position.set(18.2 * side, 0.62, 0);
     scene.add(rail);
-    for (let z = -ROAD_HALF + 4; z < ROAD_HALF; z += 12) postAt.push([18.2 * sx, 0.4, z]);
+    for (let z = -ROAD_HALF + 4; z < ROAD_HALF; z += 12) postPositions.push([18.2 * side, 0.4, z]);
   }
-  scene.add(instancedAt(postGeo, postMat, postAt));
+  scene.add(instancedAt(postGeometry, postMaterial, postPositions));
   // 遮音壁: 下段コンクリート + 上段の半透明パネル(高速道路らしさ)
-  const wallMat = new THREE.MeshLambertMaterial({ color: 0xb4b9bd });
-  const panelMat = new THREE.MeshLambertMaterial({
+  const wallMaterial = new THREE.MeshLambertMaterial({ color: 0xb4b9bd });
+  const panelMaterial = new THREE.MeshLambertMaterial({
     color: 0x9fd3c8,
     transparent: true,
     opacity: 0.38,
   });
-  const wpostMat = new THREE.MeshLambertMaterial({ color: 0x7c858d });
-  const wpostGeo = new THREE.BoxGeometry(0.22, 3.2, 0.22);
-  const wpostAt: [number, number, number][] = [];
-  for (const sx of [-1, 1]) {
-    const z0 = -380,
-      z1 = -130,
-      len = z1 - z0,
-      zc = (z0 + z1) / 2;
-    const base = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.5, len), wallMat);
-    base.position.set(19.2 * sx, 0.75, zc);
+  const wallPostMaterial = new THREE.MeshLambertMaterial({ color: 0x7c858d });
+  const wallPostGeometry = new THREE.BoxGeometry(0.22, 3.2, 0.22);
+  const wallPostPositions: [number, number, number][] = [];
+  for (const side of [-1, 1]) {
+    const zStart = -380,
+      zEnd = -130,
+      length = zEnd - zStart,
+      zCenter = (zStart + zEnd) / 2;
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.5, length), wallMaterial);
+    base.position.set(19.2 * side, 0.75, zCenter);
     base.castShadow = true;
     scene.add(base);
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.7, len), panelMat);
-    panel.position.set(19.2 * sx, 2.35, zc);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.7, length), panelMaterial);
+    panel.position.set(19.2 * side, 2.35, zCenter);
     scene.add(panel);
-    for (let z = z0; z <= z1; z += 10) wpostAt.push([19.2 * sx, 1.6, z]);
+    for (let z = zStart; z <= zEnd; z += 10) wallPostPositions.push([19.2 * side, 1.6, z]);
   }
-  scene.add(instancedAt(wpostGeo, wpostMat, wpostAt));
+  scene.add(instancedAt(wallPostGeometry, wallPostMaterial, wallPostPositions));
 })();
 
 /* ---- 並木・雑木林(InstancedMeshで軽量に大量配置) ---- */
 (function buildTrees() {
-  const N = 130;
-  const trunkGeo = new THREE.CylinderGeometry(0.1, 0.18, 1, 5);
-  trunkGeo.translate(0, 0.5, 0);
-  const canopyGeo = new THREE.IcosahedronGeometry(1, 0);
+  const treeCount = 130;
+  const trunkGeometry = new THREE.CylinderGeometry(0.1, 0.18, 1, 5);
+  trunkGeometry.translate(0, 0.5, 0);
+  const canopyGeometry = new THREE.IcosahedronGeometry(1, 0);
   const trunks = new THREE.InstancedMesh(
-    trunkGeo,
+    trunkGeometry,
     new THREE.MeshLambertMaterial({ color: 0x6b4e35 }),
-    N,
+    treeCount,
   );
   const canopies = new THREE.InstancedMesh(
-    canopyGeo,
+    canopyGeometry,
     new THREE.MeshLambertMaterial({ color: 0xffffff }),
-    N,
+    treeCount,
   );
   canopies.castShadow = true;
-  const m4 = new THREE.Matrix4(),
-    col = new THREE.Color();
-  for (let i = 0; i < N; i++) {
-    const sx = Math.random() < 0.5 ? -1 : 1;
-    const x = sx * (22 + Math.pow(Math.random(), 1.6) * 70);
+  const matrix = new THREE.Matrix4(),
+    color = new THREE.Color();
+  for (let i = 0; i < treeCount; i++) {
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const x = side * (22 + Math.pow(Math.random(), 1.6) * 70);
     const z = -ROAD_HALF + Math.random() * ROAD_HALF * 2;
-    const h = 2.4 + Math.random() * 3.6; // 幹の高さ
-    const r = h * (0.42 + Math.random() * 0.22); // 樹冠の半径
-    m4.makeScale(1 + r * 0.3, h, 1 + r * 0.3).setPosition(x, 0, z);
-    trunks.setMatrixAt(i, m4);
-    m4.makeScale(r, r * (0.9 + Math.random() * 0.5), r).setPosition(x, h + r * 0.5, z);
-    canopies.setMatrixAt(i, m4);
-    col.setHSL(
+    const height = 2.4 + Math.random() * 3.6; // 幹の高さ
+    const radius = height * (0.42 + Math.random() * 0.22); // 樹冠の半径
+    matrix.makeScale(1 + radius * 0.3, height, 1 + radius * 0.3).setPosition(x, 0, z);
+    trunks.setMatrixAt(i, matrix);
+    matrix
+      .makeScale(radius, radius * (0.9 + Math.random() * 0.5), radius)
+      .setPosition(x, height + radius * 0.5, z);
+    canopies.setMatrixAt(i, matrix);
+    color.setHSL(
       0.26 + Math.random() * 0.09,
       0.35 + Math.random() * 0.25,
       0.26 + Math.random() * 0.14,
     );
-    canopies.setColorAt(i, col);
+    canopies.setColorAt(i, color);
   }
   scene.add(trunks, canopies);
 })();
 
 /* ---- 遠景: 山並み(霧の外に置く書割り) ---- */
 (function buildMountains() {
-  const far = new THREE.Mesh(new THREE.CylinderGeometry(860, 860, 180, 72, 1, true), mtnFarMat);
+  const far = new THREE.Mesh(
+    new THREE.CylinderGeometry(860, 860, 180, 72, 1, true),
+    mountainFarMaterial,
+  );
   far.position.y = 66;
   far.renderOrder = -16;
   scene.add(far);
-  const near = new THREE.Mesh(new THREE.CylinderGeometry(760, 760, 130, 72, 1, true), mtnNearMat);
+  const near = new THREE.Mesh(
+    new THREE.CylinderGeometry(760, 760, 130, 72, 1, true),
+    mountainNearMaterial,
+  );
   near.position.y = 40;
   near.rotation.y = 2.1;
   near.renderOrder = -15;
@@ -104,23 +112,23 @@ const ROAD_HALF = C.ROAD_HALF;
 /* ---- 雲 ---- */
 (function buildClouds() {
   for (let i = 0; i < 9; i++) {
-    const th = Math.random() * Math.PI * 2,
-      R = 380 + Math.random() * 320;
-    const cx = Math.cos(th) * R,
-      cz = Math.sin(th) * R,
-      cy = 150 + Math.random() * 110;
+    const theta = Math.random() * Math.PI * 2,
+      radius = 380 + Math.random() * 320;
+    const centerX = Math.cos(theta) * radius,
+      centerZ = Math.sin(theta) * radius,
+      centerY = 150 + Math.random() * 110;
     for (let k = 0; k < 3; k++) {
       // ひと塊を3枚のスプライトでもこもこに
-      const s = new THREE.Sprite(cloudMat);
-      const w = 90 + Math.random() * 120;
-      s.scale.set(w, w * (0.28 + Math.random() * 0.14), 1);
-      s.position.set(
-        cx + (Math.random() - 0.5) * 70,
-        cy + (Math.random() - 0.5) * 18,
-        cz + (Math.random() - 0.5) * 70,
+      const sprite = new THREE.Sprite(cloudMaterial);
+      const width = 90 + Math.random() * 120;
+      sprite.scale.set(width, width * (0.28 + Math.random() * 0.14), 1);
+      sprite.position.set(
+        centerX + (Math.random() - 0.5) * 70,
+        centerY + (Math.random() - 0.5) * 18,
+        centerZ + (Math.random() - 0.5) * 70,
       );
-      s.renderOrder = -14;
-      scene.add(s);
+      sprite.renderOrder = -14;
+      scene.add(sprite);
     }
   }
 })();
