@@ -12,7 +12,7 @@ export type {
   VehicleTypeName,
   VehicleTypeSpec,
 } from './constants';
-export { clamp, lerp, smooth, createRng, WRAP, wrapDelta } from './utils';
+export { clamp, lerp, smooth, createRng, WRAP_LENGTH, wrapDelta } from './utils';
 export type { Rng } from './utils';
 export { Vehicle } from './vehicle';
 export type { LaneChange, LaneChangeState, NeighborInfo } from './vehicle';

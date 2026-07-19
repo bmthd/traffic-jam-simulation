@@ -80,9 +80,9 @@ const mirrorGeo = new THREE.BoxGeometry(0.1, 0.11, 0.2);
 
 function buildVehicleMesh(v: Vehicle): VehicleMesh {
   const t = v.type,
-    L = t.len,
-    W = t.w,
-    H = t.h,
+    L = t.length,
+    W = t.width,
+    H = t.height,
     l = L / 2;
   const g = new THREE.Group();
   function add(
@@ -393,7 +393,7 @@ export function syncMeshes(world: World, dt: number): void {
     m.brakeMat.color.setHex(v.braking ? 0xff2a2a : themeState.tailIdleHex);
     m.bglow.visible = v.braking;
     if (v.braking) brakeGlowMat.opacity = 0.45 + 0.45 * themeState.mix;
-    const lc = v.lc;
+    const lc = v.laneChange;
     const on = lc.state !== 'none' && Math.floor(performance.now() / 350) % 2 === 0;
     const dirRight =
       lc.state !== 'none' && C.LANE_X[v.section][lc.to] > C.LANE_X[v.section][lc.from];

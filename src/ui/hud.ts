@@ -54,10 +54,10 @@ export function updateHUD(world: World): void {
   els.count.textContent = String(world.vehicles.length);
   const L = world.computeSection('L'),
     R = world.computeSection('R');
-  els.countLeft.textContent = String(L.n);
-  els.countRight.textContent = String(R.n);
-  els.avgLeft.textContent = String(Math.round(L.avg * 3.6));
-  els.avgRight.textContent = String(Math.round(R.avg * 3.6));
+  els.countLeft.textContent = String(L.count);
+  els.countRight.textContent = String(R.count);
+  els.avgLeft.textContent = String(Math.round(L.averageSpeed * 3.6));
+  els.avgRight.textContent = String(Math.round(R.averageSpeed * 3.6));
   els.scoreLeft.textContent = L.score.toFixed(1);
   els.scoreRight.textContent = R.score.toFixed(1);
   els.barLeft.style.width = L.score + '%';
@@ -67,10 +67,10 @@ export function updateHUD(world: World): void {
   setStatus(els.statusLeft, L.score);
   setStatus(els.statusRight, R.score);
   const diff = L.score - R.score;
-  els.crownLeft.classList.toggle('show', diff < -5 && L.n > 5);
-  els.crownRight.classList.toggle('show', diff > 5 && R.n > 5);
+  els.crownLeft.classList.toggle('show', diff < -5 && L.count > 5);
+  els.crownRight.classList.toggle('show', diff > 5 && R.count > 5);
   els.miniLeft.textContent = L.score.toFixed(1);
   els.miniRight.textContent = R.score.toFixed(1);
-  els.miniLeft.classList.toggle('win', diff < -5 && L.n > 5);
-  els.miniRight.classList.toggle('win', diff > 5 && R.n > 5);
+  els.miniLeft.classList.toggle('win', diff < -5 && L.count > 5);
+  els.miniRight.classList.toggle('win', diff > 5 && R.count > 5);
 }
