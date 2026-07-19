@@ -300,7 +300,7 @@ function buildBlueprint(typeName: VehicleTypeName): Blueprint {
       put('hub', new THREE.BoxGeometry(bodyWidth, 0.3, 0.14), 0, 0.45, -(halfLength + 0.03)); // 金属バンパー
       // 導風板(キャブ屋根から荷箱の上端へ斜めに立ち上がる)。傾いた板1枚だと
       // 側面が開いたままで、左右から屋根の裏の空洞が見えてしまう。キャブ屋根・
-      // 荷箱前面・斜面で囲んだ台形の側面プロファイルを幅方向へ押し出し、
+      // 荷箱前面・斜面で囲んだ三角形の側面プロファイルを幅方向へ押し出し、
       // 左右を塞いだ中実のフェアリングとして作る
       put(
         'body',
