@@ -256,13 +256,22 @@ function buildBlueprint(typeName: VehicleTypeName): Blueprint {
       break;
     }
     case 'Truck': {
-      const cabLength = 2.2;
+      const cabLength = 2.2,
+        cabHeight = 1.85,
+        cabFloorY = 0.85,
+        cabRoofY = cabFloorY + cabHeight, // キャブ屋根の高さ
+        cargoGap = 0.35, // キャブと荷箱の間の隙間
+        cargoLength = bodyLength - cabLength - cargoGap,
+        cargoHeight = bodyHeight - 0.65,
+        cargoFloorY = 0.62,
+        cargoTopY = cargoFloorY + cargoHeight, // 荷箱の上端
+        cargoFrontZ = -(halfLength - cabLength - cargoGap); // 荷箱の前面
       // キャブ
       put(
         'body',
-        new THREE.BoxGeometry(bodyWidth, 1.85, cabLength),
+        new THREE.BoxGeometry(bodyWidth, cabHeight, cabLength),
         0,
-        1.775,
+        cabFloorY + cabHeight / 2,
         -(halfLength - cabLength / 2),
       );
       // フロントガラスをわずかに寝かせる
@@ -289,22 +298,33 @@ function buildBlueprint(typeName: VehicleTypeName): Blueprint {
         -(halfLength + 0.02),
       ); // グリル
       put('hub', new THREE.BoxGeometry(bodyWidth, 0.3, 0.14), 0, 0.45, -(halfLength + 0.03)); // 金属バンパー
-      // 導風板(キャブ屋根から荷箱の高さへつなぐ)
+      // 導風板(キャブ屋根から荷箱の上端へ斜めに立ち上がる)。傾いた板1枚だと
+      // 側面が開いたままで、左右から屋根の裏の空洞が見えてしまう。キャブ屋根・
+      // 荷箱前面・斜面で囲んだ台形の側面プロファイルを幅方向へ押し出し、
+      // 左右を塞いだ中実のフェアリングとして作る
       put(
         'body',
-        new THREE.BoxGeometry(bodyWidth * 0.9, 1.45, 0.06),
+        profileGeometry(
+          [
+            // プロファイルの +x は車体前方(= ワールドの -z)
+            [halfLength - 0.9, cabRoofY - 0.02], // 前下: キャブ屋根に少し埋める
+            [-cargoFrontZ, cabRoofY - 0.02], // 後下: 荷箱前面
+            [-cargoFrontZ, cargoTopY - 0.05], // 後上: 荷箱の上端に合わせる
+          ],
+          bodyWidth,
+          0.05,
+        ),
         0,
-        3.07,
-        -(halfLength - 1.55),
-        1.05,
+        0,
+        0,
       );
       // 荷箱
       put(
         'cargo',
-        new THREE.BoxGeometry(bodyWidth, bodyHeight - 0.65, bodyLength - cabLength - 0.35),
+        new THREE.BoxGeometry(bodyWidth, cargoHeight, cargoLength),
         0,
-        0.62 + (bodyHeight - 0.65) / 2,
-        (cabLength + 0.35) / 2,
+        cargoFloorY + cargoHeight / 2,
+        cargoFrontZ + cargoLength / 2,
       );
       put('trim', new THREE.BoxGeometry(bodyWidth * 0.94, 0.5, bodyLength * 0.3), 0, 0.5, 0.1); // サイドスカート
       put('trim', new THREE.BoxGeometry(bodyWidth * 0.9, 0.45, 0.05), 0, 0.32, halfLength - 0.15); // 泥除け
