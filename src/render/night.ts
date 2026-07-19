@@ -12,6 +12,7 @@ import {
   signGlowMat,
 } from './materials';
 import { GANTRY_Z } from './track';
+import { instancedAt, instancedWith } from './instancing';
 
 const ROAD_HALF = C.ROAD_HALF;
 
@@ -110,44 +111,34 @@ nightDome.material.opacity = 0;
   const armGeo = new THREE.BoxGeometry(5.4, 0.16, 0.16);
   const headGeo = new THREE.BoxGeometry(0.9, 0.22, 0.42);
   const glowGeo = new THREE.PlaneGeometry(13, 13);
+  const poleAt: [number, number, number][] = [];
+  const armAt: [number, number, number][] = [];
+  const headAt: [number, number, number][] = [];
+  const glowMs: THREE.Matrix4[] = [];
+  const glowRot = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
   for (let z = -ROAD_HALF + 14; z < ROAD_HALF; z += 42) {
-    const pole = new THREE.Mesh(poleGeo, poleMat);
-    pole.position.set(0, 3.6, z);
-    pole.matrixAutoUpdate = false;
-    pole.updateMatrix();
-    scene.add(pole);
-    const arm = new THREE.Mesh(armGeo, poleMat);
-    arm.position.set(0, 7.1, z);
-    arm.matrixAutoUpdate = false;
-    arm.updateMatrix();
-    scene.add(arm);
+    poleAt.push([0, 3.6, z]);
+    armAt.push([0, 7.1, z]);
     for (const sx of [-1, 1]) {
-      const head = new THREE.Mesh(headGeo, lampHeadMat);
-      head.position.set(sx * 2.6, 7.0, z);
-      head.matrixAutoUpdate = false;
-      head.updateMatrix();
-      scene.add(head);
+      headAt.push([sx * 2.6, 7.0, z]);
       // 電球のにじみ(夜のみ): 灯具が光源として「光って見える」ように
       const bulb = new THREE.Sprite(bulbMat);
       bulb.scale.set(2.6, 2.6, 1);
       bulb.position.set(sx * 2.6, 6.92, z);
       nightGroup.add(bulb);
       // 路面の光だまり(夜のみ)
-      const glow = new THREE.Mesh(glowGeo, lampGlowMat);
-      glow.rotation.x = -Math.PI / 2;
-      glow.position.set(sx * 3.2, 0.03, z);
-      glow.matrixAutoUpdate = false;
-      glow.updateMatrix();
-      nightGroup.add(glow);
+      glowMs.push(glowRot.clone().setPosition(sx * 3.2, 0.03, z));
     }
   }
+  scene.add(instancedAt(poleGeo, poleMat, poleAt));
+  scene.add(instancedAt(armGeo, poleMat, armAt));
+  scene.add(instancedAt(headGeo, lampHeadMat, headAt));
+  nightGroup.add(instancedWith(glowGeo, lampGlowMat, glowMs));
 })();
 
 // 標識ゲートの投光(夜は案内標識が照明で浮かび上がる)
-for (const z of GANTRY_Z) {
-  for (const cx of [-7, 7]) {
-    const glow = new THREE.Mesh(new THREE.PlaneGeometry(13.5, 5.6), signGlowMat);
-    glow.position.set(cx, 8.3, z);
-    nightGroup.add(glow);
-  }
+{
+  const signGlowAt: [number, number, number][] = [];
+  for (const z of GANTRY_Z) for (const cx of [-7, 7]) signGlowAt.push([cx, 8.3, z]);
+  nightGroup.add(instancedAt(new THREE.PlaneGeometry(13.5, 5.6), signGlowMat, signGlowAt));
 }
