@@ -1,79 +1,79 @@
 /* ================= 昼夜テーマ(nightMixで連続補間) ================= */
 import * as THREE from 'three';
-import { scene, hemi, sun } from './scene';
+import { scene, hemiLight, sun } from './scene';
 import {
-  headMat,
-  glassMat,
-  lampHeadMat,
-  delinMat,
-  starMat,
-  moonMat,
-  haloMat,
-  lampGlowMat,
-  bulbMat,
-  beamMat,
-  signGlowMat,
-  mtnFarMat,
-  mtnNearMat,
-  cloudMat,
+  headlightMaterial,
+  glassMaterial,
+  lampHeadMaterial,
+  delineatorMaterial,
+  starMaterial,
+  moonMaterial,
+  haloMaterial,
+  lampGlowMaterial,
+  bulbMaterial,
+  beamMaterial,
+  signGlowMaterial,
+  mountainFarMaterial,
+  mountainNearMaterial,
+  cloudMaterial,
 } from './materials';
 import { nightGroup, nightDome } from './night';
 
 export interface EnvSpec {
-  bg: number;
+  background: number;
   fogColor: number;
   fogNear: number;
   fogFar: number;
   hemiSky: number;
   hemiGround: number;
-  hemiInt: number;
+  hemiIntensity: number;
   sunColor: number;
-  sunInt: number;
+  sunIntensity: number;
   headEmissive: number;
   glassEmissive: number;
   tailIdle: number;
   lampEmissive: number;
-  delin: number;
-  mtnFar: number;
-  mtnNear: number;
+  delineator: number;
+  mountainFar: number;
+  mountainNear: number;
 }
 
 export const ENV: Record<'day' | 'night', EnvSpec> = {
   day: {
-    bg: 0xeef4f6,
+    background: 0xeef4f6,
     fogColor: 0xdfeef5,
     fogNear: 140,
     fogFar: 420,
     hemiSky: 0xeaf4ff,
     hemiGround: 0x55694f,
-    hemiInt: 0.85,
+    hemiIntensity: 0.85,
     sunColor: 0xfff3df,
-    sunInt: 0.95,
+    sunIntensity: 0.95,
     headEmissive: 0x6b6346,
     glassEmissive: 0x000000,
     tailIdle: 0x4a0b0b,
     lampEmissive: 0x000000,
-    delin: 0x9aa3ad,
-    mtnFar: 0xb9cbd9,
-    mtnNear: 0x93aabf,
+    delineator: 0x9aa3ad,
+    mountainFar: 0xb9cbd9,
+    mountainNear: 0x93aabf,
   },
   night: {
-    bg: 0x141d33,
+    background: 0x141d33,
     fogColor: 0x161f36,
     fogNear: 100,
     fogFar: 360,
     hemiSky: 0x32415f,
     hemiGround: 0x0a100e,
-    hemiInt: 0.32,
+    hemiIntensity: 0.32,
     sunColor: 0x9fb6e8,
-    sunInt: 0.3,
+    sunIntensity: 0.3,
     headEmissive: 0xffe9a8,
     glassEmissive: 0x332912,
     tailIdle: 0x7a1212,
     lampEmissive: 0xffc36b,
-    delin: 0xffb054,
-    mtnFar: 0x101a2e,
-    mtnNear: 0x0b1322,
+    delineator: 0xffb054,
+    mountainFar: 0x101a2e,
+    mountainNear: 0x0b1322,
   },
 };
 
@@ -89,48 +89,48 @@ export const themeState: ThemeState = {
   tailIdleHex: ENV.day.tailIdle,
 };
 
-const _ca = new THREE.Color(),
-  _cb = new THREE.Color();
-function lerpColor(target: THREE.Color, a: number, b: number, t: number): void {
-  _ca.setHex(a);
-  _cb.setHex(b);
-  target.copy(_ca).lerp(_cb, t);
+const _colorFrom = new THREE.Color(),
+  _colorTo = new THREE.Color();
+function lerpColor(target: THREE.Color, fromHex: number, toHex: number, t: number): void {
+  _colorFrom.setHex(fromHex);
+  _colorTo.setHex(toHex);
+  target.copy(_colorFrom).lerp(_colorTo, t);
 }
 
 export function applyEnv(): void {
-  const d = ENV.day,
-    n = ENV.night,
-    t = themeState.mix;
+  const day = ENV.day,
+    night = ENV.night,
+    mix = themeState.mix;
   const fog = scene.fog as THREE.Fog;
-  lerpColor(scene.background as THREE.Color, d.bg, n.bg, t);
-  lerpColor(fog.color, d.fogColor, n.fogColor, t);
-  fog.near = d.fogNear + (n.fogNear - d.fogNear) * t;
-  fog.far = d.fogFar + (n.fogFar - d.fogFar) * t;
-  lerpColor(hemi.color, d.hemiSky, n.hemiSky, t);
-  lerpColor(hemi.groundColor, d.hemiGround, n.hemiGround, t);
-  hemi.intensity = d.hemiInt + (n.hemiInt - d.hemiInt) * t;
-  lerpColor(sun.color, d.sunColor, n.sunColor, t);
-  sun.intensity = d.sunInt + (n.sunInt - d.sunInt) * t;
-  lerpColor(headMat.emissive, d.headEmissive, n.headEmissive, t);
-  lerpColor(glassMat.emissive, d.glassEmissive, n.glassEmissive, t);
-  lerpColor(lampHeadMat.emissive, d.lampEmissive, n.lampEmissive, t);
-  lerpColor(delinMat.color, d.delin, n.delin, t);
-  lerpColor(mtnFarMat.color, d.mtnFar, n.mtnFar, t);
-  lerpColor(mtnNearMat.color, d.mtnNear, n.mtnNear, t);
-  cloudMat.opacity = 0.9 * (1 - t); // 雲は夜には見えない
-  _ca.setHex(d.tailIdle);
-  _cb.setHex(n.tailIdle);
-  themeState.tailIdleHex = _ca.lerp(_cb, t).getHex();
+  lerpColor(scene.background as THREE.Color, day.background, night.background, mix);
+  lerpColor(fog.color, day.fogColor, night.fogColor, mix);
+  fog.near = day.fogNear + (night.fogNear - day.fogNear) * mix;
+  fog.far = day.fogFar + (night.fogFar - day.fogFar) * mix;
+  lerpColor(hemiLight.color, day.hemiSky, night.hemiSky, mix);
+  lerpColor(hemiLight.groundColor, day.hemiGround, night.hemiGround, mix);
+  hemiLight.intensity = day.hemiIntensity + (night.hemiIntensity - day.hemiIntensity) * mix;
+  lerpColor(sun.color, day.sunColor, night.sunColor, mix);
+  sun.intensity = day.sunIntensity + (night.sunIntensity - day.sunIntensity) * mix;
+  lerpColor(headlightMaterial.emissive, day.headEmissive, night.headEmissive, mix);
+  lerpColor(glassMaterial.emissive, day.glassEmissive, night.glassEmissive, mix);
+  lerpColor(lampHeadMaterial.emissive, day.lampEmissive, night.lampEmissive, mix);
+  lerpColor(delineatorMaterial.color, day.delineator, night.delineator, mix);
+  lerpColor(mountainFarMaterial.color, day.mountainFar, night.mountainFar, mix);
+  lerpColor(mountainNearMaterial.color, day.mountainNear, night.mountainNear, mix);
+  cloudMaterial.opacity = 0.9 * (1 - mix); // 雲は夜には見えない
+  _colorFrom.setHex(day.tailIdle);
+  _colorTo.setHex(night.tailIdle);
+  themeState.tailIdleHex = _colorFrom.lerp(_colorTo, mix).getHex();
   // 夜専用アセットはまとめてフェード
-  nightDome.material.opacity = t;
-  nightGroup.visible = t > 0.02;
-  starMat.opacity = t;
-  moonMat.opacity = t;
-  haloMat.opacity = t * 0.9;
-  lampGlowMat.opacity = t;
-  bulbMat.opacity = t;
-  beamMat.opacity = t;
-  signGlowMat.opacity = t;
+  nightDome.material.opacity = mix;
+  nightGroup.visible = mix > 0.02;
+  starMaterial.opacity = mix;
+  moonMaterial.opacity = mix;
+  haloMaterial.opacity = mix * 0.9;
+  lampGlowMaterial.opacity = mix;
+  bulbMaterial.opacity = mix;
+  beamMaterial.opacity = mix;
+  signGlowMaterial.opacity = mix;
 }
 
 // 目標値を設定する(instant = クロスフェードなしで即時反映)
@@ -143,11 +143,11 @@ export function setNightTarget(on: boolean, instant: boolean): void {
 }
 
 // 毎フレーム呼ぶ: 夕暮れ/夜明けのクロスフェード(約1.6秒)
-export function tickTheme(dt: number): void {
+export function tickTheme(deltaTime: number): void {
   if (themeState.mix === themeState.target) return;
   themeState.mix =
     themeState.target > themeState.mix
-      ? Math.min(themeState.target, themeState.mix + dt / 1.6)
-      : Math.max(themeState.target, themeState.mix - dt / 1.6);
+      ? Math.min(themeState.target, themeState.mix + deltaTime / 1.6)
+      : Math.max(themeState.target, themeState.mix - deltaTime / 1.6);
   applyEnv();
 }

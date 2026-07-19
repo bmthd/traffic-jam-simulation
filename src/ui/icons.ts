@@ -43,8 +43,10 @@ const ICONS = {
   X,
 };
 
-export function icon(name: string, cls?: string): string {
-  return '<i data-lucide="' + name + '"' + (cls ? ' class="' + cls + '"' : '') + '></i>';
+export function icon(name: string, className?: string): string {
+  return (
+    '<i data-lucide="' + name + '"' + (className ? ' class="' + className + '"' : '') + '></i>'
+  );
 }
 export function renderIcons(): void {
   createIcons({ icons: ICONS });

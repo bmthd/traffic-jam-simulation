@@ -11,7 +11,7 @@ import { syncMeshes } from './render/vehicle-mesh';
 import { updateCamera, setupCameraControls } from './render/camera';
 import { icon, renderIcons } from './ui/icons';
 import { showMessage } from './ui/notify';
-import { els, updateHUD } from './ui/hud';
+import { elements, updateHUD } from './ui/hud';
 import { setupPanels } from './ui/panels';
 import { setupParams } from './ui/params';
 import { setupNightToggle } from './ui/night-toggle';
@@ -20,9 +20,9 @@ export function start(): void {
   const world = new World({ rng: Math.random, spawnInterval: 800 });
 
   /* ---- コントロールパネル ---- */
-  els.slider.addEventListener('input', () => {
-    world.spawnInterval = parseInt(els.slider.value, 10);
-    els.intervalLabel.textContent = String(world.spawnInterval);
+  elements.slider.addEventListener('input', () => {
+    world.spawnInterval = parseInt(elements.slider.value, 10);
+    elements.intervalLabel.textContent = String(world.spawnInterval);
   });
   function resetWorld(): void {
     world.reset();
@@ -37,25 +37,25 @@ export function start(): void {
 
   /* ---- メインループ ---- */
   const clock = new THREE.Clock();
-  let hudAccum = 0;
+  let hudAccumulator = 0;
   // 高リフレッシュレート端末(120Hz等)ではrequestAnimationFrameが毎秒120回以上
   // 呼ばれ、消費電力と発熱が倍増する。描画は約60fpsまでに間引く
   // (60Hz環境では1フレーム≈16.7ms > 14msなので従来どおり毎フレーム描画される)
   const MIN_FRAME_TIME = 0.014;
-  let frameAccum = 0;
+  let frameAccumulator = 0;
 
   function animate(): void {
     requestAnimationFrame(animate);
-    frameAccum += clock.getDelta();
-    if (frameAccum < MIN_FRAME_TIME) return; // このリフレッシュ周期は描画を休む
-    const dt = Math.min(frameAccum, 0.05);
-    frameAccum = 0;
-    tickTheme(dt); // 夕暮れ/夜明けのクロスフェード
-    world.step(dt);
-    syncMeshes(world, dt);
-    hudAccum += dt;
-    if (hudAccum >= 0.25) {
-      hudAccum = 0;
+    frameAccumulator += clock.getDelta();
+    if (frameAccumulator < MIN_FRAME_TIME) return; // このリフレッシュ周期は描画を休む
+    const deltaTime = Math.min(frameAccumulator, 0.05);
+    frameAccumulator = 0;
+    tickTheme(deltaTime); // 夕暮れ/夜明けのクロスフェード
+    world.step(deltaTime);
+    syncMeshes(world, deltaTime);
+    hudAccumulator += deltaTime;
+    if (hudAccumulator >= 0.25) {
+      hudAccumulator = 0;
       updateHUD(world);
     }
     updateCamera();
@@ -70,7 +70,7 @@ export function start(): void {
 
   /* ---- 開始 ---- */
   world.populateInitial();
-  els.intervalLabel.textContent = String(world.spawnInterval);
+  elements.intervalLabel.textContent = String(world.spawnInterval);
   applyEnv();
   renderIcons(); // 静的な data-lucide プレースホルダを一括で SVG 化
   updateHUD(world);
