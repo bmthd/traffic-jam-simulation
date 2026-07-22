@@ -196,7 +196,7 @@ canvas {
   font-variant-numeric: tabular-nums;
 }
 
-/* 開始からの累積「スムーズだった時間」(Issue #26) */
+/* 開始からの累積「優勢だった時間」(Issue #26) */
 .smooth-time {
   margin-top: 9px;
   padding-top: 8px;
@@ -229,30 +229,26 @@ canvas {
 }
 .smooth-side {
   flex: none;
-  width: 16px;
-  text-align: center;
   font-weight: 800;
   opacity: 0.9;
+  white-space: nowrap;
 }
+/* 1本のトラック: 地色 = 義務なし(橙)、左の塗り = 義務あり(緑)。
+   塗りの幅が L/(L+R) なので、境界の位置がそのまま優勢の割合を表す */
 .smooth-bar {
   flex: 1;
   min-width: 0;
-  height: 7px;
+  height: 8px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.25);
+  background: #ffb84a;
   overflow: hidden;
 }
 .smooth-bar > div {
-  width: 0;
+  width: 50%;
   height: 100%;
-  border-radius: 999px;
+  border-radius: 999px 0 0 999px;
   background: #7cfc9a;
   transition: width 0.3s;
-}
-.smooth-time-bars .num {
-  flex: none;
-  min-width: 42px;
-  text-align: right;
 }
 
 .score-line {

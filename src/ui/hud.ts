@@ -28,7 +28,6 @@ export const elements = {
   smoothTimeLeft: byId('smoothTimeLeft'),
   smoothTimeRight: byId('smoothTimeRight'),
   smoothBarLeft: byId('smoothBarLeft'),
-  smoothBarRight: byId('smoothBarRight'),
   smoothLead: byId('smoothLead'),
 };
 
@@ -66,19 +65,19 @@ function formatDuration(seconds: number): string {
   return (h > 0 ? h + ':' : '') + mm + ':' + (s < 10 ? '0' + s : String(s));
 }
 
-// 開始からの累積「スムーズだった時間」(Issue #26)。
-// 一時的にどちらが空いていても、時間の積み重ねでどちらが混みやすい道路かが分かる
+// 開始からの累積「優勢だった時間」(Issue #26)。
+// 一時的にどちらが空いていても、時間の積み重ねでどちらが混みやすい道路かが分かる。
+// 1本のバーを L/R の割合で塗り分ける(左=義務あり緑 / 右=義務なし橙)
 function updateSmoothTime(world: World): void {
   const { L, R } = world.smoothTime;
   elements.smoothTimeLeft.textContent = formatDuration(L);
   elements.smoothTimeRight.textContent = formatDuration(R);
-  const longest = Math.max(L, R, 1); // 長い方を100%とした相対バー
-  elements.smoothBarLeft.style.width = (L / longest) * 100 + '%';
-  elements.smoothBarRight.style.width = (R / longest) * 100 + '%';
+  const total = L + R;
+  // 左セグメント幅 = L/(L+R)。開始直後(合計0)は0除算を避けて五分五分で表示
+  const leftPercent = total > 0 ? (L / total) * 100 : 50;
+  elements.smoothBarLeft.style.width = leftPercent + '%';
   const diff = L - R;
   const leading = Math.abs(diff) < 1 ? null : diff > 0 ? 'L' : 'R';
-  elements.smoothBarLeft.style.backgroundColor = leading === 'L' ? '#7CFC9A' : '#9fb4c7';
-  elements.smoothBarRight.style.backgroundColor = leading === 'R' ? '#7CFC9A' : '#9fb4c7';
   elements.smoothLead.textContent = leading
     ? (leading === 'L' ? '義務あり' : '義務なし') + 'が ' + formatDuration(Math.abs(diff)) + ' 優勢'
     : '互角';
