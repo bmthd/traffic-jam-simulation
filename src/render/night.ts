@@ -104,11 +104,14 @@ nightDome.material.opacity = 0;
   nightGroup.add(halo);
 })();
 
-// 街灯(各区間の右路肩から車道側へアームを伸ばすシングルアーム式・ナトリウム灯)
+// 街灯(2区間の中央から両側へアームを伸ばすダブルアーム式・ナトリウム灯)。
+// #28 で2本の道路は同じ向きの平行配置になったため、その中心線(左右対称の軸)に
+// 沿って1列だけ立て、両区間の内側を左右対称に照らす
+const MEDIAN_X = (sectionX('L', -7) + sectionX('R', -7)) / 2; // 2区間の中心線
 (function buildStreetLamps() {
   const poleMaterial = new THREE.MeshLambertMaterial({ color: 0x6f7780 });
   const poleGeometry = new THREE.BoxGeometry(0.2, 7.2, 0.2);
-  const armGeometry = new THREE.BoxGeometry(2.7, 0.16, 0.16);
+  const armGeometry = new THREE.BoxGeometry(5.4, 0.16, 0.16);
   const headGeometry = new THREE.BoxGeometry(0.9, 0.22, 0.42);
   const glowGeometry = new THREE.PlaneGeometry(13, 13);
   const polePositions: [number, number, number][] = [];
@@ -117,17 +120,17 @@ nightDome.material.opacity = 0;
   const glowMatrices: THREE.Matrix4[] = [];
   const glowRotation = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
   for (let z = -ROAD_HALF + 14; z < ROAD_HALF; z += 42) {
-    for (const section of SECTIONS) {
-      polePositions.push([sectionX(section, 0), 3.6, z]);
-      armPositions.push([sectionX(section, -1.35), 7.1, z]);
-      headPositions.push([sectionX(section, -2.6), 7.0, z]);
+    polePositions.push([MEDIAN_X, 3.6, z]);
+    armPositions.push([MEDIAN_X, 7.1, z]);
+    for (const side of [-1, 1]) {
+      headPositions.push([MEDIAN_X + side * 2.6, 7.0, z]);
       // 電球のにじみ(夜のみ): 灯具が光源として「光って見える」ように
       const bulb = new THREE.Sprite(bulbMaterial);
       bulb.scale.set(2.6, 2.6, 1);
-      bulb.position.set(sectionX(section, -2.6), 6.92, z);
+      bulb.position.set(MEDIAN_X + side * 2.6, 6.92, z);
       nightGroup.add(bulb);
       // 路面の光だまり(夜のみ)
-      glowMatrices.push(glowRotation.clone().setPosition(sectionX(section, -3.2), 0.03, z));
+      glowMatrices.push(glowRotation.clone().setPosition(MEDIAN_X + side * 3.2, 0.03, z));
     }
   }
   scene.add(instancedAt(poleGeometry, poleMaterial, polePositions));
