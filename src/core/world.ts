@@ -20,6 +20,13 @@ export interface SectionStats {
   score: number;
 }
 
+/** 開始からの累積で「どちらがスムーズだったか」の時間 (秒) */
+export interface SmoothTime {
+  L: number;
+  R: number;
+  draw: number; // 差が僅かで引き分け扱いだった時間
+}
+
 export class World {
   rng: Rng;
   mode: SimMode;
@@ -35,6 +42,7 @@ export class World {
     inflow: Record<Section, number>; // 流入した台数(入口待ち含む)
     outflow: Record<Section, number>; // 出口から捌けた台数
   };
+  smoothTime: SmoothTime; // 開始からの累積「スムーズだった時間」(Issue #26)
   absorberRoundRobin: number[] | null = null; // absorbモード: 吸収運転車を等間隔に混ぜるカウンタ
   laneRoundRobin = 0; // absorbモード: レーン割当のラウンドロビン
   perturbTimer: number | null = null; // absorbモード: 次のよそ見ブレーキまでの残り時間
@@ -54,6 +62,7 @@ export class World {
       inflow: { L: 0, R: 0 },
       outflow: { L: 0, R: 0 },
     };
+    this.smoothTime = { L: 0, R: 0, draw: 0 };
   }
 
   pickType(): VehicleTypeName {
@@ -304,6 +313,7 @@ export class World {
     this.vehicles.length = 0;
     this.spawnAccumulator = 0;
     this.time = 0;
+    this.smoothTime = { L: 0, R: 0, draw: 0 }; // 累積の比較もやり直す
     this.populateInitial();
   }
 
@@ -363,6 +373,30 @@ export class World {
     for (const vehicle of this.vehicles) if (!vehicle.waiting) vehicle.update(deltaTime);
     // rulesモード: 出口まで走り切った車は流出する(捌けた分だけ出る)
     if (this.mode !== 'absorb') this.collectExited();
+    this.accumulateSmoothTime(deltaTime);
+  }
+
+  // 今この瞬間どちらがスムーズか。差が僅かなら引き分け(null)。
+  // 判定材料は HUD と同じ渋滞スコア(computeSection)。速度と密度(滞留)を
+  // 併せ持つ既存の総合指標なので、平均速度だけ・台数だけを見るより
+  // 「空いている側」の実感に近い。スコアは小さいほどスムーズ
+  smootherSection(): Section | null {
+    const left = this.computeSection('L'),
+      right = this.computeSection('R');
+    // 走り出し直後や片側が空の間はスコアが暴れるので判定を保留する
+    if (left.count <= CONST.SMOOTH_MIN_COUNT || right.count <= CONST.SMOOTH_MIN_COUNT) return null;
+    const diff = left.score - right.score;
+    if (Math.abs(diff) <= CONST.SMOOTH_SCORE_DEADZONE) return null; // デッドゾーン
+    return diff < 0 ? 'L' : 'R';
+  }
+
+  // 1ステップぶんの時間を、その時スムーズだった側へ積む(Issue #26)。
+  // 累積差を見れば、ランダム性で一時的に逆転していても
+  // 「どちらが混みやすい道路なのか」が時間の重みで判断できる
+  accumulateSmoothTime(deltaTime: number): void {
+    const smoother = this.smootherSection();
+    if (smoother) this.smoothTime[smoother] += deltaTime;
+    else this.smoothTime.draw += deltaTime;
   }
 
   // 渋滞スコア: 平均速度(重み75%) + 密度(重み25%) → 0～100

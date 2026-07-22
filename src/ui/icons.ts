@@ -18,6 +18,7 @@ import {
   Smartphone,
   Smile,
   Sun,
+  Timer,
   TriangleAlert,
   X,
 } from 'lucide';
@@ -39,6 +40,7 @@ const ICONS = {
   Smartphone,
   Smile,
   Sun,
+  Timer,
   TriangleAlert,
   X,
 };
