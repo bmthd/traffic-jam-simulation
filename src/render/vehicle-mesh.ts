@@ -256,13 +256,22 @@ function buildBlueprint(typeName: VehicleTypeName): Blueprint {
       break;
     }
     case 'Truck': {
-      const cabLength = 2.2;
+      const cabLength = 2.2,
+        cabHeight = 1.85,
+        cabFloorY = 0.85,
+        cabRoofY = cabFloorY + cabHeight, // キャブ屋根の高さ
+        cargoGap = 0.35, // キャブと荷箱の間の隙間
+        cargoLength = bodyLength - cabLength - cargoGap,
+        cargoHeight = bodyHeight - 0.65,
+        cargoFloorY = 0.62,
+        cargoTopY = cargoFloorY + cargoHeight, // 荷箱の上端
+        cargoFrontZ = -(halfLength - cabLength - cargoGap); // 荷箱の前面
       // キャブ
       put(
         'body',
-        new THREE.BoxGeometry(bodyWidth, 1.85, cabLength),
+        new THREE.BoxGeometry(bodyWidth, cabHeight, cabLength),
         0,
-        1.775,
+        cabFloorY + cabHeight / 2,
         -(halfLength - cabLength / 2),
       );
       // フロントガラスをわずかに寝かせる
@@ -289,22 +298,46 @@ function buildBlueprint(typeName: VehicleTypeName): Blueprint {
         -(halfLength + 0.02),
       ); // グリル
       put('hub', new THREE.BoxGeometry(bodyWidth, 0.3, 0.14), 0, 0.45, -(halfLength + 0.03)); // 金属バンパー
-      // 導風板(キャブ屋根から荷箱の高さへつなぐ)
+      // 導風板(ルーフエアロデフレクタ)。実車はキャブ屋根から荷箱上端へ
+      // 平らな斜面ではなく、上に凸のなめらかな曲面(スクープ状)で立ち上がる。
+      // 上辺(前下→後上)を2次ベジェ曲線として複数点にサンプリングし、
+      // その曲線・荷箱前面・キャブ屋根で囲んだ側面プロファイルを幅方向へ
+      // 押し出す。左右の側面は塞がるので中は透けない中実のフェアリングになる。
+      // プロファイルの +x は車体前方(= ワールドの -z)
+      const deflectorFront: [number, number] = [halfLength - 0.9, cabRoofY - 0.02], // 前下: キャブ屋根に埋める
+        deflectorRearTop: [number, number] = [-cargoFrontZ, cargoTopY - 0.05]; // 後上: 荷箱の上端
+      // 制御点を上前の角へ寄せ、後方は荷箱高さで平らに、前方はキャブ屋根へ
+      // 丸く回り込む「上に凸」のカーブ(スクープ状)にする
+      const deflectorTopCurve = new THREE.QuadraticBezierCurve(
+        new THREE.Vector2(deflectorRearTop[0], deflectorRearTop[1]),
+        new THREE.Vector2(deflectorFront[0] - 0.15, cargoTopY - 0.05),
+        new THREE.Vector2(deflectorFront[0], deflectorFront[1]),
+      )
+        .getPoints(8)
+        .map((point): [number, number] => [point.x, point.y]);
       put(
         'body',
-        new THREE.BoxGeometry(bodyWidth * 0.9, 1.45, 0.06),
+        profileGeometry(
+          [
+            deflectorFront, // 前下
+            [-cargoFrontZ, cabRoofY - 0.02], // 後下: 荷箱前面の付け根
+            // 後上→前下を曲線で結ぶ(先頭 = 後上、末尾の前下は始点と重なるので落とす)
+            ...deflectorTopCurve.slice(0, -1),
+          ],
+          bodyWidth,
+          0.05,
+        ),
         0,
-        3.07,
-        -(halfLength - 1.55),
-        1.05,
+        0,
+        0,
       );
       // 荷箱
       put(
         'cargo',
-        new THREE.BoxGeometry(bodyWidth, bodyHeight - 0.65, bodyLength - cabLength - 0.35),
+        new THREE.BoxGeometry(bodyWidth, cargoHeight, cargoLength),
         0,
-        0.62 + (bodyHeight - 0.65) / 2,
-        (cabLength + 0.35) / 2,
+        cargoFloorY + cargoHeight / 2,
+        cargoFrontZ + cargoLength / 2,
       );
       put('trim', new THREE.BoxGeometry(bodyWidth * 0.94, 0.5, bodyLength * 0.3), 0, 0.5, 0.1); // サイドスカート
       put('trim', new THREE.BoxGeometry(bodyWidth * 0.9, 0.45, 0.05), 0, 0.32, halfLength - 0.15); // 泥除け
