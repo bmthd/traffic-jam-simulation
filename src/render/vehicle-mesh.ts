@@ -298,18 +298,31 @@ function buildBlueprint(typeName: VehicleTypeName): Blueprint {
         -(halfLength + 0.02),
       ); // グリル
       put('hub', new THREE.BoxGeometry(bodyWidth, 0.3, 0.14), 0, 0.45, -(halfLength + 0.03)); // 金属バンパー
-      // 導風板(キャブ屋根から荷箱の上端へ斜めに立ち上がる)。傾いた板1枚だと
-      // 側面が開いたままで、左右から屋根の裏の空洞が見えてしまう。キャブ屋根・
-      // 荷箱前面・斜面で囲んだ三角形の側面プロファイルを幅方向へ押し出し、
-      // 左右を塞いだ中実のフェアリングとして作る
+      // 導風板(ルーフエアロデフレクタ)。実車はキャブ屋根から荷箱上端へ
+      // 平らな斜面ではなく、上に凸のなめらかな曲面(スクープ状)で立ち上がる。
+      // 上辺(前下→後上)を2次ベジェ曲線として複数点にサンプリングし、
+      // その曲線・荷箱前面・キャブ屋根で囲んだ側面プロファイルを幅方向へ
+      // 押し出す。左右の側面は塞がるので中は透けない中実のフェアリングになる。
+      // プロファイルの +x は車体前方(= ワールドの -z)
+      const deflectorFront: [number, number] = [halfLength - 0.9, cabRoofY - 0.02], // 前下: キャブ屋根に埋める
+        deflectorRearTop: [number, number] = [-cargoFrontZ, cargoTopY - 0.05]; // 後上: 荷箱の上端
+      // 制御点を上前の角へ寄せ、後方は荷箱高さで平らに、前方はキャブ屋根へ
+      // 丸く回り込む「上に凸」のカーブ(スクープ状)にする
+      const deflectorTopCurve = new THREE.QuadraticBezierCurve(
+        new THREE.Vector2(deflectorRearTop[0], deflectorRearTop[1]),
+        new THREE.Vector2(deflectorFront[0] - 0.15, cargoTopY - 0.05),
+        new THREE.Vector2(deflectorFront[0], deflectorFront[1]),
+      )
+        .getPoints(8)
+        .map((point): [number, number] => [point.x, point.y]);
       put(
         'body',
         profileGeometry(
           [
-            // プロファイルの +x は車体前方(= ワールドの -z)
-            [halfLength - 0.9, cabRoofY - 0.02], // 前下: キャブ屋根に少し埋める
-            [-cargoFrontZ, cabRoofY - 0.02], // 後下: 荷箱前面
-            [-cargoFrontZ, cargoTopY - 0.05], // 後上: 荷箱の上端に合わせる
+            deflectorFront, // 前下
+            [-cargoFrontZ, cabRoofY - 0.02], // 後下: 荷箱前面の付け根
+            // 後上→前下を曲線で結ぶ(先頭 = 後上、末尾の前下は始点と重なるので落とす)
+            ...deflectorTopCurve.slice(0, -1),
           ],
           bodyWidth,
           0.05,
