@@ -61,11 +61,3 @@
 
 - **コメント・コミットメッセージは日本語**で書く。
 - **three.js は 0.128**（`three@0.128.0` / `@types/three@^0.128.0`）。**古いバージョンなので新しい API の有無に注意**（新しい three の API をそのまま使わない）。
-- コミット / PR には以下のトレーラーを付ける運用（実運用の `git log` 準拠）:
-
-  ```
-  Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_XXXXXXXX
-  ```
-
-- PR 本文末尾には生成元表記（`🤖 Generated with [Claude Code]...`）を付ける運用。
