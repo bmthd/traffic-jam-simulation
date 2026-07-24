@@ -34,24 +34,30 @@ export const SECTION_THEME: Record<Section, SectionTheme> = {
   },
 };
 
+/* ---- 区間の座標系 ----
+   道路の形は左右で同一。R区間は鏡像ではなくL区間の平行移動コピーなので、
+   位置はすべて「L区間の座標系」で書き、区間ごとのオフセットを足して実座標にする。
+   これで両区間とも 追い越し車線 = 右端 / 加速車線 = 左外側 に揃う (Issue #28) */
+export const SECTIONS = ['L', 'R'] as const;
+export function sectionX(section: Section, xInSectionFrame: number): number {
+  return xInSectionFrame + CONST.SECTION_OFFSET_X[section];
+}
+
 /* ---- 道路(アスファルト質感 + 区間ごとの色味) ---- */
-for (const [section, centerX] of [
-  ['L', -7],
-  ['R', 7],
-] as [Section, number][]) {
+for (const section of SECTIONS) {
   const road = new THREE.Mesh(
     new THREE.BoxGeometry(13.2, 0.12, ROAD_HALF * 2),
     new THREE.MeshLambertMaterial({ color: SECTION_THEME[section].road, map: asphaltTexture }),
   );
-  road.position.set(centerX, -0.06, 0);
+  road.position.set(sectionX(section, -7), -0.06, 0);
   road.receiveShadow = true;
   scene.add(road);
-  // 外側の路肩ライン(テーマカラー)
+  // 進行方向左側(加速車線側)の路肩ライン(テーマカラー)
   const strip = new THREE.Mesh(
     new THREE.BoxGeometry(0.7, 0.06, ROAD_HALF * 2),
     new THREE.MeshBasicMaterial({ color: SECTION_THEME[section].strip }),
   );
-  strip.position.set(centerX < 0 ? -14.1 : 14.1, -0.03, 0);
+  strip.position.set(sectionX(section, -14.1), -0.03, 0);
   scene.add(strip);
 }
 
@@ -70,14 +76,11 @@ function dashedLines(xPositions: number[]): void {
     for (let z = -ROAD_HALF + 2; z < ROAD_HALF; z += 12) positions.push([x, 0.01, z]);
   scene.add(instancedAt(geometry, whiteLineMaterial, positions));
 }
-[-1, -13, 1, 13].forEach(solidLine);
-dashedLines([-5, -9, 5, 9]);
+for (const section of SECTIONS) for (const x of [-1, -13]) solidLine(sectionX(section, x));
+dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, x))));
 
 /* ---- 合流ランプ(加速車線) ---- */
-for (const [section, side] of [
-  ['L', -1],
-  ['R', 1],
-] as [Section, number][]) {
+for (const section of SECTIONS) {
   const zTop = CONST.RAMP_Z_TOP + 14,
     zEnd = CONST.RAMP_Z_END - 16;
   const length = zTop - zEnd,
@@ -86,16 +89,17 @@ for (const [section, side] of [
     new THREE.BoxGeometry(3.6, 0.12, length),
     new THREE.MeshLambertMaterial({ color: SECTION_THEME[section].road, map: asphaltTexture }),
   );
-  ramp.position.set(15 * side, -0.055, zCenter);
+  ramp.position.set(sectionX(section, -15), -0.055, zCenter);
   ramp.receiveShadow = true;
   scene.add(ramp);
   const edge = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.02, length), whiteLineMaterial);
-  edge.position.set(16.7 * side, 0.012, zCenter);
+  edge.position.set(sectionX(section, -16.7), 0.012, zCenter);
   scene.add(edge);
   // 本線との境界は破線(合流可)
   const dashGeometry = new THREE.BoxGeometry(0.15, 0.02, 3);
   const dashPositions: [number, number, number][] = [];
-  for (let z = zEnd + 12; z < zTop - 6; z += 9) dashPositions.push([13 * side, 0.012, z]);
+  for (let z = zEnd + 12; z < zTop - 6; z += 9)
+    dashPositions.push([sectionX(section, -13), 0.012, z]);
   scene.add(instancedAt(dashGeometry, whiteLineMaterial, dashPositions));
   // 終端の導流帯(先細りのゼブラ)。単位ボックスをX方向スケールで先細りに
   const zebraGeometry = new THREE.BoxGeometry(1, 0.02, 1.3);
@@ -105,16 +109,18 @@ for (const [section, side] of [
     zebraMatrices.push(
       new THREE.Matrix4()
         .makeScale(width, 1, 1)
-        .setPosition((13.1 + width / 2) * side, 0.012, zEnd + 9 - i * 3.2),
+        .setPosition(sectionX(section, -13.1 - width / 2), 0.012, zEnd + 9 - i * 3.2),
     );
   }
   scene.add(instancedWith(zebraGeometry, whiteLineMaterial, zebraMatrices));
 }
 
-/* ---- 中央分離帯（ガードレール付き） ---- */
-(function buildMedian() {
+/* ---- 区間の仕切り（ガードレール付き） ----
+   両区間は同じ向きに走る独立した道路なので「中央分離帯」ではなく、
+   L区間の右路肩と R区間の加速車線の間に立つ仕切りの防護柵 */
+(function buildDivider() {
   const base = new THREE.Mesh(
-    new THREE.BoxGeometry(1.5, 0.5, ROAD_HALF * 2),
+    new THREE.BoxGeometry(0.8, 0.5, ROAD_HALF * 2),
     new THREE.MeshLambertMaterial({ color: 0x9aa0a6 }),
   );
   base.position.set(0, 0.25, 0);
@@ -122,7 +128,7 @@ for (const [section, side] of [
   base.receiveShadow = true;
   scene.add(base);
   const railMaterial = new THREE.MeshLambertMaterial({ color: 0xe9edf0 });
-  for (const railX of [-0.6, 0.6]) {
+  for (const railX of [-0.3, 0.3]) {
     const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, ROAD_HALF * 2), railMaterial);
     rail.position.set(railX, 0.95, 0);
     scene.add(rail);
@@ -197,10 +203,10 @@ function roadText(text: string, x: number, z: number): void {
   mesh.position.set(x, 0.015, z);
   scene.add(mesh);
 }
-roadText('義務あり', -7, -120);
-roadText('義務なし', 7, -120);
-roadText('ゆずりあい', -7, 60);
-roadText('マイペース', 7, 60);
+roadText('義務あり', sectionX('L', -7), -120);
+roadText('義務なし', sectionX('R', -7), -120);
+roadText('ゆずりあい', sectionX('L', -7), 60);
+roadText('マイペース', sectionX('R', -7), 60);
 
 /* ---- 頭上標識ゲート(カメラをどう回しても区間が分かるように両面・両端に設置) ---- */
 export const GANTRY_Z = [-300, -100, 100, 300];
@@ -224,7 +230,7 @@ function makeSignTexture(title: string, subtitle: string, background: string): T
 }
 function buildGantry(section: Section, z: number): void {
   const theme = SECTION_THEME[section];
-  const centerX = section === 'L' ? -7 : 7;
+  const centerX = sectionX(section, -7);
   const group = new THREE.Group();
   const steel = new THREE.MeshLambertMaterial({ color: 0x99a1aa });
   for (const postX of [centerX - 6.9, centerX + 6.9]) {
@@ -249,6 +255,6 @@ function buildGantry(section: Section, z: number): void {
   }
   scene.add(group);
 }
-for (const section of ['L', 'R'] as const) {
+for (const section of SECTIONS) {
   for (const gantryZ of GANTRY_Z) buildGantry(section, gantryZ);
 }

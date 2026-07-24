@@ -520,3 +520,66 @@ describe('スムーズだった時間の累積 (Issue #26)', () => {
     expect(world.smoothTime, 'リセット後も累積が残っている').toEqual({ L: 0, R: 0, draw: 0 });
   });
 });
+
+/* ============================================================
+   10. 車線配置 (Issue #28)
+   両区間とも進行方向は -Z(前方 = z が小さい側)なので、進行方向を向いた
+   時の「右」は +X 側。追い越し車線(index 0)が両区間とも右端に来ること、
+   R区間がL区間の鏡像ではなく平行移動コピー(= 合流条件が完全に同一)で
+   あることを検証する。
+   ============================================================ */
+describe('車線配置（追い越し車線は右側）', () => {
+  const SECTIONS = ['L', 'R'] as const;
+
+  test('前方は z が小さい側（進行方向 -Z）', () => {
+    const world = new World({ rng: createRng(28), spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    world.vehicles.push(vehicle);
+    world.rebuildSectionIndex();
+    for (let i = 0; i < 20; i++) world.step(TIME_STEP);
+    expect(vehicle.z, '車両は -Z 方向へ進む').toBeLessThan(0);
+  });
+
+  test.each(SECTIONS)('%s区間: 追い越し車線が右端・加速車線が左外側', (section) => {
+    const laneXs = CONST.LANE_X[section];
+    // 右 = +X。index が増えるほど左へ並ぶ(0 = 追い越し, 2 = 走行, 3 = 加速車線)
+    for (let lane = 1; lane < laneXs.length; lane++) {
+      expect(
+        laneXs[lane],
+        `${section}区間: 車線${lane} が 車線${lane - 1} より右にある`,
+      ).toBeLessThan(laneXs[lane - 1]);
+    }
+  });
+
+  test('R区間はL区間の鏡像ではなく平行移動コピー（合流条件が同一）', () => {
+    const offset = CONST.SECTION_OFFSET_X.R - CONST.SECTION_OFFSET_X.L;
+    expect(offset, '平行移動量が 0 だと2区間が重なる').toBeGreaterThan(0);
+    for (let lane = 0; lane < CONST.LANE_X.L.length; lane++) {
+      expect(
+        CONST.LANE_X.R[lane] - CONST.LANE_X.L[lane],
+        `車線${lane} の左右オフセットが一定でない`,
+      ).toBeCloseTo(offset, 10);
+    }
+  });
+
+  test.each(SECTIONS)('%s区間: 加速車線は合流先の走行車線(2)の左隣', (section) => {
+    const laneXs = CONST.LANE_X[section];
+    expect(laneXs[3], '加速車線が走行車線より左にない').toBeLessThan(laneXs[2]);
+    expect(laneXs[2] - laneXs[3], '加速車線と走行車線の間隔が車線幅と異なる').toBeCloseTo(
+      laneXs[1] - laneXs[2],
+      10,
+    );
+  });
+
+  test('生成された車両のXは車線位置に一致する', () => {
+    const world = new World({ rng: createRng(29), spawnInterval: 1e9 });
+    for (const section of SECTIONS) {
+      for (let lane = 0; lane < 4; lane++) {
+        const vehicle = new Vehicle(world, section, lane, 0, 'Sedan', 25);
+        expect(vehicle.x, `${section}区間 車線${lane} のXが不一致`).toBe(
+          CONST.LANE_X[section][lane],
+        );
+      }
+    }
+  });
+});

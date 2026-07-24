@@ -89,7 +89,7 @@ export class Vehicle {
   ) {
     this.world = world;
     this.section = section; // 'L' = 義務あり / 'R' = 義務なし
-    this.lane = lane; // 0 = 追い越し車線
+    this.lane = lane; // 0 = 追い越し車線(進行方向の右端)
     this.z = z;
     this.typeName = typeName;
     this.type = TYPES[typeName];

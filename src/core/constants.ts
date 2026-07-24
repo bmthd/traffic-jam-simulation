@@ -9,6 +9,18 @@ export type Section = 'L' | 'R';
 /** シミュレーションモード。'rules' = ルール比較 / 'absorb' = 渋滞吸収運転 */
 export type SimMode = 'rules' | 'absorb';
 
+/* ---------------- 区間の横方向レイアウト ----------------
+   両区間とも進行方向は -Z(前方 = z が小さい側)なので、進行方向を向いた時の
+   「右」は +X 側になる。R区間をL区間の鏡像にすると R の追い越し車線だけが
+   左側に来てしまうため、R区間は鏡像ではなく「L区間の平行移動コピー」にする。
+   これで両区間とも 追い越し車線 = 右端 / 加速車線 = 左外側 に揃い、
+   合流の条件も鏡像ではなく完全に同一になる。 */
+
+/** L区間 → R区間 の平行移動量(この分だけ +X 側にずらす) */
+const SECTION_OFFSET_R_X = 17.2;
+/** L区間の車線中心X。index 0 = 追い越し(右端) 〜 2 = 走行車線(左端), 3 = 加速車線(左外側) */
+const LANE_X_L = [-3, -7, -11, -15];
+
 /* ---------------- 定数 ---------------- */
 export const CONST = {
   ROAD_HALF: 400, // 道路は Z = -400 ～ +400
@@ -21,7 +33,10 @@ export const CONST = {
   EXIT_RATIO: 0.08, // 終端の出口で流出する車の割合(残りは環状線のように周回)
   INFLOW_PACE: 10.4, // 生成間隔→流入間隔の換算係数(流出率とつり合う需要に換算)
   MAX_PER_SECTION: 140,
-  LANE_X: { L: [-3, -7, -11, -15], R: [3, 7, 11, 15] }, // index 0 = 追い越し(中央寄り), 3 = 加速車線
+  // 区間の横方向オフセット(R区間はL区間の鏡像ではなく平行移動コピー)
+  SECTION_OFFSET_X: { L: 0, R: SECTION_OFFSET_R_X },
+  // 車線の中心X。index 0 = 追い越し(進行方向の右端), 2 = 走行車線(左端), 3 = 加速車線(左外側)
+  LANE_X: { L: LANE_X_L, R: LANE_X_L.map((x) => x + SECTION_OFFSET_R_X) },
   LANE_CHANGE_DURATION: 1.4, // 車線変更所要時間 (s)
   LANE_CHANGE_WAIT_MAX_DURATION: 2.6, // 変更待機の上限 (s)
   LANE_CHANGE_RETRY_COOLDOWN: 2.2, // キャンセル後の再試行クールダウン (s)
