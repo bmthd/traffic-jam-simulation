@@ -142,19 +142,32 @@ export function makeAsphaltTexture(): THREE.CanvasTexture {
 export const asphaltTexture = makeAsphaltTexture();
 
 /* ---- 遠景の山並み(白で描き、themeがcolorで昼夜の色を乗せる) ---- */
-function makeRidgeTexture(jaggedness: number, baseY: number): THREE.CanvasTexture {
+// relief: 稜線の起伏の大きさ / baseY: 稜線の基準高さ(キャンバス座標・小さいほど高い)
+function makeRidgeTexture(relief: number, baseY: number): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 1024;
   canvas.height = 256;
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#ffffff';
+  // 波長の異なる正弦波を重ねて、なだらかに起伏する稜線を描く。
+  // 旧実装は乱歩(ランダムウォーク)で、変化が急かつ角張り、円柱に貼ると横に強く
+  // 引き伸ばされて崖のように切り立って見えたため差し替えた。
+  // 周回数(cycles)を整数にしてテクスチャの継ぎ目でも段差が出ないようにしている。
+  const phase = () => Math.random() * Math.PI * 2;
+  const waves = [
+    { cycles: 3, amplitude: relief * 0.52, phase: phase() }, // 大きなうねり
+    { cycles: 7, amplitude: relief * 0.26, phase: phase() },
+    { cycles: 13, amplitude: relief * 0.14, phase: phase() },
+    { cycles: 23, amplitude: relief * 0.06, phase: phase() }, // 稜線の細かな凹凸
+  ];
   ctx.beginPath();
   ctx.moveTo(0, 256);
-  let y = baseY;
-  ctx.lineTo(0, y);
-  for (let x = 16; x <= 1024; x += 16) {
-    // ランダムウォークで稜線を描く
-    y = Math.min(200, Math.max(40, y + (Math.random() - 0.5) * jaggedness));
+  for (let x = 0; x <= 1024; x += 4) {
+    let height = 0;
+    for (const wave of waves) {
+      height += wave.amplitude * Math.sin((x / 1024) * wave.cycles * Math.PI * 2 + wave.phase);
+    }
+    const y = Math.min(210, Math.max(30, baseY - height));
     ctx.lineTo(x, y);
   }
   ctx.lineTo(1024, 256);
