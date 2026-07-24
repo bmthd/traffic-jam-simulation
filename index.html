@@ -20,6 +20,29 @@
       <i data-lucide="sun"></i>
     </button>
 
+    <!-- 観賞モード（右上・折りたたみ可能） -->
+    <div id="spectatorPanel" class="sign panel">
+      <div class="panel-title">
+        <span class="route-badge"><i data-lucide="clapperboard"></i></span>観賞モード<span
+          class="chev"
+          ><i data-lucide="chevron-down"></i
+        ></span>
+      </div>
+      <div class="panel-body">
+        <button id="spectatorToggle" class="spec-main">
+          <i data-lucide="clapperboard"></i>観賞モードを開始
+        </button>
+        <div class="spec-controls">
+          <label class="spec-auto">
+            <input type="checkbox" id="spectatorAuto" checked /><i data-lucide="repeat"></i
+            >一定間隔で自動巡回
+          </label>
+          <div id="spectatorPresets" class="spec-presets"></div>
+          <div class="hint"><i data-lucide="mouse"></i>視点をドラッグすると通常操作へ戻ります</div>
+        </div>
+      </div>
+    </div>
+
     <!-- コントロールパネル（左上） -->
     <div id="controlPanel" class="sign panel">
       <div class="panel-title">
