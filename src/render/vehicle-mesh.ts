@@ -49,7 +49,9 @@ export interface VehicleMesh {
   brakeGlow: THREE.Mesh;
   previousX: number;
   previousSpeed: number;
+  previousLateralVelocity: number;
   pitch: number;
+  roll: number;
   habit: DriverHabit;
 }
 
@@ -518,7 +520,9 @@ function buildVehicleMesh(vehicle: Vehicle): VehicleMesh {
     brakeGlow,
     previousX: vehicle.x + habit.bias,
     previousSpeed: vehicle.speed,
+    previousLateralVelocity: 0,
     pitch: 0,
+    roll: 0,
     habit,
   };
 }
@@ -553,7 +557,17 @@ export function syncMeshes(world: World, deltaTime: number): void {
     mesh.previousX = x;
     // 操舵ヨー + 車体ロール + 加減速のピッチ(ノーズダイブ/スクワット)
     mesh.group.rotation.y = clamp(-lateralVelocity / (vehicle.speed + 6), -0.16, 0.16) * 1.5;
-    mesh.group.rotation.z = mesh.group.rotation.y * 0.3;
+    // 車体ロール: 横加速度による重量移動を再現する。乗用車の緩やかな車線変更では
+    // ほぼ水平を保ち、切り込み・切り戻しの瞬間だけ旋回の「外側」へわずかに傾く。
+    // (操舵ヨーへ単純比例させると、ハンドルを切っただけで内側へ深く傾き、
+    //  バイクのバンクのように見えて不自然。横加速度基準にすると傾く向きが正しくなり、
+    //  車線変更の前半で外へ、後半で戻る自然な揺り戻しになる)
+    const lateralAcceleration =
+      deltaTime > 0 ? (lateralVelocity - mesh.previousLateralVelocity) / deltaTime : 0;
+    mesh.previousLateralVelocity = lateralVelocity;
+    const rollTarget = clamp(lateralAcceleration * 0.0025, -0.03, 0.03);
+    mesh.roll += (rollTarget - mesh.roll) * Math.min(1, deltaTime * 6); // 急な横G変化を均して滑らかに
+    mesh.group.rotation.z = mesh.roll;
     const acceleration = deltaTime > 0 ? (vehicle.speed - mesh.previousSpeed) / deltaTime : 0;
     mesh.previousSpeed = vehicle.speed;
     mesh.pitch +=
