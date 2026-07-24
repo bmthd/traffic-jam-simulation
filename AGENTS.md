@@ -22,16 +22,16 @@
   - `0` = 追い越し車線（進行方向の**右端**, `+X` 側）
   - `1〜2` = 走行車線
   - `3` = 加速車線（合流ランプ）
-  - 実体は `src/core/constants.ts` の `LANE_X`（`LANE_X_L = [-3, -7, -11, -15]`）。index 0 が最も `+X`（右）、index 3 が最も外（左外側）。
-- **R区間は L区間の鏡像ではなく平行移動コピー**（`SECTION_OFFSET_X`, 実値 `SECTION_OFFSET_R_X = 17.2`）。これにより追い越し車線は両区間とも右、**両区間の合流条件まで完全に同一**になる。鏡像にすると R だけ追い越し車線が左になり交絡するので不可。
-- **進行方向は `-Z`**（前方 = `z` が小さい側）。合流ランプは `RAMP_Z_TOP`(380) から `RAMP_Z_END`(250) へ、z が減る向きに走る。
+  - index が大きいほど外（左）側になる。実値は `src/core/constants.ts` の `LANE_X` 参照。
+- **R区間は L区間の鏡像ではなく平行移動コピー**（`SECTION_OFFSET_X`）。これにより追い越し車線は両区間とも右、**両区間の合流条件まで完全に同一**になる。鏡像にすると R だけ追い越し車線が左になり交絡するので不可。
+- **進行方向は `-Z`**（前方 = `z` が小さい側）。合流ランプ（`RAMP_Z_TOP` → `RAMP_Z_END`）も z が減る向きに走る。座標定数は `src/core/constants.ts` 参照。
 
 ---
 
 ## C. 開発・検証コマンド
 
-- ランタイム: **Node.js 26**（`.node-version` で固定 / `package.json#devEngines` が `>=26.0.0`）。
-- パッケージマネージャ: **pnpm**（`package.json#packageManager` = `pnpm@11.13.0`）。
+- ランタイムは **Node.js**（版数は `.node-version` / `package.json#devEngines` 参照）。
+- パッケージマネージャは **pnpm**（版数は `package.json#packageManager` 参照）。
 - ツールチェーンは **Vite+（`vp`）** に統一（ビルド=Vite / テスト=Vitest / lint=Oxlint / フォーマット=Oxfmt / 型チェック）。設定は `vite.config.ts` に集約。
 
 | コマンド                    | 内容                                                                                   |
@@ -60,4 +60,4 @@
 ## E. コード・コミット規約
 
 - **コメント・コミットメッセージは日本語**で書く。
-- **three.js は 0.128**（`three@0.128.0` / `@types/three@^0.128.0`）。**古いバージョンなので新しい API の有無に注意**（新しい three の API をそのまま使わない）。
+- **three.js は古いバージョンに固定**（版数は `package.json` 参照）。新しい three の API をそのまま使わず、その版に存在するかを確認する。
