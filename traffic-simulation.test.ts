@@ -583,3 +583,96 @@ describe('車線配置（追い越し車線は右側）', () => {
     }
   });
 });
+
+/* ============================================================
+   11. 合流(加速車線 lane 3)の協調 (Issue #33)
+   加速車線は「止まって待つ」車線ではなく本線の流れに乗るための車線。
+   ・合流車は加速して本線へ入り、いつまでも lane 3 で止まらない
+   ・本線車(lane 2)は接近する合流車を認識し、退避 or 減速で譲る
+   ・速度差が小さいときは合流車を優先する(速度差が大きい時は譲らない)
+   合流協調は「合流という状況への一般的な運転挙動」なので両区間で完全に同一
+   (区間差は「追いつかれた車両の義務」ただ1つに限る — 交絡を作らない)。
+   ============================================================ */
+describe('合流(加速車線)の協調 (Issue #33)', () => {
+  // 本線(lane 2)を一定間隔・同速で満たした流れの中に合流車を1台置く。
+  // keepLeft を切って本線車が勝手に車線を離れないようにする(合流枠の再現)。
+  function fillLane2(world: World, section: 'L' | 'R', count: number, speed: number): void {
+    const span = (CONST.ROAD_HALF * 2) / count;
+    for (let i = 0; i < count; i++) {
+      const vehicle = new Vehicle(world, section, 2, -CONST.ROAD_HALF + i * span, 'Sedan', speed);
+      vehicle.speed = speed;
+      vehicle.keepLeft = false;
+      world.vehicles.push(vehicle);
+    }
+  }
+
+  test('合流車は一定時間内に本線(lane 2)へ合流し、永久に加速車線で止まらない', () => {
+    const world = new World({ rng: createRng(33), spawnInterval: 1e9 });
+    fillLane2(world, 'L', 24, 25); // 流れている本線
+    const merger = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP - 20, 'Sedan', 24);
+    merger.speed = 18;
+    world.vehicles.push(merger);
+    let merged = false;
+    for (let i = 0; i < Math.round(40 / TIME_STEP); i++) {
+      world.step(TIME_STEP);
+      if (merger.lane === 2 && merger.laneChange.state === 'none') {
+        merged = true;
+        break;
+      }
+    }
+    expect(merged, '合流車が40秒以内に本線へ合流できず加速車線で止まったままだった').toBe(true);
+  });
+
+  // 本線車のすぐ前(真横〜わずかに前方)の加速車線に、まだ入れずにいる合流車を置く。
+  // behindClear を満たさない近さにして、合流車が本線車の協調を必要とする状況を作る。
+  function coopSetup(mergerSpeed: number, blockLane1: boolean) {
+    const world = new World({ rng: createRng(1), spawnInterval: 1e9 });
+    const main = new Vehicle(world, 'L', 2, 300, 'Sedan', 25);
+    main.speed = 25;
+    main.keepLeft = false;
+    const merger = new Vehicle(world, 'L', 3, 294, 'Sedan', mergerSpeed);
+    merger.speed = mergerSpeed;
+    world.vehicles.push(main, merger);
+    if (blockLane1) {
+      // 退避先(lane 1)を真横で塞ぎ、本線車が lane 1 へ逃げられなくする
+      const wall = new Vehicle(world, 'L', 1, 300, 'Sedan', 24);
+      wall.speed = 24;
+      wall.keepLeft = false;
+      wall.camper = false;
+      world.vehicles.push(wall);
+    }
+    return { world, main, merger };
+  }
+
+  test('本線車は前方の合流車を認識し、追い越し車線側(lane 1)へ退避して枠を空ける', () => {
+    const { world, main } = coopSetup(24, false); // lane 1 は空いている
+    let evaded = false;
+    for (let i = 0; i < Math.round(3 / TIME_STEP); i++) {
+      world.step(TIME_STEP);
+      if (main.lane === 1 || (main.laneChange.state !== 'none' && main.laneChange.to === 1)) {
+        evaded = true;
+        break;
+      }
+    }
+    expect(evaded, '合流車を認識して lane 1 へ退避しなかった').toBe(true);
+  });
+
+  test('退避できず速度差が小さいときは減速して譲る(合流車が優先)', () => {
+    const { world, main } = coopSetup(23, true); // 速度差 |25-23|=2 < 閾値, lane 1 は塞がれている
+    expect(Math.abs(25 - 23), 'テスト前提: 速度差が閾値未満でない').toBeLessThan(
+      CONST.MERGE_YIELD_SPEED_DIFF,
+    );
+    world.step(TIME_STEP);
+    expect(main.lane, '退避できないはずが lane 2 を離れた').toBe(2);
+    expect(main.yieldSlowTimer, '速度差が小さいのに減速して譲らなかった').toBeGreaterThan(0);
+  });
+
+  test('退避できず速度差が大きいときは譲らない(合流車自身の加速に委ねる)', () => {
+    const { world, main } = coopSetup(8, true); // 速度差 |25-8|=17 > 閾値, lane 1 は塞がれている
+    expect(Math.abs(25 - 8), 'テスト前提: 速度差が閾値以上でない').toBeGreaterThan(
+      CONST.MERGE_YIELD_SPEED_DIFF,
+    );
+    world.step(TIME_STEP);
+    expect(main.yieldSlowTimer, '速度差が大きいのに譲ってしまった').toBe(0);
+  });
+});
