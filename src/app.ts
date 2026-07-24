@@ -15,6 +15,7 @@ import { elements, updateHUD } from './ui/hud';
 import { setupPanels } from './ui/panels';
 import { setupParams } from './ui/params';
 import { setupNightToggle } from './ui/night-toggle';
+import { setupSpectator } from './ui/spectator';
 
 export function start(): void {
   const world = new World({ rng: Math.random, spawnInterval: 800 });
@@ -34,6 +35,7 @@ export function start(): void {
   setupParams(resetWorld);
   setupNightToggle();
   setupCameraControls();
+  setupSpectator();
 
   /* ---- メインループ ---- */
   const clock = new THREE.Clock();
@@ -58,7 +60,7 @@ export function start(): void {
       hudAccumulator = 0;
       updateHUD(world);
     }
-    updateCamera();
+    updateCamera(world, deltaTime);
     renderer.render(scene, camera);
   }
 

@@ -679,6 +679,123 @@ body.night #nightBtn {
   }
 }
 
+/* ---- 観賞モードパネル(右上・ナイトボタンの下) ---- */
+#spectatorPanel {
+  top: 82px;
+  right: 12px;
+  width: 208px;
+  max-height: calc(100vh - 94px);
+  overflow: auto;
+}
+#spectatorPanel .panel-title .route-badge {
+  min-width: 26px;
+  padding: 0 4px;
+}
+#spectatorPanel .panel-title .route-badge .lucide {
+  width: 14px;
+  height: 14px;
+  color: #05613b;
+  vertical-align: -0.16em;
+}
+.spec-main {
+  width: 100%;
+  background: #fff;
+  color: #05613b;
+  font-weight: 800;
+  font-size: 13px;
+  border: none;
+  border-radius: 9px;
+  padding: 8px 0;
+  cursor: pointer;
+  box-shadow: 0 3px 0 #c8d6cd;
+  transition:
+    transform 0.08s,
+    box-shadow 0.08s;
+}
+.spec-main:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 #c8d6cd;
+}
+/* 観賞モードが ON のときだけ詳細操作(自動巡回・プリセット)を表示 */
+.spec-controls {
+  display: none;
+  margin-top: 10px;
+}
+#spectatorPanel.spec-on .spec-controls {
+  display: block;
+}
+#spectatorPanel.spec-on .spec-main {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.3);
+}
+.spec-auto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-bottom: 9px;
+}
+.spec-auto input {
+  width: 15px;
+  height: 15px;
+  accent-color: #ffd54a;
+  cursor: pointer;
+  flex: none;
+}
+.spec-auto .lucide {
+  color: #ffe9a8;
+}
+.spec-presets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.spec-preset {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-weight: 700;
+  font-size: 11.5px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  padding: 7px 6px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.spec-preset .lucide {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  margin-right: 0;
+}
+.spec-preset:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+/* 現在表示中のプリセットを強調(自動巡回でも切り替わりが分かる) */
+.spec-preset.active {
+  background: #fff;
+  color: #05613b;
+  border-color: #ffd54a;
+  box-shadow: 0 0 0 2px #ffd54a inset;
+}
+#spectatorPanel .hint {
+  margin-top: 9px;
+}
+@media (max-width: 700px) {
+  #spectatorPanel {
+    top: 70px;
+    width: min(200px, 56vw);
+    padding: 10px 11px;
+  }
+}
+
 /* ---- lucide アイコン(絵文字を差し替えた線画アイコン) ---- */
 /* svg をテキストと横並びに保つため明示的に inline-block を指定する */
 .lucide {
