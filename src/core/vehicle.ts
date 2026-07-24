@@ -220,6 +220,28 @@ export class Vehicle {
     return best;
   }
 
+  // 合流協調(Issue #33)の対象探索: 本線(lane 2)車から見て、加速車線(lane 3)で
+  // 合流しようとしている近くの車両を返す。前方(まだ抜いていない)〜ほぼ真横の
+  // 範囲だけを見る(自分がその合流車を先に入れてやる立場になり得る相手)。
+  // 加速車線の区間(RAMP_Z_END〜RAMP_Z_TOP)にいる lane 3 車のみが対象。
+  findMergingVehicle(): Vehicle | null {
+    const vehicles = this.world.sectionVehicles[this.section];
+    let best: Vehicle | null = null,
+      bestDistance = Infinity;
+    for (const other of vehicles) {
+      if (other === this || other.lane !== 3) continue;
+      if (other.z < CONST.RAMP_Z_END - 5 || other.z > CONST.RAMP_Z_TOP + 5) continue;
+      const deltaZ = wrapDelta(other.z - this.z); // 負 = 合流車が前方(z が小さい側)
+      if (deltaZ > 5 || deltaZ < -CONST.MERGE_DETECT_RANGE) continue;
+      const distance = Math.abs(deltaZ);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = other;
+      }
+    }
+    return best;
+  }
+
   // 加速復帰の開始判定: 追い越し車線で後続に追いつかれ、復帰先(レーン1)が並走車に
   // 塞がれている時、「速度差が小さく、並走車の前方が空いていて前に出れば戻れる
   // 見込みがある」なら一時的に加速して並走車を抜き、車線復帰を狙う
@@ -426,6 +448,33 @@ export class Vehicle {
     // 渋滞にはまっている時は譲り・復帰・キープレフトの車線変更はしない。
     // 実際のドライバーも、流れている時にだけ譲り合いの車線変更をする
     const flowing = this.speed > this.desiredSpeed * 0.6;
+    // (合流協調 — Issue #33) 本線(lane 2): 加速車線(lane 3)で合流しようとして
+    // いる車を前方〜真横に認識したら、その車が自分の前へ入れるよう協調する。
+    // 加速車線で止まらせないため、本線側が「枠を空ける/譲る」ことで受け入れる。
+    // 流れている時だけ協調する(渋滞中は皆遅く速度差も小さいので合流は自然に成立し、
+    // そこで無理に譲ると本線を余計に詰まらせる)。
+    // これは「合流という状況に対する一般的な運転挙動」であり、両区間で完全に同一に
+    // する。区間差は「追いつかれた車両の義務」ただ1つに限らねばならず(それ以外の差は
+    // L/R 比較の交絡になる)、yields/camper/keepLeft 等の区間依存要素は条件に使わない。
+    if (this.lane === 2 && flowing) {
+      const merger = this.findMergingVehicle();
+      // 自分がその合流車のすぐ後ろ(=合流車が前に入りたい相手)の時だけ動く。
+      // 同じ合流車に本線の複数台が一斉退避して lane 1 を混雑させるのを防ぐ
+      if (merger && merger.findBehind(2)?.vehicle === this) {
+        // まず退避: 追い越し車線側(lane 1)が空いていれば移り、lane 2 に枠を作る。
+        // 「合流待ちを視認したら右車線へ退避」に相当(速度差によらず低コストで協調)
+        if (this.tryLaneChange(1)) {
+          this.noOvertakeTimer = 3; // 退避直後は追い越し(戻り)を我慢して枠を保つ
+          return;
+        }
+        // 退避できない場合、速度差が小さいなら減速して合流車を先に入れる
+        // (速度差が小さい時は加速車線=合流車が優先 — Issue #33)。速度差が大きい
+        // (合流車がまだ遅い)時は譲らず、合流車自身の加速に委ねる
+        if (Math.abs(this.speed - merger.speed) < CONST.MERGE_YIELD_SPEED_DIFF) {
+          this.yieldSlowTimer = Math.max(this.yieldSlowTimer, 1.0);
+        }
+      }
+    }
     // (0) 渋滞中の乗り換え: 自分の車線が進まず、隣が明確に流れている/空いている
     // 時は隣へ移る(全員ではなく苛立っている人ほど。左右では左を優先)。
     // これがないと「追い越し車線だけ詰まり、隣がガラ空き」の不自然な状態になる
@@ -612,7 +661,13 @@ export class Vehicle {
     // 前方車への追従・緊急ブレーキはこの後の通常ロジックがそのまま制限するため安全は保たれる
     if (this.returnBoostTimer > 0) desire += CONST.RETURN_BOOST_SPEED_DELTA;
     let targetSpeed = this.yieldSlowTimer > 0 ? Math.max(8, desire - 2.5) : desire;
-    // 加速車線: 終端で止まれる速度に常に制限(合流できなければ端で待つ)
+    // 加速車線(lane 3): 本線(lane 2)の流れに乗るための車線。原則は本線流速まで
+    // 加速して隙間に入る(止まって待たない — Issue #33)。ただし
+    //  ・すぐ前の本線車に阻まれて受け入れられる隙間が無い、または
+    //  ・ランプ終端が目前(残り MERGE_STOP_MARGIN 未満)で未合流
+    // の時だけ、端で止まれる速度に制限して最後の隙間を待つ(加速車線を走り越え
+    // ないための物理的限界)。この2条件を満たさない間は減速させないので、合流車は
+    // 本線と速度を合わせられ、速度差が小さくなって本線側が譲りやすくなる
     if (
       this.lane === 3 ||
       (this.laneChange.state !== 'none' &&
@@ -620,7 +675,17 @@ export class Vehicle {
         this.laneChange.progress < 0.5)
     ) {
       const remainingDistance = Math.max(0, this.z - CONST.RAMP_Z_END);
-      targetSpeed = Math.min(targetSpeed, Math.sqrt(2 * 3.5 * Math.max(0, remainingDistance - 3)));
+      const mergeAhead = this.findAhead(2);
+      // 本線側(lane 2)に「加速して入っていける」明確な空きがあるか。
+      // 合流判定の隙間(speed×0.45+4)より広く取り、詰まった流れの中では加速せず
+      // 従来どおり端で止まれる速度まで落とす(空きが無いのに突っ込ませない)
+      const roomAhead = !mergeAhead || mergeAhead.gap > this.speed * 0.9 + 8;
+      if (!roomAhead || remainingDistance < CONST.MERGE_STOP_MARGIN) {
+        targetSpeed = Math.min(
+          targetSpeed,
+          Math.sqrt(2 * 3.5 * Math.max(0, remainingDistance - 3)),
+        );
+      }
     }
     let requiredDecel = 0; // 衝突回避に物理的に必要な減速度
     if (ahead) {
