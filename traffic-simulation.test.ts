@@ -1498,3 +1498,171 @@ describe('低速ジッパー合流 (Issue #48)', () => {
     expect(world.lastMergeSource.L).toBe('main');
   });
 });
+
+describe('合流の終端安全と区間同一性 (Issue #48)', () => {
+  function addVehicle(
+    world: World,
+    section: 'L' | 'R',
+    lane: number,
+    z: number,
+    speed: number,
+  ): Vehicle {
+    const vehicle = new Vehicle(world, section, lane, z, 'Sedan', speed);
+    vehicle.speed = speed;
+    vehicle.keepLeft = false;
+    vehicle.camper = false;
+    world.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  test.each([
+    ['自由流', 25, 60],
+    ['低速密集', 6, 14],
+    ['極端密集', 2, 10],
+  ] as const)('%sでもlane 3の導流帯侵入・停止・削除・瞬間移動がない', (_, speed, spacing) => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 350, speed);
+    for (let z = 250; z <= 390; z += spacing) addVehicle(world, 'L', 2, z, speed);
+    const count = world.vehicles.length;
+    let previousZ = ramp.z;
+    for (let step = 0; step < 1200 && ramp.mergePlan.state !== 'completed'; step++) {
+      world.step(TIME_STEP);
+      expect(ramp.z).toBeLessThanOrEqual(previousZ + 0.001);
+      expect(previousZ - ramp.z).toBeLessThanOrEqual(ramp.desiredSpeed * TIME_STEP + 0.5);
+      expect(ramp.x).toBeGreaterThanOrEqual(CONST.LANE_X.L[3]);
+      expect(ramp.x).toBeLessThanOrEqual(CONST.LANE_X.L[2]);
+      expect(ramp.lane === 3 && ramp.z <= CONST.GORE_Z_START).toBe(false);
+      if (ramp.z <= CONST.GORE_Z_START) expect(ramp.speed).toBeGreaterThan(0);
+      previousZ = ramp.z;
+    }
+    expect(ramp.mergePlan.state).toBe('completed');
+    expect(world.vehicles).toHaveLength(count);
+  });
+
+  test('L/RはX平行移動以外の合流状態・予約相手・時刻が一致する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramps = (['L', 'R'] as const).map((section) => addVehicle(world, section, 3, 330, 20));
+    for (const section of ['L', 'R'] as const) {
+      addVehicle(world, section, 2, 285, 22);
+      addVehicle(world, section, 2, 360, 22);
+    }
+    for (let step = 0; step < 100; step++) {
+      world.step(TIME_STEP);
+      expect(ramps[0].mergePlan.state).toBe(ramps[1].mergePlan.state);
+      expect(ramps[0].mergePlan.congestion).toBeCloseTo(ramps[1].mergePlan.congestion, 8);
+      expect(ramps[0].mergePlan.targetPassTime).toBeCloseTo(ramps[1].mergePlan.targetPassTime, 8);
+      for (const key of ['front', 'rear'] as const) {
+        const left = ramps[0].mergePlan[key];
+        const right = ramps[1].mergePlan[key];
+        expect(left === null).toBe(right === null);
+        if (left && right) {
+          expect(left.lane).toBe(right.lane);
+          expect(left.z).toBeCloseTo(right.z, 8);
+          expect(left.speed).toBeCloseTo(right.speed, 8);
+        }
+      }
+      expect(ramps[1].x - ramps[0].x).toBeCloseTo(CONST.SECTION_OFFSET_X.R, 8);
+    }
+  });
+
+  test('区間差属性を反転しても合流調停結果は変わらない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const rampL = addVehicle(world, 'L', 3, 330, 20);
+    const rampR = addVehicle(world, 'R', 3, 330, 20);
+    const rearL = addVehicle(world, 'L', 2, 360, 22);
+    const rearR = addVehicle(world, 'R', 2, 360, 22);
+    addVehicle(world, 'L', 2, 285, 22);
+    addVehicle(world, 'R', 2, 285, 22);
+    Object.assign(rampL, { yields: true, camper: false, keepLeft: true, returnTime: 1 });
+    Object.assign(rampR, { yields: false, camper: true, keepLeft: false, returnTime: 99 });
+    Object.assign(rearL, { yields: true, camper: false, keepLeft: true, returnTime: 1 });
+    Object.assign(rearR, { yields: false, camper: true, keepLeft: false, returnTime: 99 });
+    world.rebuildSectionIndex();
+    world.prepareMergeCoordination(TIME_STEP);
+    expect(rampL.mergePlan.state).toBe(rampR.mergePlan.state);
+    expect(rampL.mergePlan.congestion).toBeCloseTo(rampR.mergePlan.congestion, 8);
+    expect(rampL.mergePlan.targetPassTime).toBeCloseTo(rampR.mergePlan.targetPassTime, 8);
+  });
+
+  test('最新commit位置へ近づくほど予約による到着遅延を連続的に縮める', () => {
+    function arrivalDelay(z: number): number {
+      const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+      const ramp = addVehicle(world, 'L', 3, z, 20);
+      const rear = addVehicle(world, 'L', 2, z + 44, 20);
+      rear.desiredSpeed = 30;
+      world.rebuildSectionIndex();
+      const plan = ramp.evaluateMergePlan(TIME_STEP, null);
+      return plan.targetPassTime - (world.time + ramp.estimateMergeEta());
+    }
+
+    const sample = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = addVehicle(sample, 'L', 3, 330, 20);
+    const deadline = ramp.latestMergeCommitZ();
+    const upstreamDelay = arrivalDelay(deadline + CONST.MERGE_DETECT_RANGE + 1);
+    const deadlineDelay = arrivalDelay(deadline);
+
+    expect(upstreamDelay).toBeGreaterThan(0);
+    expect(deadlineDelay).toBeGreaterThan(0);
+    expect(deadlineDelay).toBeLessThan(upstreamDelay);
+  });
+
+  test('lane 3車をランプ終端の停止可能速度へ制限しない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, CONST.RAMP_Z_END + 20, 20);
+    addVehicle(world, 'L', 2, CONST.RAMP_Z_END + 10, 20);
+    world.rebuildSectionIndex();
+
+    ramp.update(TIME_STEP);
+
+    expect(ramp.targetSpeed).toBeCloseTo(20, 8);
+    expect(ramp.speed).toBeCloseTo(20, 8);
+  });
+
+  test('ランプ先頭車は予約時刻へ合う速度を目標にする', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 330, 5);
+    ramp.desiredSpeed = 20;
+    ramp.mergePlan.state = 'coordinating';
+    ramp.mergePlan.targetPassTime = 3;
+    world.rebuildSectionIndex();
+
+    ramp.update(TIME_STEP);
+
+    expect(ramp.targetSpeed).toBeCloseTo((330 - CONST.MERGE_POINT_Z) / 3, 8);
+  });
+
+  test('合流完了時に予約車と協調目標を解除する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const front = addVehicle(world, 'L', 2, 280, 20);
+    const rear = addVehicle(world, 'L', 2, 350, 20);
+    const ramp = addVehicle(world, 'L', 3, 310, 20);
+    ramp.mergePlan = {
+      state: 'committed',
+      front,
+      rear,
+      congestion: 0,
+      targetPassTime: 2,
+      nextSource: 'ramp',
+    };
+    rear.mergeCooperationTarget = ramp.mergePlan.targetPassTime;
+    rear.mergeCooperationDecel = CONST.MERGE_TARGET_COOP_DECEL;
+    ramp.laneChange = {
+      state: 'changing',
+      from: 3,
+      to: 2,
+      progress: 0.99,
+      holdTime: 0,
+      checkTimer: 1,
+    };
+
+    ramp.updateLaneChange(TIME_STEP);
+
+    expect(ramp.mergePlan).toMatchObject({
+      state: 'completed',
+      front: null,
+      rear: null,
+    });
+    expect(rear.mergeCooperationTarget).toBeNull();
+    expect(rear.mergeCooperationDecel).toBe(0);
+  });
+});

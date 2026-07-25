@@ -414,7 +414,14 @@ export class Vehicle {
     const reservedPassTime =
       this.world.time +
       (slot?.rear ? rampEta + rearClearanceTime : Math.max(rampEta, mainEta + frontClearanceTime));
-    const targetPassTime = lerp(reservedPassTime, zipperPassTime, congestion);
+    const blendedPassTime = lerp(reservedPassTime, zipperPassTime, congestion);
+    const distanceToDeadline = Math.max(0, this.z - this.latestMergeCommitZ());
+    const urgency = 1 - smoothstepRange(0, CONST.MERGE_DETECT_RANGE, distanceToDeadline);
+    const rampArrivalTime = this.world.time + rampEta;
+    const targetDelay = blendedPassTime - rampArrivalTime;
+    const reservedDelay = reservedPassTime - rampArrivalTime;
+    const urgencyBias = urgency * Math.max(0, targetDelay - reservedDelay);
+    const targetPassTime = blendedPassTime - urgencyBias;
     const lowSpeedZipper = rawCongestion >= 0.9;
     const keepsCooperationReservation =
       this.mergePlan.state === 'coordinating' &&
@@ -788,7 +795,21 @@ export class Vehicle {
         this.lane = laneChange.to;
         laneChange.state = 'none';
         if (laneChange.from === 3 && laneChange.to === 2) {
-          this.mergePlan.state = 'completed';
+          const targetPassTime = this.mergePlan.targetPassTime;
+          const rear = this.mergePlan.rear;
+          if (rear?.mergeCooperationTarget === targetPassTime) {
+            rear.mergeCooperationTarget = null;
+            rear.mergeCooperationDecel = 0;
+          }
+          this.mergePlan = {
+            ...this.mergePlan,
+            state: 'completed',
+            front: null,
+            rear: null,
+            targetPassTime: 0,
+            nextSource: null,
+            cooperationDecel: undefined,
+          };
           this.mergedFromRamp = this.z >= CONST.MERGE_POINT_Z;
           this.rampMergePassPending = true;
         }
@@ -1010,31 +1031,14 @@ export class Vehicle {
     // 前方車への追従・緊急ブレーキはこの後の通常ロジックがそのまま制限するため安全は保たれる
     if (this.returnBoostTimer > 0) desire += CONST.RETURN_BOOST_SPEED_DELTA;
     let targetSpeed = this.yieldSlowTimer > 0 ? Math.max(8, desire - 2.5) : desire;
-    // 加速車線(lane 3): 本線(lane 2)の流れに乗るための車線。原則は本線流速まで
-    // 加速して隙間に入る(止まって待たない — Issue #33)。ただし
-    //  ・すぐ前の本線車に阻まれて受け入れられる隙間が無い、または
-    //  ・ランプ終端が目前(残り MERGE_STOP_MARGIN 未満)で未合流
-    // の時だけ、端で止まれる速度に制限して最後の隙間を待つ(加速車線を走り越え
-    // ないための物理的限界)。この2条件を満たさない間は減速させないので、合流車は
-    // 本線と速度を合わせられ、速度差が小さくなって本線側が譲りやすくなる
     if (
-      this.lane === 3 ||
-      (this.laneChange.state !== 'none' &&
-        this.laneChange.from === 3 &&
-        this.laneChange.progress < 0.5)
+      this.lane === 3 &&
+      this.mergePlan.state !== 'queued' &&
+      this.mergePlan.targetPassTime > this.world.time
     ) {
-      const remainingDistance = Math.max(0, this.z - CONST.RAMP_Z_END);
-      const mergeAhead = this.findAhead(2);
-      // 本線側(lane 2)に「加速して入っていける」明確な空きがあるか。
-      // 合流判定の隙間(speed×0.45+4)より広く取り、詰まった流れの中では加速せず
-      // 従来どおり端で止まれる速度まで落とす(空きが無いのに突っ込ませない)
-      const roomAhead = !mergeAhead || mergeAhead.gap > this.speed * 0.9 + 8;
-      if (!roomAhead || remainingDistance < CONST.MERGE_STOP_MARGIN) {
-        targetSpeed = Math.min(
-          targetSpeed,
-          Math.sqrt(2 * 3.5 * Math.max(0, remainingDistance - 3)),
-        );
-      }
+      const time = this.mergePlan.targetPassTime - this.world.time;
+      const mergeSpeed = Math.max(1, (this.z - CONST.MERGE_POINT_Z) / time);
+      targetSpeed = Math.min(targetSpeed, Math.max(this.speed, mergeSpeed));
     }
     let mergeCooperationLimited = false;
     if (this.mergeCooperationTarget !== null) {
