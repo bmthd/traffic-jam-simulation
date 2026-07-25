@@ -1,68 +1,34 @@
-/* ================= 観賞モード操作パネル(右上) =================
-   カメラのプリセット巡回(観賞モード)の ON/OFF・自動巡回・手動選択を担うUI。
+/* ================= 観賞モード切替(右上の丸ボタン) =================
+   専用パネルを置くと画面が狭いときに他のパネルと干渉し、項目も増えて煩雑になる。
+   そこでカラーモード切替と同じ「押すたびに切り替わる丸ボタン」1つに集約し、
+   通常操作 → 自動巡回 → 各プリセット → 通常操作… と循環させる。
    カメラ状態そのものは render/camera.ts が持ち、ここは操作と表示だけを行う。 */
-import {
-  SPECTATOR_PRESETS,
-  getSpectatorState,
-  onSpectatorChange,
-  selectSpectatorPreset,
-  setSpectatorAuto,
-  setSpectatorEnabled,
-} from '../render/camera';
-import type { SpectatorPresetId } from '../render/camera';
+import { cycleSpectatorMode, getSpectatorStatus, onSpectatorChange } from '../render/camera';
+import type { SpectatorStatus } from '../render/camera';
 import { icon, renderIcons } from './icons';
-import { showMessage } from './notify';
 
 export function setupSpectator(): void {
-  const panel = document.getElementById('spectatorPanel')!;
-  const toggleBtn = document.getElementById('spectatorToggle')!;
-  const autoInput = document.getElementById('spectatorAuto') as HTMLInputElement;
-  const presetList = document.getElementById('spectatorPresets')!;
+  const button = document.getElementById('spectatorBtn')!;
+  const label = document.getElementById('spectatorLabel')!;
 
-  /* ---- プリセットのボタンを生成(手動選択) ---- */
-  const presetButtons = new Map<SpectatorPresetId, HTMLButtonElement>();
-  for (const preset of SPECTATOR_PRESETS) {
-    const button = document.createElement('button');
-    button.className = 'spec-preset';
-    button.dataset.id = preset.id;
-    button.innerHTML = icon(preset.icon) + '<span>' + preset.label + '</span>';
-    button.addEventListener('click', function () {
-      selectSpectatorPreset(preset.id);
-    });
-    presetList.appendChild(button);
-    presetButtons.set(preset.id, button);
-  }
-
-  /* ---- 観賞モードの ON/OFF ---- */
-  toggleBtn.addEventListener('click', function () {
-    setSpectatorEnabled(!getSpectatorState().enabled);
-  });
-
-  /* ---- 自動巡回の ON/OFF ---- */
-  autoInput.addEventListener('change', function () {
-    setSpectatorAuto(autoInput.checked);
-  });
-
-  /* ---- カメラ側の状態変化を UI に反映(自動巡回での切替も拾う) ---- */
-  function render(state: { enabled: boolean; auto: boolean; presetId: SpectatorPresetId }): void {
-    panel.classList.toggle('spec-on', state.enabled);
-    toggleBtn.innerHTML =
-      icon('clapperboard') + (state.enabled ? '観賞モードを終了' : '観賞モードを開始');
-    autoInput.checked = state.auto;
-    for (const [id, button] of presetButtons) {
-      button.classList.toggle('active', state.enabled && id === state.presetId);
-    }
+  function render(status: SpectatorStatus): void {
+    // アイコンは「今どのモードか」を表す(通常操作のときは観賞モードへの入口)
+    button.innerHTML = icon(status.mode.icon);
+    button.classList.toggle('on', status.enabled);
+    // 自動巡回中は、巡回中であることと今映しているプリセットの両方を出す
+    const text =
+      status.auto && status.preset
+        ? status.mode.label + '・' + status.preset.label
+        : status.mode.label;
+    label.textContent = text;
+    label.classList.toggle('show', status.enabled);
+    const title = status.enabled ? '観賞モード: ' + text + '(押して切替)' : '観賞モードを開始';
+    button.title = title;
+    button.setAttribute('aria-label', title);
     renderIcons();
   }
 
-  let wasEnabled = getSpectatorState().enabled;
-  onSpectatorChange(function (state) {
-    render(state);
-    if (state.enabled && !wasEnabled) {
-      showMessage(icon('clapperboard') + '観賞モード: いろいろな視点で眺められます');
-    }
-    wasEnabled = state.enabled;
-  });
-
-  render(getSpectatorState());
+  button.addEventListener('click', cycleSpectatorMode);
+  onSpectatorChange(render);
+  render(getSpectatorStatus());
 }

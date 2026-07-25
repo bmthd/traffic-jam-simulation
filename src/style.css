@@ -429,6 +429,132 @@ body.night #nightBtn {
     height: 23px;
   }
 }
+
+/* ---- 観賞モード切替(右上・カラーモード切替の下) ----
+   専用パネルではなく丸ボタン1つに集約しているため、
+   画面が狭くても他のパネル(スコア比較・コントロール)と干渉しない */
+#spectatorBtn {
+  position: fixed;
+  top: 78px;
+  right: 14px;
+  z-index: 30;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  background: linear-gradient(180deg, #0d8c4d 0%, #05613b 100%);
+  box-shadow:
+    0 6px 18px rgba(0, 30, 20, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.3s ease,
+    background 0.3s ease;
+}
+#spectatorBtn .lucide {
+  width: 26px;
+  height: 26px;
+  stroke-width: 2.4;
+  margin: 0;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+}
+#spectatorBtn:hover {
+  transform: scale(1.08);
+}
+#spectatorBtn:active {
+  transform: scale(0.93);
+}
+/* 観賞モード中は縁を光らせて「動作中」を示す */
+#spectatorBtn.on {
+  border-color: #ffd54a;
+  box-shadow:
+    0 6px 18px rgba(0, 30, 20, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 0 20px rgba(255, 213, 74, 0.55);
+}
+/* 現在の視点名。ボタンの下に右揃えで出す(観賞モード中のみ) */
+#spectatorLabel {
+  position: fixed;
+  top: 138px;
+  right: 14px;
+  z-index: 30;
+  max-width: 45vw;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(8, 40, 26, 0.88);
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 800;
+  white-space: nowrap;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.25s,
+    transform 0.25s;
+}
+#spectatorLabel.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (max-width: 700px) {
+  #spectatorBtn {
+    width: 50px;
+    height: 50px;
+    top: 68px;
+    right: 10px;
+  }
+  #spectatorBtn .lucide {
+    width: 23px;
+    height: 23px;
+  }
+  #spectatorLabel {
+    top: 122px;
+    right: 10px;
+    font-size: 10.5px;
+  }
+}
+/* 横持ちで高さが足りない時は丸ボタンを小さく詰めて縦の占有を減らす */
+@media (max-height: 520px) {
+  #nightBtn {
+    width: 44px;
+    height: 44px;
+    top: 10px;
+    right: 10px;
+  }
+  #nightBtn .lucide {
+    width: 21px;
+    height: 21px;
+  }
+  #spectatorBtn {
+    width: 44px;
+    height: 44px;
+    top: 60px;
+    right: 10px;
+  }
+  #spectatorBtn .lucide {
+    width: 21px;
+    height: 21px;
+  }
+  #spectatorLabel {
+    top: 108px;
+    right: 10px;
+    font-size: 10px;
+    padding: 2px 8px;
+  }
+}
 .hint {
   font-size: 10.5px;
   opacity: 0.85;
@@ -676,123 +802,6 @@ body.night #nightBtn {
   }
   .row {
     margin: 4px 0;
-  }
-}
-
-/* ---- 観賞モードパネル(右上・ナイトボタンの下) ---- */
-#spectatorPanel {
-  top: 82px;
-  right: 12px;
-  width: 208px;
-  max-height: calc(100vh - 94px);
-  overflow: auto;
-}
-#spectatorPanel .panel-title .route-badge {
-  min-width: 26px;
-  padding: 0 4px;
-}
-#spectatorPanel .panel-title .route-badge .lucide {
-  width: 14px;
-  height: 14px;
-  color: #05613b;
-  vertical-align: -0.16em;
-}
-.spec-main {
-  width: 100%;
-  background: #fff;
-  color: #05613b;
-  font-weight: 800;
-  font-size: 13px;
-  border: none;
-  border-radius: 9px;
-  padding: 8px 0;
-  cursor: pointer;
-  box-shadow: 0 3px 0 #c8d6cd;
-  transition:
-    transform 0.08s,
-    box-shadow 0.08s;
-}
-.spec-main:active {
-  transform: translateY(2px);
-  box-shadow: 0 1px 0 #c8d6cd;
-}
-/* 観賞モードが ON のときだけ詳細操作(自動巡回・プリセット)を表示 */
-.spec-controls {
-  display: none;
-  margin-top: 10px;
-}
-#spectatorPanel.spec-on .spec-controls {
-  display: block;
-}
-#spectatorPanel.spec-on .spec-main {
-  background: rgba(255, 255, 255, 0.18);
-  color: #fff;
-  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.3);
-}
-.spec-auto {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  margin-bottom: 9px;
-}
-.spec-auto input {
-  width: 15px;
-  height: 15px;
-  accent-color: #ffd54a;
-  cursor: pointer;
-  flex: none;
-}
-.spec-auto .lucide {
-  color: #ffe9a8;
-}
-.spec-presets {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-.spec-preset {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  background: rgba(255, 255, 255, 0.16);
-  color: #fff;
-  font-weight: 700;
-  font-size: 11.5px;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  border-radius: 8px;
-  padding: 7px 6px;
-  cursor: pointer;
-  transition:
-    background 0.15s,
-    border-color 0.15s;
-}
-.spec-preset .lucide {
-  width: 15px;
-  height: 15px;
-  flex: none;
-  margin-right: 0;
-}
-.spec-preset:hover {
-  background: rgba(255, 255, 255, 0.28);
-}
-/* 現在表示中のプリセットを強調(自動巡回でも切り替わりが分かる) */
-.spec-preset.active {
-  background: #fff;
-  color: #05613b;
-  border-color: #ffd54a;
-  box-shadow: 0 0 0 2px #ffd54a inset;
-}
-#spectatorPanel .hint {
-  margin-top: 9px;
-}
-@media (max-width: 700px) {
-  #spectatorPanel {
-    top: 70px;
-    width: min(200px, 56vw);
-    padding: 10px 11px;
   }
 }
 
