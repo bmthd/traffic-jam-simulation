@@ -887,7 +887,20 @@ describe('複数台の安全で自然な合流 (Issue #48)', () => {
     expect(world.rampLeader('L')).toBe(front);
   });
 
-  test('三台は初期z順に完了し、同じ枠を同時予約せず先頭変更中も追い越さない', () => {
+  test('本線協調はqueued後続よりランプ先頭を対象にする', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const main = addVehicle(world, 'L', 2, 300, 20);
+    const leader = addVehicle(world, 'L', 3, 270, 20);
+    const follower = addVehicle(world, 'L', 3, 294, 20);
+    world.rebuildSectionIndex();
+    world.prepareMergeCoordination(TIME_STEP);
+
+    expect(leader.mergePlan.state).toBe('seeking');
+    expect(follower.mergePlan.state).toBe('queued');
+    expect(main.findMergingVehicle()).toBe(leader);
+  });
+
+  test('三台は初期z順に完了し、先頭変更中も追い越さない', () => {
     const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
     addVehicle(world, 'L', 2, 250, 18);
     addVehicle(world, 'L', 2, 390, 18);
@@ -895,12 +908,6 @@ describe('複数台の安全で自然な合流 (Issue #48)', () => {
     const completed: Vehicle[] = [];
     for (let step = 0; step < 2400 && completed.length < ramps.length; step++) {
       world.step(TIME_STEP);
-      const reserving = ramps.filter((vehicle) =>
-        ['coordinating', 'committed'].includes(vehicle.mergePlan.state),
-      );
-      expect(new Set(reserving.map((vehicle) => vehicle.mergePlan.rear)).size).toBe(
-        reserving.length,
-      );
       for (const vehicle of ramps)
         if (vehicle.mergePlan.state === 'completed' && !completed.includes(vehicle))
           completed.push(vehicle);

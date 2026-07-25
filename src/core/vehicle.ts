@@ -263,23 +263,14 @@ export class Vehicle {
   // 合流協調(Issue #33)の対象探索: 本線(lane 2)車から見て、加速車線(lane 3)で
   // 合流しようとしている近くの車両を返す。前方(まだ抜いていない)〜ほぼ真横の
   // 範囲だけを見る(自分がその合流車を先に入れてやる立場になり得る相手)。
-  // 加速車線の区間(RAMP_Z_END〜RAMP_Z_TOP)にいる lane 3 車のみが対象。
+  // 加速車線の区間(RAMP_Z_END〜RAMP_Z_TOP)にいるランプ先頭車のみが対象。
   findMergingVehicle(): Vehicle | null {
-    const vehicles = this.world.sectionVehicles[this.section];
-    let best: Vehicle | null = null,
-      bestDistance = Infinity;
-    for (const other of vehicles) {
-      if (other === this || other.lane !== 3) continue;
-      if (other.z < CONST.RAMP_Z_END - 5 || other.z > CONST.RAMP_Z_TOP + 5) continue;
-      const deltaZ = wrapDelta(other.z - this.z); // 負 = 合流車が前方(z が小さい側)
-      if (deltaZ > 5 || deltaZ < -CONST.MERGE_DETECT_RANGE) continue;
-      const distance = Math.abs(deltaZ);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        best = other;
-      }
-    }
-    return best;
+    const leader = this.world.rampLeader(this.section);
+    if (!leader || leader === this || leader.mergePlan.state === 'queued') return null;
+    if (leader.z < CONST.RAMP_Z_END - 5 || leader.z > CONST.RAMP_Z_TOP + 5) return null;
+    const deltaZ = wrapDelta(leader.z - this.z); // 負 = 合流車が前方(z が小さい側)
+    if (deltaZ > 5 || deltaZ < -CONST.MERGE_DETECT_RANGE) return null;
+    return leader;
   }
 
   // 加速復帰の開始判定: 追い越し車線で後続に追いつかれ、復帰先(レーン1)が並走車に
