@@ -846,4 +846,68 @@ describe('複数台の安全で自然な合流 (Issue #48)', () => {
       nextSource: null,
     });
   });
+
+  test('ランプ先頭車だけが探索し、完了後に初期z順で次車へ引き継ぐ', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramps = [290, 315, 340].map((z) => {
+      const vehicle = new Vehicle(world, 'L', 3, z, 'Sedan', 20);
+      vehicle.speed = 20;
+      world.vehicles.push(vehicle);
+      return vehicle;
+    });
+    world.rebuildSectionIndex();
+    world.prepareMergeCoordination(TIME_STEP);
+    expect(ramps.map((vehicle) => vehicle.mergePlan.state)).toEqual([
+      'seeking',
+      'queued',
+      'queued',
+    ]);
+    expect(
+      ramps.filter((vehicle) => vehicle.mergePlan.front || vehicle.mergePlan.rear),
+    ).toHaveLength(0);
+
+    ramps[0].lane = 2;
+    ramps[0].laneChange.state = 'none';
+    ramps[0].mergePlan.state = 'completed';
+    world.rebuildSectionIndex();
+    world.prepareMergeCoordination(TIME_STEP);
+    expect(ramps[1].mergePlan.state).toBe('seeking');
+    expect(ramps[2].mergePlan.state).toBe('queued');
+  });
+
+  test('同じ生成順なら車両配列を並べ替えてもランプ先頭が変わらない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const front = new Vehicle(world, 'L', 3, 290, 'Sedan', 20);
+    const rear = new Vehicle(world, 'L', 3, 320, 'Sedan', 20);
+    world.vehicles.push(rear, front);
+    world.rebuildSectionIndex();
+    expect(world.rampLeader('L')).toBe(front);
+    world.vehicles.reverse();
+    world.rebuildSectionIndex();
+    expect(world.rampLeader('L')).toBe(front);
+  });
+
+  test('三台は初期z順に完了し、同じ枠を同時予約せず先頭変更中も追い越さない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    addVehicle(world, 'L', 2, 250, 18);
+    addVehicle(world, 'L', 2, 390, 18);
+    const ramps = [290, 315, 340].map((z) => addVehicle(world, 'L', 3, z, 18));
+    const completed: Vehicle[] = [];
+    for (let step = 0; step < 2400 && completed.length < ramps.length; step++) {
+      world.step(TIME_STEP);
+      const reserving = ramps.filter((vehicle) =>
+        ['coordinating', 'committed'].includes(vehicle.mergePlan.state),
+      );
+      expect(new Set(reserving.map((vehicle) => vehicle.mergePlan.rear)).size).toBe(
+        reserving.length,
+      );
+      for (const vehicle of ramps)
+        if (vehicle.mergePlan.state === 'completed' && !completed.includes(vehicle))
+          completed.push(vehicle);
+      const unfinished = ramps.filter((vehicle) => vehicle.mergePlan.state !== 'completed');
+      for (let index = 1; index < unfinished.length; index++)
+        expect(unfinished[index].z).toBeGreaterThan(unfinished[index - 1].z);
+    }
+    expect(completed).toEqual(ramps);
+  });
 });

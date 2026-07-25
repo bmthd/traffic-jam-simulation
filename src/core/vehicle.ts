@@ -53,6 +53,7 @@ export function mergeCongestion(
 
 export class Vehicle {
   world: World;
+  spawnOrder: number;
   section: Section;
   lane: number;
   z: number;
@@ -118,6 +119,7 @@ export class Vehicle {
     desiredSpeed: number,
   ) {
     this.world = world;
+    this.spawnOrder = world.nextVehicleOrder++;
     this.section = section; // 'L' = 義務あり / 'R' = 義務なし
     this.lane = lane; // 0 = 追い越し車線(進行方向の右端)
     this.z = z;
@@ -430,6 +432,7 @@ export class Vehicle {
         laneChange.progress = 1;
         this.lane = laneChange.to;
         laneChange.state = 'none';
+        if (laneChange.from === 3 && laneChange.to === 2) this.mergePlan.state = 'completed';
         this.laneChangeCooldown = 4.0 + this.world.rng() * 5; // 変更直後は当分しない(面倒・疲れる)
       }
     } else if (laneChange.state === 'holding') {
@@ -459,6 +462,7 @@ export class Vehicle {
     // 合流(加速車線): 本線の隙間を見つけ次第、走行車線へ入る。
     // 終端が近づくほど、現実のドライバー同様に受け入れる隙間を妥協する
     if (this.lane === 3) {
+      if (this.mergePlan.state === 'queued') return;
       const remainingDistance = this.z - CONST.RAMP_Z_END;
       const mergePressure = clamp(1 - remainingDistance / 80, 0, 1);
       const mergeAhead = this.findAhead(2),

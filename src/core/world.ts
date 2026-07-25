@@ -35,6 +35,7 @@ export class World {
   spawnAccumulator: number;
   time: number;
   sectionVehicles: Record<Section, Vehicle[]>;
+  nextVehicleOrder = 0;
   stats: {
     changes: Record<Section, number>;
     yields: Record<Section, number>;
@@ -311,6 +312,7 @@ export class World {
 
   reset(): void {
     this.vehicles.length = 0;
+    this.nextVehicleOrder = 0;
     this.spawnAccumulator = 0;
     this.time = 0;
     this.sectionVehicles = { L: [], R: [] };
@@ -340,6 +342,32 @@ export class World {
     for (let i = 0; i < vehiclesR.length; i++) vehiclesR[i].sectionIndex = i;
     this.sectionVehicles.L = vehiclesL;
     this.sectionVehicles.R = vehiclesR;
+  }
+
+  rampLeader(section: Section): Vehicle | null {
+    return (
+      this.sectionVehicles[section]
+        .filter(
+          (vehicle) =>
+            vehicle.lane === 3 ||
+            (vehicle.laneChange.from === 3 && vehicle.laneChange.state !== 'none'),
+        )
+        .sort((a, b) => a.z - b.z || a.spawnOrder - b.spawnOrder)[0] ?? null
+    );
+  }
+
+  prepareMergeCoordination(deltaTime: number): void {
+    const leaders = (['L', 'R'] as const).map((section) => this.rampLeader(section));
+    const leaderSet = new Set(leaders.filter((vehicle): vehicle is Vehicle => vehicle !== null));
+    for (const vehicle of this.vehicles) {
+      if (vehicle.waiting || vehicle.mergePlan.state === 'completed') continue;
+      if (!leaderSet.has(vehicle)) vehicle.mergePlan.state = 'queued';
+    }
+    for (const leader of leaders) {
+      if (!leader || leader.mergePlan.state === 'committed') continue;
+      leader.mergePlan.state = 'seeking';
+    }
+    void deltaTime;
   }
 
   step(deltaTime: number): void {
@@ -382,6 +410,7 @@ export class World {
     // rulesモード: 入口待ちの車を、入口が空き次第流入させる
     if (this.mode !== 'absorb') this.admitWaiting();
     this.rebuildSectionIndex();
+    this.prepareMergeCoordination(deltaTime);
     for (const vehicle of this.vehicles) if (!vehicle.waiting) vehicle.update(deltaTime);
     // rulesモード: 出口まで走り切った車は流出する(捌けた分だけ出る)
     if (this.mode !== 'absorb') this.collectExited();
