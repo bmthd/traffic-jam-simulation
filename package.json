@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "6車線比較 渋滞シミュレーション",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vp dev",
