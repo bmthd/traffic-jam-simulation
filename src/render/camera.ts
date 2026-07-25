@@ -1,4 +1,4 @@
-/* ================= カメラ操作（回転・ズーム・観賞モード） ================= */
+/* ================= カメラ操作（回転・ズーム・カメラモード） ================= */
 import * as THREE from 'three';
 import { CONST, clamp, smooth } from '../core';
 import type { Vehicle, World } from '../core';
@@ -17,7 +17,7 @@ export const cameraController: CameraController = {
   target: new THREE.Vector3(0, 0, 0),
 };
 
-/* ---- 観賞モードで使う参照点（core の座標定数から算出。挙動は変えない） ----
+/* ---- オートモードで使う参照点（core の座標定数から算出。挙動は変えない） ----
    両区間の中心X、各区間の走行中心X、合流ランプ帯の位置を基準にする */
 const L_CENTER_X = CONST.LANE_X.L[1]; // 義務あり区間の中心
 const R_CENTER_X = CONST.LANE_X.R[1]; // 義務なし区間の中心
@@ -25,7 +25,7 @@ const CENTER_X = (L_CENTER_X + R_CENTER_X) / 2; // 全体の中心
 const L_SHOULDER_X = CONST.LANE_X.L[2] - 2.9; // 義務あり区間の左路肩(見上げ視点の立ち位置)
 const RAMP_Z_MID = (CONST.RAMP_Z_TOP + CONST.RAMP_Z_END) / 2; // 合流帯の中央
 
-/* ================= 通常の視点操作（従来どおりの軌道カメラ） ================= */
+/* ================= マニュアルモードの視点操作（従来どおりの軌道カメラ） ================= */
 function applyOrbit(): void {
   const controller = cameraController;
   camera.position.set(
@@ -36,7 +36,7 @@ function applyOrbit(): void {
   camera.lookAt(controller.target);
 }
 
-/* ================= 観賞モード（プリセット巡回） =================
+/* ================= オートモード（カメラプリセットの自動切り替え） =================
    一定間隔で視点が切り替わり、いろいろな角度から眺められるモード。
    切り替えの瞬間だけ前の姿勢から目標姿勢へ補間し、補間が終われば目標に
    ぴったり一致させる。こうすると車に固定する視点(追尾・ドライバー)でも
@@ -173,37 +173,40 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
 
 /* ---- モード一覧 ----
    トグルボタンを押すたびにこの順で切り替わる。
-   先頭は「通常操作(観賞モードを抜ける)」、次が「自動巡回」、
-   以降は各プリセットの手動固定。自動巡回も1つのモードとして循環に含める */
+   先頭は「マニュアルモード(自分で視点を操作する)」、次が「オートモード」、
+   以降は各プリセットの手動固定。オートモードも1つのモードとして循環に含める */
 export interface SpectatorMode {
-  id: 'off' | 'auto' | SpectatorPresetId;
+  id: 'manual' | 'auto' | SpectatorPresetId;
   label: string;
   icon: string;
 }
 export const SPECTATOR_MODES: SpectatorMode[] = [
-  { id: 'off', label: '通常操作', icon: 'clapperboard' },
-  { id: 'auto', label: '自動巡回', icon: 'repeat' },
+  { id: 'manual', label: 'マニュアルモード', icon: 'mouse' },
+  { id: 'auto', label: 'オートモード', icon: 'repeat' },
   ...SPECTATOR_PRESETS.map((preset) => ({
     id: preset.id,
     label: preset.label,
     icon: preset.icon,
   })),
 ];
+const MANUAL_MODE_INDEX = 0;
 const AUTO_MODE_INDEX = 1;
 const FIRST_PRESET_MODE_INDEX = 2;
 
-const AUTO_CYCLE_INTERVAL = 9; // 自動巡回でプリセットを切り替える間隔 (s)
+const AUTO_CYCLE_INTERVAL = 9; // オートモードでプリセットを切り替える間隔 (s)
 const TRANSITION_DURATION = 1.2; // 視点の切り替えにかける時間 (s)
 
 interface SpectatorState {
   modeIndex: number; // SPECTATOR_MODES の添字
-  presetIndex: number; // 現在表示中のプリセット(自動巡回中は時間で進む)
+  presetIndex: number; // 現在表示中のプリセット(オートモード中は時間で進む)
   presetTime: number; // 現プリセットに切り替わってからの経過秒
-  cycleTimer: number; // 自動巡回タイマー
+  cycleTimer: number; // オートモードのプリセット切り替えタイマー
   transitionTime: number; // 視点切り替えの補間経過秒
 }
+// 起動直後はオートモード。まず自動で動く画を見せ、画面に触れた時点で
+// マニュアルモードへ移る(モードの存在に気づいてもらうため) (Issue #43)
 const spectator: SpectatorState = {
-  modeIndex: 0,
+  modeIndex: AUTO_MODE_INDEX,
   presetIndex: 0,
   presetTime: 0,
   cycleTimer: 0,
@@ -216,18 +219,15 @@ const currentPose: Pose = { position: new THREE.Vector3(), target: new THREE.Vec
 const goalPose: Pose = { position: new THREE.Vector3(), target: new THREE.Vector3() };
 
 export interface SpectatorStatus {
-  enabled: boolean;
+  enabled: boolean; // カメラが自動で動いている(マニュアルモード以外)
   auto: boolean;
   mode: SpectatorMode; // トグルボタンが示す現在のモード
-  preset: SpectatorPreset | null; // 実際に表示中のプリセット(自動巡回中も分かる)
 }
 export function getSpectatorStatus(): SpectatorStatus {
-  const mode = SPECTATOR_MODES[spectator.modeIndex];
   return {
-    enabled: spectator.modeIndex !== 0,
+    enabled: spectator.modeIndex !== MANUAL_MODE_INDEX,
     auto: spectator.modeIndex === AUTO_MODE_INDEX,
-    mode,
-    preset: spectator.modeIndex === 0 ? null : SPECTATOR_PRESETS[spectator.presetIndex],
+    mode: SPECTATOR_MODES[spectator.modeIndex],
   };
 }
 
@@ -258,7 +258,7 @@ function switchPreset(index: number): void {
 }
 
 // 現在のカメラ位置と注視点から軌道パラメータ(theta/phi/radius)を逆算する。
-// 観賞モード終了時に、通常操作へ見え方を引き継ぐため
+// マニュアルモードへ戻すときに、今の見え方をそのまま引き継ぐため
 function syncOrbitFromCamera(): void {
   const relative = camera.position.clone().sub(cameraController.target);
   const radius = clamp(relative.length(), 30, 240);
@@ -270,17 +270,17 @@ function syncOrbitFromCamera(): void {
 function setMode(index: number): void {
   const previous = spectator.modeIndex;
   spectator.modeIndex = (index + SPECTATOR_MODES.length) % SPECTATOR_MODES.length;
-  if (previous === 0 && spectator.modeIndex !== 0) {
-    // 通常操作から入る: 今のカメラ位置から飛び始める(いきなり瞬間移動しない)
+  if (previous === MANUAL_MODE_INDEX && spectator.modeIndex !== MANUAL_MODE_INDEX) {
+    // マニュアルモードから入る: 今のカメラ位置から飛び始める(いきなり瞬間移動しない)
     currentPose.position.copy(camera.position);
     currentPose.target.copy(cameraController.target);
   }
-  if (spectator.modeIndex === 0) {
-    // 通常操作へ戻す。今の見え方をそのまま軌道パラメータへ引き継ぐ
+  if (spectator.modeIndex === MANUAL_MODE_INDEX) {
+    // マニュアルモードへ戻す。今の見え方をそのまま軌道パラメータへ引き継ぐ
     syncOrbitFromCamera();
     followVehicle = null;
   } else if (spectator.modeIndex === AUTO_MODE_INDEX) {
-    // 自動巡回は先頭のプリセットから始める
+    // オートモードは先頭のプリセットから始める
     switchPreset(0);
   } else {
     switchPreset(spectator.modeIndex - FIRST_PRESET_MODE_INDEX);
@@ -288,14 +288,14 @@ function setMode(index: number): void {
   notify();
 }
 
-/** トグルボタン: 通常操作 → 自動巡回 → 各プリセット → 通常操作… と1つ進める */
+/** トグルボタン: マニュアル → オート → 各プリセット → マニュアル… と1つ進める */
 export function cycleSpectatorMode(): void {
   setMode(spectator.modeIndex + 1);
 }
 
-/** 観賞モードを抜けて通常操作へ戻す(視点のドラッグ操作から呼ばれる) */
-export function exitSpectator(): void {
-  if (spectator.modeIndex !== 0) setMode(0);
+/** マニュアルモードへ戻す(画面のタップ・ドラッグ・ホイール操作から呼ばれる) */
+export function enterManualMode(): void {
+  if (spectator.modeIndex !== MANUAL_MODE_INDEX) setMode(MANUAL_MODE_INDEX);
 }
 
 function updateSpectator(world: World, deltaTime: number): void {
@@ -303,8 +303,9 @@ function updateSpectator(world: World, deltaTime: number): void {
   if (spectator.modeIndex === AUTO_MODE_INDEX) {
     spectator.cycleTimer += deltaTime;
     if (spectator.cycleTimer >= AUTO_CYCLE_INTERVAL) {
+      // モードは「オートモード」のままなので UI へは通知しない。
+      // プリセットごとに表示が入れ替わるとうるさいため (Issue #43)
       switchPreset(spectator.presetIndex + 1);
-      notify(); // 自動巡回での切り替わりも UI の表示に反映する
     }
   }
   SPECTATOR_PRESETS[spectator.presetIndex].compute(goalPose, {
@@ -333,10 +334,10 @@ function updateSpectator(world: World, deltaTime: number): void {
 }
 
 /* ---- 毎フレーム呼ばれるカメラ更新の入口 ----
-   観賞モードが無効なら従来の軌道カメラ、有効ならプリセットで描く。
-   world/deltaTime は観賞モードのときだけ使う(初期化時の引数なし呼び出しも許容) */
+   マニュアルモードなら従来の軌道カメラ、それ以外はプリセットで描く。
+   world/deltaTime はプリセット描画のときだけ使う(初期化時の引数なし呼び出しも許容) */
 export function updateCamera(world?: World, deltaTime = 0): void {
-  if (spectator.modeIndex !== 0 && world) {
+  if (spectator.modeIndex !== MANUAL_MODE_INDEX && world) {
     updateSpectator(world, deltaTime);
   } else {
     applyOrbit();
@@ -348,6 +349,9 @@ export function setupCameraControls(): void {
   const pointers = new Map<number, { x: number; y: number }>();
   let pinchDistance = 0;
   dom.addEventListener('pointerdown', function (e) {
+    // 画面に触れた時点でマニュアルモードへ。ドラッグを待たずに切り替えるので
+    // 「タップすれば自分で操作できる」ことが伝わる (Issue #43)
+    enterManualMode();
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     dom.setPointerCapture(e.pointerId);
     if (pointers.size === 2) {
@@ -361,9 +365,9 @@ export function setupCameraControls(): void {
     const deltaX = e.clientX - previous.x,
       deltaY = e.clientY - previous.y;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    // 観賞モード中は視点をドラッグすると通常操作へ戻る(直感的に「触れば戻る」)。
-    // exitSpectator() の中で今の見え方が軌道パラメータへ引き継がれる
-    exitSpectator();
+    // ドラッグでもマニュアルモードへ戻す(タップを伴わないペン等の操作に備える)。
+    // enterManualMode() の中で今の見え方が軌道パラメータへ引き継がれる
+    enterManualMode();
     if (pointers.size === 1) {
       cameraController.theta -= deltaX * 0.005;
       cameraController.phi = clamp(cameraController.phi - deltaY * 0.004, 0.25, 1.45);
@@ -389,6 +393,7 @@ export function setupCameraControls(): void {
     'wheel',
     function (e) {
       e.preventDefault();
+      enterManualMode(); // ホイール操作もマニュアルモードへの復帰扱い
       cameraController.radius = clamp(cameraController.radius * (1 + e.deltaY * 0.0011), 30, 240);
     },
     { passive: false },
