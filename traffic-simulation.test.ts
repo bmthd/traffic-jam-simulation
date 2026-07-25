@@ -676,3 +676,107 @@ describe('合流(加速車線)の協調 (Issue #33)', () => {
     expect(main.yieldSlowTimer, '速度差が大きいのに譲ってしまった').toBe(0);
   });
 });
+
+/* ============================================================
+   10. 追い越し車線からの復帰は区間非依存 (Issue #49)
+   復帰先が並走車に塞がれ、加速復帰にも見込みがない時のフォールバック
+   (少し減速して並走車の後ろに入る)は「追いつかれた車両の義務」とは
+   無関係な一般的な運転挙動なので、L/R 両区間でまったく同じ条件で
+   発動しなければならない(AGENTS.md A項: 区間依存変数を挙動分岐に使わない)。
+   ============================================================ */
+describe('復帰フォールバックの区間非依存性 (Issue #49)', () => {
+  // 追い越し車線(lane 0)の車が後続に追いつかれ、復帰先(lane 1)は同速の並走車に
+  // 塞がれ、さらに並走車の前方も塞がっているため加速復帰の見込みもない状況。
+  // このとき「少し減速して並走車の後ろに入る」(yieldSlowTimer) が発動する。
+  function setupBlockedReturn(section: 'L' | 'R') {
+    const world = new World({ rng: createRng(9), spawnInterval: 1e9 });
+    const overtaker = new Vehicle(world, section, 0, 0, 'Sedan', 25);
+    overtaker.speed = 25;
+    // 復帰判定時間は気質(義務の有無)由来なので、発動条件の比較のため揃える
+    overtaker.returnTime = CONST.OVERTAKE_LANE_RETURN_TIME;
+    overtaker.returnTimer = overtaker.returnTime + TIME_STEP;
+    overtaker.returnBoostCooldown = 1;
+    overtaker.keepLeft = false;
+    overtaker.camper = false;
+    const side = new Vehicle(world, section, 1, 0, 'Sedan', 25); // 同速の並走車
+    side.speed = 25;
+    side.keepLeft = false;
+    side.camper = false;
+    const wall = new Vehicle(world, section, 1, -22, 'Sedan', 24.5); // 並走車の前方を塞ぐ
+    wall.speed = 24.5;
+    wall.keepLeft = false;
+    wall.camper = false;
+    const chaser = new Vehicle(world, section, 0, 55, 'SportsCar', 34);
+    chaser.speed = 32;
+    world.vehicles.push(overtaker, side, wall, chaser);
+    world.rebuildSectionIndex();
+    return { world, overtaker };
+  }
+
+  function runUntilSlowed(section: 'L' | 'R'): boolean {
+    const { overtaker } = setupBlockedReturn(section);
+    overtaker.decide(null, TIME_STEP);
+    return overtaker.lane === 0 && overtaker.yieldSlowTimer > 0;
+  }
+
+  test.each([
+    ['義務あり', 'L'],
+    ['義務なし', 'R'],
+  ] as const)(
+    '%s区間: 復帰先が塞がれ加速復帰も見込めない時は減速して後ろに入る',
+    (_name, section) => {
+      expect(runUntilSlowed(section), '減速フォールバック(yieldSlowTimer)が発動しなかった').toBe(
+        true,
+      );
+    },
+  );
+
+  test('L/R で発動可否が一致する(区間依存の分岐が残っていない)', () => {
+    expect(runUntilSlowed('R'), 'R区間だけ発動しない = section 依存の分岐が残っている').toBe(
+      runUntilSlowed('L'),
+    );
+  });
+});
+
+/* ============================================================
+   11. リセット時の内部状態初期化 (Issue #54)
+   コンストラクタで初期化される集計・索引・モード用タイマーは、リセット後に
+   前回実行の状態を持ち越してはならない。
+   ============================================================ */
+describe('リセット時の内部状態初期化 (Issue #54)', () => {
+  test('reset() は累積値と古い車両索引を初期状態へ戻す', () => {
+    const world = new World({ rng: createRng(54), spawnInterval: 1e9 });
+    world.populateInitial();
+    world.step(TIME_STEP);
+    const staleVehicle = world.vehicles[0];
+
+    world.stats.changes.L = 7;
+    world.stats.yields.R = 8;
+    world.stats.cancels.L = 9;
+    world.stats.inflow.R = 10;
+    world.stats.outflow.L = 11;
+    world.sectionVehicles.L = [staleVehicle];
+    world.sectionVehicles.R = [staleVehicle];
+    world.laneRoundRobin = 2;
+    world.perturbTimer = 3;
+    world.absorberRoundRobin = [1, 2, 3];
+
+    world.reset();
+
+    expect(world.spawnAccumulator).toBe(0);
+    expect(world.time).toBe(0);
+    expect(world.stats).toEqual({
+      changes: { L: 0, R: 0 },
+      yields: { L: 0, R: 0 },
+      cancels: { L: 0, R: 0 },
+      inflow: { L: 0, R: 0 },
+      outflow: { L: 0, R: 0 },
+    });
+    expect(world.smoothTime).toEqual({ L: 0, R: 0, draw: 0 });
+    expect(world.sectionVehicles.L).not.toContain(staleVehicle);
+    expect(world.sectionVehicles.R).not.toContain(staleVehicle);
+    expect(world.laneRoundRobin).toBe(0);
+    expect(world.perturbTimer).toBeNull();
+    expect(world.absorberRoundRobin).toBeNull();
+  });
+});

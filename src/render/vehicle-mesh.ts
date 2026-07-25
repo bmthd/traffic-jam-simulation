@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils';
 import { CONST, TYPES, clamp } from '../core';
 import type { Vehicle, VehicleTypeName, World } from '../core';
-import { scene } from './scene';
+import { camera, scene } from './scene';
 import {
   paint,
   glassMaterial,
@@ -41,6 +41,7 @@ interface DriverHabit {
 
 export interface VehicleMesh {
   group: THREE.Group;
+  shellParts: THREE.Mesh[];
   brakeMaterial: THREE.MeshBasicMaterial;
   blinkLeft: THREE.MeshBasicMaterial;
   blinkRight: THREE.MeshBasicMaterial;
@@ -108,6 +109,7 @@ interface Blueprint {
 }
 
 const blueprintCache: Partial<Record<VehicleTypeName, Blueprint>> = {};
+const cameraLocalPosition = new THREE.Vector3();
 
 function buildBlueprint(typeName: VehicleTypeName): Blueprint {
   const spec = TYPES[typeName],
@@ -447,30 +449,38 @@ function buildVehicleMesh(vehicle: Vehicle): VehicleMesh {
   const vehicleBlueprint = blueprint(vehicle.typeName);
   const bodyLength = vehicle.type.length;
   const group = new THREE.Group();
+  const shellParts: THREE.Mesh[] = [];
   // 各パーツはブループリント側で位置決め済み(ローカル変換は恒等)なので、
   // 毎フレームの行列再計算を止めて描画コストを下げる
-  function addPart(slot: PartSlot, material: THREE.Material, castShadow?: boolean): void {
+  function addPart(
+    slot: PartSlot,
+    material: THREE.Material,
+    castShadow?: boolean,
+  ): THREE.Mesh | null {
     const geometry = vehicleBlueprint.parts[slot];
-    if (!geometry) return;
+    if (!geometry) return null;
     const mesh = new THREE.Mesh(geometry, material);
     if (castShadow) mesh.castShadow = true;
     mesh.matrixAutoUpdate = false;
     group.add(mesh);
+    return mesh;
   }
-  addPart('body', paint(vehicle.color), true);
-  addPart('glass', glassMaterial, true);
-  addPart('trim', trimMaterial);
+  const body = addPart('body', paint(vehicle.color), true);
+  const glass = addPart('glass', glassMaterial, true);
+  const trim = addPart('trim', trimMaterial);
   addPart('tire', tireMaterial, true);
   addPart('hub', hubMaterial);
-  addPart('cargo', cargoMaterial, true);
+  const cargo = addPart('cargo', cargoMaterial, true);
   addPart('plate', plateMaterial);
   addPart('head', headlightMaterial);
+  for (const part of [body, glass, trim, cargo]) if (part) shellParts.push(part);
   if (vehicle.isTaxi) {
     const sign = new THREE.Mesh(taxiSignGeometry, taxiSignMaterial);
     sign.position.set(0, vehicle.type.height * 0.97 + 0.14, (bodyLength / 2) * 0.15);
     sign.matrixAutoUpdate = false;
     sign.updateMatrix();
     group.add(sign);
+    shellParts.push(sign);
   }
   // 灯火類は照明の影響を受けない発光体として描く(昼でもはっきり光って見える)。
   // 色を車両ごとに切り替えるため、マテリアルだけ個別に持つ
@@ -512,6 +522,7 @@ function buildVehicleMesh(vehicle: Vehicle): VehicleMesh {
   };
   return {
     group,
+    shellParts,
     brakeMaterial,
     blinkLeft,
     blinkRight,
@@ -525,6 +536,20 @@ function buildVehicleMesh(vehicle: Vehicle): VehicleMesh {
     roll: 0,
     habit,
   };
+}
+
+function updateShellVisibility(mesh: VehicleMesh, vehicle: Vehicle): void {
+  mesh.group.updateMatrixWorld(true);
+  cameraLocalPosition.copy(camera.position);
+  mesh.group.worldToLocal(cameraLocalPosition);
+  const halfWidth = vehicle.type.width / 2 + 0.45;
+  const halfLength = vehicle.type.length / 2 + 0.9;
+  const insideUpperBody =
+    Math.abs(cameraLocalPosition.x) < halfWidth &&
+    Math.abs(cameraLocalPosition.z) < halfLength &&
+    cameraLocalPosition.y > 0.55 &&
+    cameraLocalPosition.y < vehicle.type.height + 0.9;
+  for (const part of mesh.shellParts) part.visible = !insideUpperBody;
 }
 
 /* ---- ワールドとメッシュの同期 ---- */
@@ -608,5 +633,19 @@ export function syncMeshes(world: World, deltaTime: number): void {
         meshMap.delete(vehicle);
       }
     }
+  }
+}
+
+export function updateVehicleCameraOcclusion(world: World): void {
+  for (const vehicle of world.vehicles) {
+    const mesh = meshMap.get(vehicle);
+    if (!mesh) continue;
+    if (vehicle.waiting) {
+      for (const part of mesh.shellParts) part.visible = true;
+      continue;
+    }
+    // カメラが車体にめり込んだ時だけ、車体上部のシェルを消して視界を確保する。
+    // 個体ごとの描画グループなので、交通挙動や他車の見た目には影響しない。
+    updateShellVisibility(mesh, vehicle);
   }
 }
