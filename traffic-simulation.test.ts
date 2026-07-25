@@ -1295,3 +1295,160 @@ describe('自由流の合流枠予約 (Issue #48)', () => {
     });
   });
 });
+
+describe('低速ジッパー合流 (Issue #48)', () => {
+  function addVehicle(
+    world: World,
+    section: 'L' | 'R',
+    lane: number,
+    z: number,
+    speed: number,
+  ): Vehicle {
+    const vehicle = new Vehicle(world, section, lane, z, 'Sedan', speed);
+    vehicle.speed = speed;
+    vehicle.keepLeft = false;
+    vehicle.camper = false;
+    world.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  test('低速密集では本線とランプを一台ずつ通し、lane 1退避を要求しない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    world.lastMergeSource.L = 'main';
+    const ramp = addVehicle(world, 'L', 3, 305, 6);
+    const rear = addVehicle(world, 'L', 2, 309, 6);
+    const front = addVehicle(world, 'L', 2, 293, 6);
+    rear.desiredSpeed = 30;
+    front.desiredSpeed = 30;
+    world.step(TIME_STEP);
+    expect(ramp.mergePlan.congestion).toBeGreaterThan(0);
+    expect(ramp.mergePlan.congestion).toBeLessThan(0.1);
+    expect(ramp.mergePlan.nextSource).toBe('ramp');
+    expect(rear.laneChange.state).toBe('none');
+  });
+
+  test('ETA差がpassHeadwayを超えると交互順より早い到着を優先する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    world.lastMergeSource.L = 'main';
+    const ramp = addVehicle(world, 'L', 3, 350, 3);
+    const front = addVehicle(world, 'L', 2, 290, 6);
+    const main = addVehicle(world, 'L', 2, 306, 6);
+    front.desiredSpeed = 30;
+    main.desiredSpeed = 30;
+    world.step(TIME_STEP);
+    expect(ramp.mergePlan.nextSource).toBe('main');
+    expect(main.laneChange.state).toBe('none');
+    expect(main.mergeCooperationTarget).toBeNull();
+  });
+
+  test('低速ジッパーで本線が次順なら本線車を減速させない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    world.lastMergeSource.L = 'ramp';
+    const ramp = addVehicle(world, 'L', 3, 305, 6);
+    const main = addVehicle(world, 'L', 2, 309, 6);
+    const front = addVehicle(world, 'L', 2, 293, 6);
+    main.desiredSpeed = 30;
+    front.desiredSpeed = 30;
+    world.step(TIME_STEP);
+    expect(ramp.mergePlan.nextSource).toBe('main');
+    expect(main.laneChange.state).toBe('none');
+    expect(main.mergeCooperationTarget).toBeNull();
+  });
+
+  test('commit後は本線速度が変わっても予約枠・混雑度・順番を変えない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 325, 22);
+    const front = addVehicle(world, 'L', 2, 285, 24);
+    const rear = addVehicle(world, 'L', 2, 365, 24);
+    world.step(TIME_STEP);
+    const fixedPlan = ramp.mergePlan;
+    const fixed = {
+      front: ramp.mergePlan.front,
+      rear: ramp.mergePlan.rear,
+      congestion: ramp.mergePlan.congestion,
+      nextSource: ramp.mergePlan.nextSource,
+    };
+    front.speed = 2;
+    rear.speed = 2;
+    world.prepareMergeCoordination(TIME_STEP);
+    expect(ramp.mergePlan).toBe(fixedPlan);
+    expect(ramp.evaluateMergePlan(TIME_STEP, world.lastMergeSource.L)).toBe(fixedPlan);
+    expect(ramp.mergePlan).toMatchObject(fixed);
+  });
+
+  test('commit前に危険になった枠は解除して別の安全枠を選ぶ', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 330, 20);
+    const oldRear = addVehicle(world, 'L', 2, 337, 22);
+    addVehicle(world, 'L', 2, 290, 22);
+    addVehicle(world, 'L', 1, 335, 22);
+    world.step(TIME_STEP);
+    expect(ramp.mergePlan.state).toBe('coordinating');
+    const blocker = addVehicle(world, 'L', 2, 335, 22);
+    world.rebuildSectionIndex();
+    world.prepareMergeCoordination(TIME_STEP);
+    expect(ramp.mergePlan.rear).not.toBe(oldRear);
+    expect(ramp.mergePlan.front === blocker || ramp.mergePlan.rear === blocker).toBe(true);
+  });
+
+  test('入力を0.01ずつ変えても通過時刻と協調速度は単調かつ全幅の5%以内で変わる', () => {
+    const passTimes: number[] = [];
+    const targetSpeeds: number[] = [];
+    for (let index = 0; index <= 100; index++) {
+      const ratio = 0.35 + index * 0.01;
+      const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+      const ramp = addVehicle(world, 'L', 3, 320, 20);
+      const rear = addVehicle(world, 'L', 2, 335, 30 * ratio);
+      addVehicle(world, 'L', 2, 290, 30 * ratio);
+      world.step(TIME_STEP);
+      passTimes.push(ramp.mergePlan.targetPassTime);
+      targetSpeeds.push(rear.targetSpeed);
+    }
+    const passRange = Math.max(...passTimes) - Math.min(...passTimes);
+    const speedRange = Math.max(...targetSpeeds) - Math.min(...targetSpeeds);
+    for (let index = 1; index < passTimes.length; index++) {
+      expect(Math.abs(passTimes[index] - passTimes[index - 1])).toBeLessThanOrEqual(
+        passRange * 0.05,
+      );
+      expect(Math.abs(targetSpeeds[index] - targetSpeeds[index - 1])).toBeLessThanOrEqual(
+        speedRange * 0.05,
+      );
+      expect(passTimes[index]).toBeLessThanOrEqual(passTimes[index - 1] + 1e-9);
+      expect(targetSpeeds[index]).toBeGreaterThanOrEqual(targetSpeeds[index - 1] - 1e-9);
+    }
+  });
+
+  test('合流点の通過元を記録し、resetで履歴を消す', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    addVehicle(world, 'L', 2, CONST.MERGE_POINT_Z + 0.1, 10);
+    world.step(TIME_STEP);
+    expect(world.lastMergeSource.L).toBe('main');
+
+    const ramp = addVehicle(world, 'L', 3, CONST.MERGE_POINT_Z + 1, 10);
+    ramp.mergePlan.state = 'committed';
+    ramp.laneChange = {
+      state: 'changing',
+      from: 3,
+      to: 2,
+      progress: 0.99,
+      holdTime: 0,
+      checkTimer: 1,
+    };
+    world.step(TIME_STEP);
+    expect(world.lastMergeSource.L).toBe('ramp');
+
+    ramp.previousZ = CONST.MERGE_POINT_Z + 0.1;
+    ramp.z = CONST.MERGE_POINT_Z - 0.1;
+    world.recordMergePasses();
+    expect(world.lastMergeSource.L).toBe('ramp');
+
+    ramp.previousZ = CONST.MERGE_POINT_Z + 0.1;
+    ramp.z = CONST.MERGE_POINT_Z - 0.1;
+    world.recordMergePasses();
+    expect(world.lastMergeSource.L).toBe('main');
+
+    world.lastMergeSource.R = 'main';
+    world.reset();
+    expect(world.lastMergeSource).toEqual({ L: null, R: null });
+  });
+});

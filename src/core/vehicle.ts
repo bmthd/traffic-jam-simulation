@@ -71,6 +71,9 @@ export class Vehicle {
   section: Section;
   lane: number;
   z: number;
+  previousZ: number;
+  mergedFromRamp = false;
+  rampMergePassPending = false;
   typeName: VehicleTypeName;
   type: VehicleTypeSpec;
   length: number;
@@ -139,6 +142,7 @@ export class Vehicle {
     this.section = section; // 'L' = 義務あり / 'R' = 義務なし
     this.lane = lane; // 0 = 追い越し車線(進行方向の右端)
     this.z = z;
+    this.previousZ = z;
     this.typeName = typeName;
     this.type = TYPES[typeName];
     this.length = this.type.length;
@@ -294,26 +298,42 @@ export class Vehicle {
     );
   }
 
-  projectMergeCongestion(slot: ProjectedMergeSlot | null, deltaTime: number): number {
+  projectMergeCongestionSample(slot: ProjectedMergeSlot | null): number {
     const localVehicles = [slot?.front, slot?.rear].filter(
       (vehicle): vehicle is Vehicle => vehicle !== null && vehicle !== undefined,
     );
-    const sample =
+    const median = (values: number[]): number => {
+      const sorted = [...values].sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+    };
+    const mainDesiredPace =
       localVehicles.length === 0
-        ? 0
-        : mergeCongestion(
-            localVehicles.reduce((sum, vehicle) => sum + vehicle.speed, 0) / localVehicles.length,
-            localVehicles.reduce((sum, vehicle) => sum + vehicle.desiredSpeed, 0) /
-              localVehicles.length,
-            slot?.front && slot.rear ? slot.frontGap + this.length + slot.rearGap : Infinity,
-            (() => {
-              const following = slot?.rear ?? slot?.front;
-              if (!following) return 0.1;
-              return (
-                following.length * 1.2 + 2.5 + following.speed * 0.55 * following.headwayFactor
-              );
-            })(),
+        ? Math.max(this.desiredSpeed, 1)
+        : median(localVehicles.map((vehicle) => vehicle.desiredSpeed));
+    const mainPace =
+      localVehicles.length === 0
+        ? mainDesiredPace
+        : median(localVehicles.map((vehicle) => vehicle.speed));
+    const safeGap =
+      localVehicles.length === 0
+        ? 0.1
+        : median(
+            localVehicles.map(
+              (vehicle) =>
+                vehicle.length * 1.2 + 2.5 + vehicle.speed * 0.55 * vehicle.headwayFactor,
+            ),
           );
+    const mainGap =
+      slot?.front && slot.rear ? slot.frontGap + this.length + slot.rearGap : safeGap * 1.8;
+    return mergeCongestion(mainPace, mainDesiredPace, mainGap, safeGap);
+  }
+
+  projectMergeCongestion(
+    slot: ProjectedMergeSlot | null,
+    deltaTime: number,
+    sample = this.projectMergeCongestionSample(slot),
+  ): number {
     const smoothing = 1 - Math.exp(-Math.max(0, deltaTime) / CONST.MERGE_CONGESTION_TIME_CONSTANT);
     return lerp(this.mergePlan.congestion, sample, smoothing);
   }
@@ -341,6 +361,7 @@ export class Vehicle {
   }
 
   evaluateMergePlan(deltaTime: number, lastSource: MergeSource | null): MergePlan {
+    if (this.mergePlan.state === 'committed') return this.mergePlan;
     const reservedRear = this.mergePlan.rear;
     if (
       this.mergePlan.state === 'coordinating' &&
@@ -358,7 +379,43 @@ export class Vehicle {
     }
     const rampEta = this.estimateMergeEta();
     const slot = this.projectMergeSlot(rampEta);
-    const congestion = this.projectMergeCongestion(slot, deltaTime);
+    const rawCongestion = this.projectMergeCongestionSample(slot);
+    const congestion = this.projectMergeCongestion(slot, deltaTime, rawCongestion);
+    const headways = this.mergeHeadways(congestion);
+    const passHeadway = Math.max(headways.front, headways.rear);
+    const mainVehicle = slot?.rear ?? slot?.front ?? null;
+    const mainEta = mainVehicle
+      ? nextArrivalDistance(mainVehicle.z, CONST.MERGE_POINT_Z) / Math.max(mainVehicle.speed, 1)
+      : rampEta;
+    const nextSource: MergeSource =
+      mainVehicle === null
+        ? 'ramp'
+        : Math.abs(rampEta - mainEta) <= passHeadway
+          ? lastSource === 'main'
+            ? 'ramp'
+            : lastSource === 'ramp'
+              ? 'main'
+              : rampEta <= mainEta
+                ? 'ramp'
+                : 'main'
+          : rampEta <= mainEta
+            ? 'ramp'
+            : 'main';
+    const zipperPassTime =
+      this.world.time +
+      (nextSource === 'ramp' ? Math.max(rampEta, mainEta + passHeadway) : mainEta + passHeadway);
+    const rearClearanceTime = slot?.rear
+      ? (headways.rear * slot.rear.speed + (this.length + slot.rear.length) / 2) /
+        Math.max(slot.rear.speed, 1)
+      : 0;
+    const frontClearanceTime = slot?.front
+      ? passHeadway + (this.length + slot.front.length) / (2 * Math.max(slot.front.speed, 1))
+      : 0;
+    const reservedPassTime =
+      this.world.time +
+      (slot?.rear ? rampEta + rearClearanceTime : Math.max(rampEta, mainEta + frontClearanceTime));
+    const targetPassTime = lerp(reservedPassTime, zipperPassTime, congestion);
+    const lowSpeedZipper = rawCongestion >= 0.9;
     const keepsCooperationReservation =
       this.mergePlan.state === 'coordinating' &&
       reservedRear !== null &&
@@ -366,9 +423,16 @@ export class Vehicle {
       slot?.front === this.mergePlan.front &&
       slot.rear === reservedRear;
     if (keepsCooperationReservation) {
-      if (this.isProjectedSlotSafe(slot, congestion))
-        return { ...this.mergePlan, state: 'committed', congestion };
-      const headways = this.mergeHeadways(congestion);
+      if (lowSpeedZipper && nextSource === 'main')
+        return {
+          ...this.mergePlan,
+          congestion,
+          targetPassTime,
+          nextSource,
+          cooperationDecel: 0,
+        };
+      if (this.isProjectedSlotSafe(slot, congestion) && !(lowSpeedZipper && nextSource === 'main'))
+        return { ...this.mergePlan, state: 'committed', congestion, nextSource };
       const rearGapShortage = Math.max(0, headways.rear * reservedRear.speed - slot.rearGap);
       const timeToTarget = Math.max(this.mergePlan.targetPassTime - this.world.time, deltaTime);
       const requiredDecel = (2 * rearGapShortage) / Math.max(timeToTarget ** 2, 0.01);
@@ -387,6 +451,7 @@ export class Vehicle {
         return {
           ...this.mergePlan,
           congestion,
+          nextSource,
           cooperationDecel:
             this.z <= this.latestMergeCommitZ()
               ? cooperationDecel
@@ -403,28 +468,23 @@ export class Vehicle {
       rear: slot?.rear ?? null,
       congestion,
       targetPassTime,
-      nextSource: 'ramp',
+      nextSource,
       cooperationDecel,
     });
-    void lastSource;
-    if (!slot || this.isProjectedSlotSafe(slot, congestion))
-      return plan('committed', this.world.time + rampEta);
-    if (!slot.rear)
-      return {
-        ...this.mergePlan,
-        state: 'seeking',
-        front: null,
-        rear: null,
-        congestion,
-        targetPassTime: 0,
-        nextSource: null,
-      };
-    const headways = this.mergeHeadways(congestion);
-    const rearClearanceTime =
-      (headways.rear * slot.rear.speed + (this.length + slot.rear.length) / 2) /
-      Math.max(slot.rear.speed, 1);
-    const targetPassTime = this.world.time + rampEta + rearClearanceTime;
-    if (slot.rear.checkLaneSafetyForChange(1) === 'safe')
+    if (lowSpeedZipper && nextSource === 'main') return plan('coordinating', targetPassTime, 0);
+    if (!slot || this.isProjectedSlotSafe(slot, congestion)) {
+      const waitsForTurn = lowSpeedZipper && nextSource === 'main';
+      const waitsForCurrentSafety = this.checkLaneSafetyForChange(2) !== 'safe';
+      return plan(
+        waitsForTurn || waitsForCurrentSafety ? 'coordinating' : 'committed',
+        targetPassTime,
+        waitsForTurn || waitsForCurrentSafety ? 0 : undefined,
+      );
+    }
+    if (!slot.rear) {
+      return plan(lowSpeedZipper ? 'coordinating' : 'seeking', targetPassTime, 0);
+    }
+    if (!lowSpeedZipper && slot.rear.checkLaneSafetyForChange(1) === 'safe')
       return plan('coordinating', targetPassTime);
     let cooperationDecel = CONST.MERGE_TARGET_COOP_DECEL;
     if (this.z <= this.latestMergeCommitZ()) {
@@ -491,8 +551,16 @@ export class Vehicle {
       return;
     }
     this.mergePlan = plan;
+    if (plan.state === 'coordinating' && plan.cooperationDecel === 0) {
+      if (plan.rear) {
+        plan.rear.mergeCooperationTarget = null;
+        plan.rear.mergeCooperationDecel = 0;
+      }
+      return;
+    }
     if (
       plan.state === 'coordinating' &&
+      plan.cooperationDecel === undefined &&
       plan.rear &&
       (plan.rear.laneChange.state === 'changing' || plan.rear.laneChange.state === 'holding') &&
       plan.rear.laneChange.from === 2 &&
@@ -501,7 +569,11 @@ export class Vehicle {
       plan.rear.noOvertakeTimer = 3;
       return;
     }
-    if (plan.state === 'coordinating' && plan.rear?.tryLaneChange(1)) {
+    if (
+      plan.state === 'coordinating' &&
+      plan.cooperationDecel === undefined &&
+      plan.rear?.tryLaneChange(1)
+    ) {
       plan.rear.noOvertakeTimer = 3;
       return;
     }
@@ -716,7 +788,11 @@ export class Vehicle {
         laneChange.progress = 1;
         this.lane = laneChange.to;
         laneChange.state = 'none';
-        if (laneChange.from === 3 && laneChange.to === 2) this.mergePlan.state = 'completed';
+        if (laneChange.from === 3 && laneChange.to === 2) {
+          this.mergePlan.state = 'completed';
+          this.mergedFromRamp = true;
+          this.rampMergePassPending = true;
+        }
         this.laneChangeCooldown = 4.0 + this.world.rng() * 5; // 変更直後は当分しない(面倒・疲れる)
       }
     } else if (laneChange.state === 'holding') {
@@ -881,6 +957,7 @@ export class Vehicle {
   }
 
   update(deltaTime: number): void {
+    this.previousZ = this.z;
     this.laneChangeCooldown = Math.max(0, this.laneChangeCooldown - deltaTime);
     this.noOvertakeTimer = Math.max(0, this.noOvertakeTimer - deltaTime);
     this.yieldSlowTimer = Math.max(0, this.yieldSlowTimer - deltaTime);

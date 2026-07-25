@@ -7,7 +7,7 @@ import type { Section, SimMode, VehicleTypeName } from './constants';
 import { clamp, wrapDelta, WRAP_LENGTH } from './utils';
 import type { Rng } from './utils';
 import { Vehicle } from './vehicle';
-import type { MergePlan } from './vehicle';
+import type { MergePlan, MergeSource } from './vehicle';
 
 export interface WorldOptions {
   rng?: Rng;
@@ -36,6 +36,7 @@ export class World {
   spawnAccumulator: number;
   time: number;
   sectionVehicles: Record<Section, Vehicle[]>;
+  lastMergeSource: Record<Section, MergeSource | null> = { L: null, R: null };
   nextVehicleOrder = 0;
   stats: {
     changes: Record<Section, number>;
@@ -324,6 +325,7 @@ export class World {
       inflow: { L: 0, R: 0 },
       outflow: { L: 0, R: 0 },
     };
+    this.lastMergeSource = { L: null, R: null };
     this.smoothTime = { L: 0, R: 0, draw: 0 }; // 累積の比較もやり直す
     this.absorberRoundRobin = null;
     this.laneRoundRobin = 0;
@@ -343,6 +345,26 @@ export class World {
     for (let i = 0; i < vehiclesR.length; i++) vehiclesR[i].sectionIndex = i;
     this.sectionVehicles.L = vehiclesL;
     this.sectionVehicles.R = vehiclesR;
+  }
+
+  recordMergePasses(): void {
+    for (const vehicle of this.vehicles) {
+      if (vehicle.waiting) continue;
+      const crossedMergePoint =
+        vehicle.previousZ >= CONST.MERGE_POINT_Z && vehicle.z < CONST.MERGE_POINT_Z;
+      if (vehicle.rampMergePassPending) {
+        this.lastMergeSource[vehicle.section] = 'ramp';
+        vehicle.rampMergePassPending = false;
+        if (crossedMergePoint) vehicle.mergedFromRamp = false;
+        continue;
+      }
+      if (!crossedMergePoint || vehicle.lane !== 2) continue;
+      if (vehicle.mergedFromRamp) {
+        vehicle.mergedFromRamp = false;
+      } else {
+        this.lastMergeSource[vehicle.section] = 'main';
+      }
+    }
   }
 
   rampLeader(section: Section): Vehicle | null {
@@ -392,16 +414,12 @@ export class World {
     }
     const evaluations = leaders
       .filter(
-        (leader): leader is Vehicle =>
-          leader !== null &&
-          !(
-            leader.mergePlan.state === 'committed' &&
-            leader.laneChange.from === 3 &&
-            leader.laneChange.to === 2 &&
-            (leader.laneChange.state === 'changing' || leader.laneChange.state === 'holding')
-          ),
+        (leader): leader is Vehicle => leader !== null && leader.mergePlan.state !== 'committed',
       )
-      .map((leader) => ({ leader, plan: leader.evaluateMergePlan(deltaTime, null) }));
+      .map((leader) => ({
+        leader,
+        plan: leader.evaluateMergePlan(deltaTime, this.lastMergeSource[leader.section]),
+      }));
     this.applyMergeEvaluations(evaluations);
     const activeRears = new Set(
       leaders
@@ -462,6 +480,7 @@ export class World {
     this.rebuildSectionIndex();
     this.prepareMergeCoordination(deltaTime);
     for (const vehicle of this.vehicles) if (!vehicle.waiting) vehicle.update(deltaTime);
+    this.recordMergePasses();
     // rulesモード: 出口まで走り切った車は流出する(捌けた分だけ出る)
     if (this.mode !== 'absorb') this.collectExited();
     this.accumulateSmoothTime(deltaTime);
