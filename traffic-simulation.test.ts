@@ -7,7 +7,15 @@
  * 実行方法:  vp test run  (npm test)
  */
 import { describe, expect, test } from 'vitest';
-import { CONST, createRng, mergeCongestion, Vehicle, World } from './src/core';
+import {
+  CONST,
+  createRng,
+  mergeCongestion,
+  nextArrivalDistance,
+  Vehicle,
+  World,
+  WRAP_LENGTH,
+} from './src/core';
 import { isLandscapeViewport } from './src/render/camera-layout';
 import { loopCopies } from './src/render/looping';
 
@@ -632,9 +640,12 @@ describe('合流(加速車線)の協調 (Issue #33)', () => {
     const main = new Vehicle(world, 'L', 2, 300, 'Sedan', 25);
     main.speed = 25;
     main.keepLeft = false;
-    const merger = new Vehicle(world, 'L', 3, 294, 'Sedan', mergerSpeed);
+    const front = new Vehicle(world, 'L', 2, 258, 'Sedan', 25);
+    front.speed = 25;
+    front.keepLeft = false;
+    const merger = new Vehicle(world, 'L', 3, 298, 'Sedan', mergerSpeed);
     merger.speed = mergerSpeed;
-    world.vehicles.push(main, merger);
+    world.vehicles.push(main, front, merger);
     if (blockLane1) {
       // 退避先(lane 1)を真横で塞ぎ、本線車が lane 1 へ逃げられなくする
       const wall = new Vehicle(world, 'L', 1, 300, 'Sedan', 24);
@@ -666,16 +677,17 @@ describe('合流(加速車線)の協調 (Issue #33)', () => {
     );
     world.step(TIME_STEP);
     expect(main.lane, '退避できないはずが lane 2 を離れた').toBe(2);
-    expect(main.yieldSlowTimer, '速度差が小さいのに減速して譲らなかった').toBeGreaterThan(0);
+    expect(main.mergeCooperationTarget, '速度差が小さいのに減速枠を予約しなかった').not.toBeNull();
   });
 
-  test('退避できず速度差が大きいときは譲らない(合流車自身の加速に委ねる)', () => {
+  test('退避できず速度差が大きいときは即commitせず穏やかな協調に留める', () => {
     const { world, main } = coopSetup(8, true); // 速度差 |25-8|=17 > 閾値, lane 1 は塞がれている
     expect(Math.abs(25 - 8), 'テスト前提: 速度差が閾値以上でない').toBeGreaterThan(
       CONST.MERGE_YIELD_SPEED_DIFF,
     );
     world.step(TIME_STEP);
-    expect(main.yieldSlowTimer, '速度差が大きいのに譲ってしまった').toBe(0);
+    expect(world.rampLeader('L')?.mergePlan.state).not.toBe('committed');
+    expect((25 - main.speed) / TIME_STEP).toBeLessThanOrEqual(CONST.MERGE_MAX_COOP_DECEL + 0.01);
   });
 });
 
@@ -858,7 +870,7 @@ describe('複数台の安全で自然な合流 (Issue #48)', () => {
     world.rebuildSectionIndex();
     world.prepareMergeCoordination(TIME_STEP);
     expect(ramps.map((vehicle) => vehicle.mergePlan.state)).toEqual([
-      'seeking',
+      'committed',
       'queued',
       'queued',
     ]);
@@ -890,14 +902,18 @@ describe('複数台の安全で自然な合流 (Issue #48)', () => {
   test('本線協調はqueued後続よりランプ先頭を対象にする', () => {
     const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
     const main = addVehicle(world, 'L', 2, 300, 20);
-    const leader = addVehicle(world, 'L', 3, 270, 20);
-    const follower = addVehicle(world, 'L', 3, 294, 20);
+    const front = addVehicle(world, 'L', 2, 290, 20);
+    const leader = addVehicle(world, 'L', 3, 294, 20);
+    const follower = addVehicle(world, 'L', 3, 320, 20);
     world.rebuildSectionIndex();
     world.prepareMergeCoordination(TIME_STEP);
 
-    expect(leader.mergePlan.state).toBe('seeking');
+    expect(leader.mergePlan).toMatchObject({
+      state: 'coordinating',
+      front,
+      rear: main,
+    });
     expect(follower.mergePlan.state).toBe('queued');
-    expect(main.findMergingVehicle()).toBe(leader);
   });
 
   test('三台は初期z順に完了し、先頭変更中も追い越さない', () => {
@@ -916,5 +932,304 @@ describe('複数台の安全で自然な合流 (Issue #48)', () => {
         expect(unfinished[index].z).toBeGreaterThan(unfinished[index - 1].z);
     }
     expect(completed).toEqual(ramps);
+  });
+});
+
+describe('自由流の合流枠予約 (Issue #48)', () => {
+  function addVehicle(
+    world: World,
+    section: 'L' | 'R',
+    lane: number,
+    z: number,
+    speed: number,
+  ): Vehicle {
+    const vehicle = new Vehicle(world, section, lane, z, 'Sedan', speed);
+    vehicle.speed = speed;
+    vehicle.keepLeft = false;
+    vehicle.camper = false;
+    world.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  test('合流点を通過済みの本線車は816m先の次回到着として扱う', () => {
+    expect(nextArrivalDistance(CONST.MERGE_POINT_Z - 10, CONST.MERGE_POINT_Z)).toBeCloseTo(
+      WRAP_LENGTH - 10,
+      8,
+    );
+    expect(nextArrivalDistance(CONST.MERGE_POINT_Z + 10, CONST.MERGE_POINT_Z)).toBeCloseTo(10, 8);
+  });
+
+  test('ramp ETAの直前直後に到着するlane 2車だけを候補枠にする', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 328, 25);
+    const passed = addVehicle(world, 'L', 2, CONST.MERGE_POINT_Z - 5, 25);
+    const before = addVehicle(world, 'L', 2, 315.5, 25);
+    const after = addVehicle(world, 'L', 2, 340.5, 25);
+    const remote = addVehicle(world, 'L', 2, 390.5, 25);
+    world.rebuildSectionIndex();
+    const slot = ramp.projectMergeSlot(2);
+    expect(slot).toMatchObject({ front: before, rear: after });
+    expect(slot?.front).not.toBe(passed);
+    expect(slot?.rear).not.toBe(remote);
+  });
+
+  test('時間gapは自由流1.4/1.6秒から低速0.8/0.8秒へ連続補間する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 328, 25);
+    expect(ramp.mergeHeadways(0)).toEqual({ front: 1.4, rear: 1.6 });
+    expect(ramp.mergeHeadways(0.5)).toEqual({ front: 1.1, rear: 1.2 });
+    expect(ramp.mergeHeadways(1)).toEqual({ front: 0.8, rear: 0.8 });
+  });
+
+  test('現在のraw z間隔ではなく合流時点へ外挿した前後gapで判定する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 328, 25);
+    addVehicle(world, 'L', 2, 310.5, 25);
+    addVehicle(world, 'L', 2, 365.5, 35);
+    world.rebuildSectionIndex();
+    const slot = ramp.projectMergeSlot(2);
+    expect(slot?.rearGap).toBeLessThan(ramp.mergeHeadways(0).rear * 35);
+    expect(ramp.isProjectedSlotSafe(slot!, 0)).toBe(false);
+  });
+
+  test('後車が接近中ならcommit開始TTC 4秒以上を要求し3秒未満は絶対禁止する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 328, 20);
+    const rear = addVehicle(world, 'L', 2, 358, 30);
+    const slot = {
+      front: null,
+      rear,
+      frontGap: Infinity,
+      rearGap: 60,
+      rearClosingTtc: 3.5,
+      rampEta: 2,
+    };
+    expect(ramp.isProjectedSlotSafe(slot, 0)).toBe(false);
+    slot.rearClosingTtc = 2.9;
+    expect(ramp.isProjectedSlotSafe(slot, 1)).toBe(false);
+    slot.rearClosingTtc = 4.1;
+    expect(ramp.isProjectedSlotSafe(slot, 0)).toBe(true);
+  });
+
+  test('局所枠が不足すると予約後車一台だけが減速より先にlane 1へ退避する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    addVehicle(world, 'L', 3, 328, 24);
+    const rear = addVehicle(world, 'L', 2, 340, 25);
+    addVehicle(world, 'L', 2, 300, 25);
+    world.step(TIME_STEP);
+    expect(rear.laneChange.to).toBe(1);
+    expect(rear.mergeCooperationTarget).toBeNull();
+    expect(world.sectionVehicles.L.filter((vehicle) => vehicle.laneChange.to === 1)).toHaveLength(
+      1,
+    );
+  });
+
+  test('退避不能時だけ目標1.2m/s²、最大3.0m/s²で局所枠を作る', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    addVehicle(world, 'L', 3, 328, 24);
+    const rear = addVehicle(world, 'L', 2, 340, 25);
+    addVehicle(world, 'L', 2, 300, 25);
+    addVehicle(world, 'L', 1, 340, 25);
+    world.step(TIME_STEP);
+    expect(rear.lane).toBe(2);
+    expect(rear.mergeCooperationTarget).not.toBeNull();
+    expect(rear.mergeCooperationDecel).toBeCloseTo(CONST.MERGE_TARGET_COOP_DECEL, 6);
+    expect((25 - rear.speed) / TIME_STEP).toBeLessThanOrEqual(CONST.MERGE_MAX_COOP_DECEL + 0.01);
+  });
+
+  test('減速協調中は予約後車と通過目標時刻を毎frame先送りしない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    addVehicle(world, 'L', 3, 328, 24);
+    const rear = addVehicle(world, 'L', 2, 340, 25);
+    addVehicle(world, 'L', 2, 300, 25);
+    addVehicle(world, 'L', 1, 340, 25);
+    world.step(TIME_STEP);
+    const targetPassTime = rear.mergeCooperationTarget;
+    world.step(TIME_STEP);
+    expect(targetPassTime).not.toBeNull();
+    expect(rear.mergeCooperationTarget).toBe(targetPassTime);
+  });
+
+  test('3.0m/s²を超える協調が必要な局所枠はcommitしない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 285, 15);
+    addVehicle(world, 'L', 2, 310, 35);
+    addVehicle(world, 'L', 1, 310, 35);
+    world.step(TIME_STEP);
+    expect(ramp.mergePlan.state).not.toBe('committed');
+  });
+
+  test('評価後に現地がdangerへ変わった枠はapply直前にcommitしない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 328, 25);
+    addVehicle(world, 'L', 2, 280, 25);
+    addVehicle(world, 'L', 2, 390, 25);
+    world.rebuildSectionIndex();
+    const plan = ramp.evaluateMergePlan(TIME_STEP, null);
+    expect(plan.state).toBe('committed');
+    addVehicle(world, 'L', 2, 328, 1);
+    world.rebuildSectionIndex();
+    ramp.applyMergePlan(plan);
+    expect(ramp.mergePlan.state).not.toBe('committed');
+    expect(ramp.laneChange.state).toBe('none');
+  });
+
+  test('dangerでcancelした車へ古いcommitted planを次frameで無条件再適用しない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 328, 25);
+    addVehicle(world, 'L', 2, 280, 25);
+    addVehicle(world, 'L', 2, 390, 25);
+    world.step(TIME_STEP);
+    expect(ramp.mergePlan.state).toBe('committed');
+    expect(ramp.laneChange.state).toBe('changing');
+    ramp.cancelLaneChange();
+    expect(ramp.mergePlan.state).toBe('seeking');
+    addVehicle(world, 'L', 2, ramp.z, 1);
+    world.step(TIME_STEP);
+    expect(ramp.laneChange.state).not.toBe('changing');
+    expect(ramp.mergePlan.state).toBe('seeking');
+  });
+
+  test('自由流の既存安全枠へ導流帯より手前で即commitする', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 330, 25);
+    addVehicle(world, 'L', 2, 280, 27);
+    addVehicle(world, 'L', 2, 390, 27);
+
+    world.step(TIME_STEP);
+
+    expect(ramp.mergePlan.state).toBe('committed');
+    expect(ramp.laneChange).toMatchObject({ from: 3, to: 2, state: 'changing' });
+    expect(ramp.z).toBeGreaterThan(CONST.GORE_Z_START);
+  });
+
+  test('空き不足では予約後車が一台だけlane 1へ退避し、減速を選ばない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 310, 24);
+    const rear = addVehicle(world, 'L', 2, 316, 25);
+    const front = addVehicle(world, 'L', 2, 280, 25);
+
+    world.step(TIME_STEP);
+
+    expect(ramp.mergePlan).toMatchObject({
+      state: 'coordinating',
+      front,
+      rear,
+    });
+    expect(rear.laneChange.to).toBe(1);
+    expect(rear.mergeCooperationTarget).toBeNull();
+    expect(
+      world.sectionVehicles.L.filter(
+        (vehicle) => vehicle.laneChange.state !== 'none' && vehicle.laneChange.to === 1,
+      ),
+    ).toHaveLength(1);
+  });
+
+  test('予約後車のlane 1退避は再評価されても進捗を維持する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    addVehicle(world, 'L', 3, 310, 24);
+    const rear = addVehicle(world, 'L', 2, 316, 25);
+    addVehicle(world, 'L', 2, 280, 25);
+
+    world.step(TIME_STEP);
+    const firstProgress = rear.laneChange.progress;
+    world.step(TIME_STEP);
+
+    expect(firstProgress).toBeGreaterThan(0);
+    expect(rear.laneChange.progress).toBeGreaterThan(firstProgress);
+  });
+
+  test('予約後車のlane 1退避完了後は同じ枠をcommitする', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 310, 24);
+    const rear = addVehicle(world, 'L', 2, 316, 25);
+    addVehicle(world, 'L', 2, 280, 25);
+
+    for (let step = 0; step < 60 && rear.lane !== 1; step++) world.step(TIME_STEP);
+    world.step(TIME_STEP);
+
+    expect(rear.lane).toBe(1);
+    expect(ramp.mergePlan).toMatchObject({
+      state: 'committed',
+      rear,
+    });
+  });
+
+  test('退避不能時だけ3.0m/s²以下の減速で枠を形成する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 310, 24);
+    const rear = addVehicle(world, 'L', 2, 316, 25);
+    const front = addVehicle(world, 'L', 2, 280, 25);
+    addVehicle(world, 'L', 1, 316, 25);
+
+    world.step(TIME_STEP);
+
+    expect(ramp.mergePlan).toMatchObject({
+      state: 'coordinating',
+      front,
+      rear,
+    });
+    expect(rear.lane).toBe(2);
+    expect(rear.mergeCooperationTarget).not.toBeNull();
+    expect((25 - rear.speed) / TIME_STEP).toBeLessThanOrEqual(CONST.MERGE_MAX_COOP_DECEL + 0.01);
+  });
+
+  test('減速で枠を形成中のランプ車はcommit前に車線変更を始めない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 310, 24);
+    addVehicle(world, 'L', 2, 330, 25);
+    addVehicle(world, 'L', 2, 280, 25);
+    addVehicle(world, 'L', 1, 330, 25);
+
+    world.step(TIME_STEP);
+
+    expect(ramp.mergePlan.state).toBe('coordinating');
+    expect(ramp.laneChange.state).toBe('none');
+  });
+
+  test('減速で形成した枠の協調目標はcommit後も合流完了まで維持する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 310, 24);
+    const rear = addVehicle(world, 'L', 2, 316, 25);
+    const front = addVehicle(world, 'L', 2, 280, 25);
+    addVehicle(world, 'L', 1, 316, 25);
+
+    world.step(TIME_STEP);
+    const cooperationTarget = rear.mergeCooperationTarget;
+    front.z = 250;
+    rear.z = 360;
+    world.step(TIME_STEP);
+
+    expect(cooperationTarget).not.toBeNull();
+    expect(ramp.mergePlan.state).toBe('committed');
+    expect(rear.mergeCooperationTarget).toBe(cooperationTarget);
+  });
+
+  test('複数ランプ車は同じfront/rear枠を同時に予約しない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramps = [addVehicle(world, 'L', 3, 310, 24), addVehicle(world, 'L', 3, 312, 24)];
+    const rear = addVehicle(world, 'L', 2, 316, 25);
+    const front = addVehicle(world, 'L', 2, 280, 25);
+
+    world.rebuildSectionIndex();
+    const evaluations = ramps.map((leader) => ({
+      leader,
+      plan: leader.evaluateMergePlan(TIME_STEP, null),
+    }));
+    expect(
+      evaluations.filter(({ plan }) => plan.front === front && plan.rear === rear),
+    ).toHaveLength(2);
+
+    world.applyMergeEvaluations(evaluations);
+
+    const appliedReservations = ramps.filter(
+      (ramp) => ramp.mergePlan.front === front && ramp.mergePlan.rear === rear,
+    );
+    expect(appliedReservations).toEqual([ramps[0]]);
+    expect(ramps[1].mergePlan).toMatchObject({
+      state: 'seeking',
+      front: null,
+      rear: null,
+    });
   });
 });

@@ -14,7 +14,7 @@ export type {
 } from './constants';
 export { clamp, lerp, smooth, createRng, WRAP_LENGTH, wrapDelta } from './utils';
 export type { Rng } from './utils';
-export { Vehicle, mergeCongestion, smoothstepRange } from './vehicle';
+export { Vehicle, mergeCongestion, nextArrivalDistance, smoothstepRange } from './vehicle';
 export type {
   LaneChange,
   LaneChangeState,
@@ -22,6 +22,7 @@ export type {
   MergeSource,
   MergeState,
   NeighborInfo,
+  ProjectedMergeSlot,
 } from './vehicle';
 export { World } from './world';
 export type { WorldOptions, SectionStats, SmoothTime } from './world';

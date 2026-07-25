@@ -7,6 +7,7 @@ import type { Section, SimMode, VehicleTypeName } from './constants';
 import { clamp, wrapDelta, WRAP_LENGTH } from './utils';
 import type { Rng } from './utils';
 import { Vehicle } from './vehicle';
+import type { MergePlan } from './vehicle';
 
 export interface WorldOptions {
   rng?: Rng;
@@ -356,6 +357,32 @@ export class World {
     );
   }
 
+  applyMergeEvaluations(evaluations: { leader: Vehicle; plan: MergePlan }[]): void {
+    const reservedRears = new Set<Vehicle>();
+    const sorted = [...evaluations].sort(
+      (a, b) =>
+        a.plan.targetPassTime - b.plan.targetPassTime ||
+        Math.abs(a.leader.z - CONST.MERGE_POINT_Z) - Math.abs(b.leader.z - CONST.MERGE_POINT_Z) ||
+        a.leader.spawnOrder - b.leader.spawnOrder,
+    );
+    for (const evaluation of sorted) {
+      const rear = evaluation.plan.rear;
+      if (rear && reservedRears.has(rear)) {
+        evaluation.leader.applyMergePlan({
+          ...evaluation.leader.mergePlan,
+          state: 'seeking',
+          front: null,
+          rear: null,
+          targetPassTime: 0,
+          nextSource: null,
+        });
+        continue;
+      }
+      if (rear) reservedRears.add(rear);
+      evaluation.leader.applyMergePlan(evaluation.plan);
+    }
+  }
+
   prepareMergeCoordination(deltaTime: number): void {
     const leaders = (['L', 'R'] as const).map((section) => this.rampLeader(section));
     const leaderSet = new Set(leaders.filter((vehicle): vehicle is Vehicle => vehicle !== null));
@@ -363,11 +390,34 @@ export class World {
       if (vehicle.waiting || vehicle.mergePlan.state === 'completed') continue;
       if (!leaderSet.has(vehicle)) vehicle.mergePlan.state = 'queued';
     }
-    for (const leader of leaders) {
-      if (!leader || leader.mergePlan.state === 'committed') continue;
-      leader.mergePlan.state = 'seeking';
+    const evaluations = leaders
+      .filter(
+        (leader): leader is Vehicle =>
+          leader !== null &&
+          !(
+            leader.mergePlan.state === 'committed' &&
+            leader.laneChange.from === 3 &&
+            leader.laneChange.to === 2 &&
+            (leader.laneChange.state === 'changing' || leader.laneChange.state === 'holding')
+          ),
+      )
+      .map((leader) => ({ leader, plan: leader.evaluateMergePlan(deltaTime, null) }));
+    this.applyMergeEvaluations(evaluations);
+    const activeRears = new Set(
+      leaders
+        .filter(
+          (leader): leader is Vehicle =>
+            leader !== null &&
+            (leader.mergePlan.state === 'coordinating' || leader.mergePlan.state === 'committed'),
+        )
+        .map((leader) => leader.mergePlan.rear)
+        .filter((rear): rear is Vehicle => rear !== null),
+    );
+    for (const vehicle of this.vehicles) {
+      if (activeRears.has(vehicle)) continue;
+      vehicle.mergeCooperationTarget = null;
+      vehicle.mergeCooperationDecel = 0;
     }
-    void deltaTime;
   }
 
   step(deltaTime: number): void {

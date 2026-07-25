@@ -31,6 +31,20 @@ export interface MergePlan {
   congestion: number;
   targetPassTime: number;
   nextSource: MergeSource | null;
+  cooperationDecel?: number;
+}
+
+export interface ProjectedMergeSlot {
+  front: Vehicle | null;
+  rear: Vehicle | null;
+  frontGap: number;
+  rearGap: number;
+  rearClosingTtc: number;
+  rampEta: number;
+}
+
+export function nextArrivalDistance(z: number, mergeZ: number): number {
+  return (((z - mergeZ) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
 }
 
 export function smoothstepRange(a: number, b: number, value: number): number {
@@ -109,6 +123,8 @@ export class Vehicle {
   keepRightTimer = 0; // マイペース派が追い越し車線へ戻るまでの計時
   returnBoostTimer = 0; // 加速復帰(塞がれた復帰先の並走車を抜くための一時加速)の残り時間
   returnBoostCooldown = 0; // 加速復帰を諦めた後の再挑戦クールダウン
+  mergeCooperationTarget: number | null = null;
+  mergeCooperationDecel = 0;
 
   constructor(
     world: World,
@@ -230,6 +246,227 @@ export class Vehicle {
     return lane === this.lane || (this.laneChange.state !== 'none' && lane === this.laneChange.to);
   }
 
+  mergeHeadways(congestion: number): { front: number; rear: number } {
+    const ratio = clamp(congestion, 0, 1);
+    const interpolate = (free: number): number =>
+      Number((free + (CONST.MERGE_CONGESTED_HEADWAY - free) * ratio).toFixed(12));
+    return {
+      front: interpolate(CONST.MERGE_FREE_FRONT_HEADWAY),
+      rear: interpolate(CONST.MERGE_FREE_REAR_HEADWAY),
+    };
+  }
+
+  projectMergeSlot(rampEta: number): ProjectedMergeSlot | null {
+    const arrivals = this.world.sectionVehicles[this.section]
+      .filter((vehicle) => vehicle !== this && vehicle.occupies(2))
+      .map((vehicle) => ({
+        vehicle,
+        eta: nextArrivalDistance(vehicle.z, CONST.MERGE_POINT_Z) / Math.max(vehicle.speed, 1),
+      }))
+      .sort((a, b) => a.eta - b.eta || a.vehicle.spawnOrder - b.vehicle.spawnOrder);
+    if (arrivals.length === 0) return null;
+    const rearIndex = arrivals.findIndex((arrival) => arrival.eta > rampEta);
+    const front = rearIndex < 0 ? arrivals.at(-1)! : arrivals[rearIndex - 1];
+    const rear = rearIndex < 0 ? null : arrivals[rearIndex];
+    const frontGap = front
+      ? (rampEta - front.eta) * front.vehicle.speed - (front.vehicle.length + this.length) / 2
+      : Infinity;
+    const rearGap = rear
+      ? (rear.eta - rampEta) * rear.vehicle.speed - (rear.vehicle.length + this.length) / 2
+      : Infinity;
+    const closingSpeed = rear ? rear.vehicle.speed - this.speed : 0;
+    return {
+      front: front?.vehicle ?? null,
+      rear: rear?.vehicle ?? null,
+      frontGap,
+      rearGap,
+      rearClosingTtc: rear && closingSpeed > 0 ? rearGap / closingSpeed : Infinity,
+      rampEta,
+    };
+  }
+
+  isProjectedSlotSafe(slot: ProjectedMergeSlot, congestion: number): boolean {
+    const headways = this.mergeHeadways(congestion);
+    return (
+      slot.frontGap >= headways.front * this.speed &&
+      slot.rearGap >= headways.rear * (slot.rear?.speed ?? 0) &&
+      slot.rearClosingTtc >= 4
+    );
+  }
+
+  estimateMergeEta(): number {
+    const distance = Math.max(0, this.z - CONST.MERGE_POINT_Z);
+    if (distance === 0) return 0;
+    const speed = Math.max(this.speed, 1);
+    const targetSpeed = Math.max(speed, this.desiredSpeed);
+    const acceleration = Math.max(this.type.acceleration, 0.1);
+    const accelerationTime = (targetSpeed - speed) / acceleration;
+    const accelerationDistance =
+      speed * accelerationTime + 0.5 * acceleration * accelerationTime ** 2;
+    if (distance <= accelerationDistance)
+      return (-speed + Math.sqrt(speed ** 2 + 2 * acceleration * distance)) / acceleration;
+    return accelerationTime + (distance - accelerationDistance) / targetSpeed;
+  }
+
+  latestMergeCommitZ(): number {
+    const completionDistance =
+      Math.max(this.speed, 1) * CONST.LANE_CHANGE_DURATION +
+      this.length +
+      CONST.MERGE_BODY_CLEARANCE;
+    return CONST.GORE_Z_START + completionDistance;
+  }
+
+  evaluateMergePlan(deltaTime: number, lastSource: MergeSource | null): MergePlan {
+    const reservedRear = this.mergePlan.rear;
+    if (
+      this.mergePlan.state === 'coordinating' &&
+      reservedRear &&
+      reservedRear.laneChange.from === 2 &&
+      reservedRear.laneChange.to === 1
+    ) {
+      if (
+        reservedRear.laneChange.state === 'changing' ||
+        reservedRear.laneChange.state === 'holding'
+      )
+        return this.mergePlan;
+      if (reservedRear.lane === 1 && reservedRear.laneChange.state === 'none')
+        return { ...this.mergePlan, state: 'committed' };
+    }
+    const rampEta = this.estimateMergeEta();
+    const slot = this.projectMergeSlot(rampEta);
+    const keepsCooperationReservation =
+      this.mergePlan.state === 'coordinating' &&
+      reservedRear !== null &&
+      reservedRear.mergeCooperationTarget === this.mergePlan.targetPassTime &&
+      slot?.front === this.mergePlan.front &&
+      slot.rear === reservedRear;
+    if (keepsCooperationReservation) {
+      if (this.isProjectedSlotSafe(slot, this.mergePlan.congestion))
+        return { ...this.mergePlan, state: 'committed' };
+      if (this.world.time < this.mergePlan.targetPassTime) return this.mergePlan;
+    }
+    const plan = (
+      state: MergeState,
+      targetPassTime: number,
+      cooperationDecel?: number,
+    ): MergePlan => ({
+      state,
+      front: slot?.front ?? null,
+      rear: slot?.rear ?? null,
+      congestion: this.mergePlan.congestion,
+      targetPassTime,
+      nextSource: 'ramp',
+      cooperationDecel,
+    });
+    void lastSource;
+    if (!slot || this.isProjectedSlotSafe(slot, this.mergePlan.congestion))
+      return plan('committed', this.world.time + rampEta);
+    if (!slot.rear)
+      return {
+        ...this.mergePlan,
+        state: 'seeking',
+        front: null,
+        rear: null,
+        targetPassTime: 0,
+        nextSource: null,
+      };
+    const headways = this.mergeHeadways(this.mergePlan.congestion);
+    const targetPassTime = this.world.time + rampEta + headways.rear;
+    if (slot.rear.checkLaneSafetyForChange(1) === 'safe')
+      return plan('coordinating', targetPassTime);
+    let cooperationDecel = CONST.MERGE_TARGET_COOP_DECEL;
+    if (this.z <= this.latestMergeCommitZ()) {
+      const rearGapShortage = Math.max(0, headways.rear * slot.rear.speed - slot.rearGap);
+      const timeToTarget = Math.max(targetPassTime - this.world.time, deltaTime);
+      const requiredDecel = (2 * rearGapShortage) / Math.max(timeToTarget ** 2, 0.01);
+      cooperationDecel = Math.max(cooperationDecel, requiredDecel);
+    }
+    if (cooperationDecel <= CONST.MERGE_MAX_COOP_DECEL)
+      return plan('coordinating', targetPassTime, cooperationDecel);
+    return {
+      ...this.mergePlan,
+      state: 'seeking',
+      front: null,
+      rear: null,
+      targetPassTime: 0,
+      nextSource: null,
+    };
+  }
+
+  isMergeApplySafe(plan: MergePlan): boolean {
+    if (plan.state !== 'committed') return false;
+    const slot = this.projectMergeSlot(this.estimateMergeEta());
+    return (
+      (!slot || this.isProjectedSlotSafe(slot, plan.congestion)) &&
+      this.checkLaneSafetyForChange(2) === 'safe'
+    );
+  }
+
+  applyMergePlan(plan: MergePlan): void {
+    const mergeLaneChange =
+      this.laneChange.from === 3 && this.laneChange.to === 2 && this.laneChange.state !== 'none';
+    if (mergeLaneChange && this.laneChange.state === 'cancel') {
+      this.mergePlan = {
+        ...plan,
+        state: 'seeking',
+        front: null,
+        rear: null,
+        targetPassTime: 0,
+        nextSource: null,
+        cooperationDecel: undefined,
+      };
+      return;
+    }
+    if (mergeLaneChange && plan.state === 'committed') {
+      this.mergePlan = plan;
+      return;
+    }
+    if (plan.state === 'committed' && !this.isMergeApplySafe(plan)) {
+      if (plan.rear?.mergeCooperationTarget === plan.targetPassTime) {
+        plan.rear.mergeCooperationTarget = null;
+        plan.rear.mergeCooperationDecel = 0;
+      }
+      this.mergePlan = {
+        ...plan,
+        state: 'seeking',
+        front: null,
+        rear: null,
+        targetPassTime: 0,
+        nextSource: null,
+        cooperationDecel: undefined,
+      };
+      return;
+    }
+    this.mergePlan = plan;
+    if (
+      plan.state === 'coordinating' &&
+      plan.rear &&
+      (plan.rear.laneChange.state === 'changing' || plan.rear.laneChange.state === 'holding') &&
+      plan.rear.laneChange.from === 2 &&
+      plan.rear.laneChange.to === 1
+    ) {
+      plan.rear.noOvertakeTimer = 3;
+      return;
+    }
+    if (plan.state === 'coordinating' && plan.rear?.tryLaneChange(1)) {
+      plan.rear.noOvertakeTimer = 3;
+      return;
+    }
+    if (plan.state === 'coordinating' && plan.rear) {
+      plan.rear.mergeCooperationTarget = plan.targetPassTime;
+      plan.rear.mergeCooperationDecel = plan.cooperationDecel ?? CONST.MERGE_TARGET_COOP_DECEL;
+      return;
+    }
+    if (plan.state !== 'committed') return;
+    this.laneChange.state = 'changing';
+    this.laneChange.from = 3;
+    this.laneChange.to = 2;
+    this.laneChange.progress = 0;
+    this.laneChange.holdTime = 0;
+    this.laneChange.checkTimer = 0.15;
+    this.world.stats.changes[this.section]++;
+  }
+
   // 隣車線にほぼ同速で並走する車両がいるか(車線変更を物理的に塞ぐ「象レース」検知)
   hasDeadlockAlongside(lane: number): boolean {
     const vehicles = this.world.sectionVehicles[this.section];
@@ -258,19 +495,6 @@ export class Vehicle {
       }
     }
     return best;
-  }
-
-  // 合流協調(Issue #33)の対象探索: 本線(lane 2)車から見て、加速車線(lane 3)で
-  // 合流しようとしている近くの車両を返す。前方(まだ抜いていない)〜ほぼ真横の
-  // 範囲だけを見る(自分がその合流車を先に入れてやる立場になり得る相手)。
-  // 加速車線の区間(RAMP_Z_END〜RAMP_Z_TOP)にいるランプ先頭車のみが対象。
-  findMergingVehicle(): Vehicle | null {
-    const leader = this.world.rampLeader(this.section);
-    if (!leader || leader === this || leader.mergePlan.state === 'queued') return null;
-    if (leader.z < CONST.RAMP_Z_END - 5 || leader.z > CONST.RAMP_Z_TOP + 5) return null;
-    const deltaZ = wrapDelta(leader.z - this.z); // 負 = 合流車が前方(z が小さい側)
-    if (deltaZ > 5 || deltaZ < -CONST.MERGE_DETECT_RANGE) return null;
-    return leader;
   }
 
   // 加速復帰の開始判定: 追い越し車線で後続に追いつかれ、復帰先(レーン1)が並走車に
@@ -394,6 +618,22 @@ export class Vehicle {
   }
 
   cancelLaneChange(): void {
+    if (this.laneChange.from === 3 && this.laneChange.to === 2) {
+      const rear = this.mergePlan.rear;
+      if (rear?.mergeCooperationTarget === this.mergePlan.targetPassTime) {
+        rear.mergeCooperationTarget = null;
+        rear.mergeCooperationDecel = 0;
+      }
+      this.mergePlan = {
+        ...this.mergePlan,
+        state: 'seeking',
+        front: null,
+        rear: null,
+        targetPassTime: 0,
+        nextSource: null,
+        cooperationDecel: undefined,
+      };
+    }
     if (this.laneChange.state !== 'cancel') {
       this.laneChange.state = 'cancel';
       this.world.stats.cancels[this.section]++;
@@ -450,64 +690,11 @@ export class Vehicle {
     // 渋滞吸収運転モードでは車線変更なし(単一車線の追従実験と同じ純粋比較)。
     // 車線変更があると吸収運転車の広い車間が追い越しで埋められ、比較が濁る。
     if (this.world.mode === 'absorb') return;
-    // 合流(加速車線): 本線の隙間を見つけ次第、走行車線へ入る。
-    // 終端が近づくほど、現実のドライバー同様に受け入れる隙間を妥協する
-    if (this.lane === 3) {
-      if (this.mergePlan.state === 'queued') return;
-      const remainingDistance = this.z - CONST.RAMP_Z_END;
-      const mergePressure = clamp(1 - remainingDistance / 80, 0, 1);
-      const mergeAhead = this.findAhead(2),
-        mergeBehind = this.findBehind(2);
-      const aheadClear =
-        !mergeAhead || mergeAhead.gap > (this.speed * 0.45 + 4) * (1 - 0.5 * mergePressure);
-      const behindClear =
-        !mergeBehind ||
-        mergeBehind.gap >
-          Math.max(
-            2.0,
-            (mergeBehind.vehicle.speed - this.speed) * (1.4 - 0.7 * mergePressure) + 2.5,
-          );
-      if (aheadClear && behindClear) {
-        this.laneChange.state = 'changing';
-        this.laneChange.from = 3;
-        this.laneChange.to = 2;
-        this.laneChange.progress = 0;
-        this.laneChange.holdTime = 0;
-        this.laneChange.checkTimer = 0.15;
-        this.world.stats.changes[this.section]++;
-      }
-      return;
-    }
+    // ランプ車の合流開始は予約を確定した applyMergePlan だけが行う。
+    if (this.lane === 3) return;
     // 渋滞にはまっている時は譲り・復帰・キープレフトの車線変更はしない。
     // 実際のドライバーも、流れている時にだけ譲り合いの車線変更をする
     const flowing = this.speed > this.desiredSpeed * 0.6;
-    // (合流協調 — Issue #33) 本線(lane 2): 加速車線(lane 3)で合流しようとして
-    // いる車を前方〜真横に認識したら、その車が自分の前へ入れるよう協調する。
-    // 加速車線で止まらせないため、本線側が「枠を空ける/譲る」ことで受け入れる。
-    // 流れている時だけ協調する(渋滞中は皆遅く速度差も小さいので合流は自然に成立し、
-    // そこで無理に譲ると本線を余計に詰まらせる)。
-    // これは「合流という状況に対する一般的な運転挙動」であり、両区間で完全に同一に
-    // する。区間差は「追いつかれた車両の義務」ただ1つに限らねばならず(それ以外の差は
-    // L/R 比較の交絡になる)、yields/camper/keepLeft 等の区間依存要素は条件に使わない。
-    if (this.lane === 2 && flowing) {
-      const merger = this.findMergingVehicle();
-      // 自分がその合流車のすぐ後ろ(=合流車が前に入りたい相手)の時だけ動く。
-      // 同じ合流車に本線の複数台が一斉退避して lane 1 を混雑させるのを防ぐ
-      if (merger && merger.findBehind(2)?.vehicle === this) {
-        // まず退避: 追い越し車線側(lane 1)が空いていれば移り、lane 2 に枠を作る。
-        // 「合流待ちを視認したら右車線へ退避」に相当(速度差によらず低コストで協調)
-        if (this.tryLaneChange(1)) {
-          this.noOvertakeTimer = 3; // 退避直後は追い越し(戻り)を我慢して枠を保つ
-          return;
-        }
-        // 退避できない場合、速度差が小さいなら減速して合流車を先に入れる
-        // (速度差が小さい時は加速車線=合流車が優先 — Issue #33)。速度差が大きい
-        // (合流車がまだ遅い)時は譲らず、合流車自身の加速に委ねる
-        if (Math.abs(this.speed - merger.speed) < CONST.MERGE_YIELD_SPEED_DIFF) {
-          this.yieldSlowTimer = Math.max(this.yieldSlowTimer, 1.0);
-        }
-      }
-    }
     // (0) 渋滞中の乗り換え: 自分の車線が進まず、隣が明確に流れている/空いている
     // 時は隣へ移る(全員ではなく苛立っている人ほど。左右では左を優先)。
     // これがないと「追い越し車線だけ詰まり、隣がガラ空き」の不自然な状態になる
@@ -720,6 +907,13 @@ export class Vehicle {
         );
       }
     }
+    let mergeCooperationLimited = false;
+    if (this.mergeCooperationTarget !== null) {
+      const remaining = Math.max(this.mergeCooperationTarget - this.world.time, deltaTime);
+      const cooperativeSpeed = Math.max(0, (this.z - CONST.MERGE_POINT_Z) / remaining);
+      mergeCooperationLimited = cooperativeSpeed < targetSpeed;
+      targetSpeed = Math.min(targetSpeed, cooperativeSpeed);
+    }
     let requiredDecel = 0; // 衝突回避に物理的に必要な減速度
     if (ahead) {
       // 安全車間サーボ。苛立つほど車間を詰める(詰めた分だけ波に弱くなる)
@@ -835,6 +1029,7 @@ export class Vehicle {
         : requiredDecel > 0.5
           ? clamp(requiredDecel * brakeAmp, minBrakeDecel, 30)
           : voluntaryDecel;
+      if (mergeCooperationLimited && requiredDecel <= 0.5) decel = this.mergeCooperationDecel;
       if (this.perturbTimer > 0) decel = Math.max(decel, 9); // よそ見ブレーキは全員同じ強さ(公平)
       // 急ブレーキを踏んだら後続への警告にハザードを焚く
       if (decel >= 14 && this.speed > 8) this.hazardTimer = 2.5;
