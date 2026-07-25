@@ -22,6 +22,35 @@ export interface NeighborInfo {
   gap: number;
 }
 
+export type MergeState = 'queued' | 'seeking' | 'coordinating' | 'committed' | 'completed';
+export type MergeSource = 'main' | 'ramp';
+export interface MergePlan {
+  state: MergeState;
+  front: Vehicle | null;
+  rear: Vehicle | null;
+  congestion: number;
+  targetPassTime: number;
+  nextSource: MergeSource | null;
+}
+
+export function smoothstepRange(a: number, b: number, value: number): number {
+  const t = clamp((value - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+export function mergeCongestion(
+  mainPace: number,
+  mainDesiredPace: number,
+  mainGap: number,
+  safeGap: number,
+): number {
+  const speedRatio = mainPace / Math.max(mainDesiredPace, 1);
+  const gapRatio = mainGap / Math.max(safeGap, 0.1);
+  const speedCongestion = 1 - smoothstepRange(0.35, 0.75, speedRatio);
+  const gapCongestion = 1 - smoothstepRange(0.8, 1.8, gapRatio);
+  return clamp(0.65 * speedCongestion + 0.35 * gapCongestion, 0, 1);
+}
+
 export class Vehicle {
   world: World;
   section: Section;
@@ -37,6 +66,7 @@ export class Vehicle {
   targetSpeed: number;
   x: number;
   laneChange: LaneChange;
+  mergePlan: MergePlan;
   laneChangeCooldown: number;
   returnTimer: number;
   keepLeftTimer: number;
@@ -108,6 +138,14 @@ export class Vehicle {
       progress: 0,
       holdTime: 0,
       checkTimer: 0,
+    };
+    this.mergePlan = {
+      state: lane === 3 ? 'queued' : 'completed',
+      front: null,
+      rear: null,
+      congestion: 0,
+      targetPassTime: 0,
+      nextSource: null,
     };
     this.laneChangeCooldown = 0;
     this.returnTimer = 0;

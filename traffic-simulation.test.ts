@@ -7,7 +7,7 @@
  * 実行方法:  vp test run  (npm test)
  */
 import { describe, expect, test } from 'vitest';
-import { CONST, createRng, Vehicle, World } from './src/core';
+import { CONST, createRng, mergeCongestion, Vehicle, World } from './src/core';
 import { isLandscapeViewport } from './src/render/camera-layout';
 import { loopCopies } from './src/render/looping';
 
@@ -803,5 +803,47 @@ describe('俯瞰カメラの端末向き (Issue #76)', () => {
     [900, 900, true],
   ])('%ix%i は横向き判定が %s', (width, height, expected) => {
     expect(isLandscapeViewport(width, height)).toBe(expected);
+  });
+});
+
+describe('複数台の安全で自然な合流 (Issue #48)', () => {
+  function addVehicle(
+    world: World,
+    section: 'L' | 'R',
+    lane: number,
+    z: number,
+    speed: number,
+  ): Vehicle {
+    const vehicle = new Vehicle(world, section, lane, z, 'Sedan', speed);
+    vehicle.speed = speed;
+    vehicle.keepLeft = false;
+    vehicle.camper = false;
+    world.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  test('速度比と車間比から混雑度を連続値で求める', () => {
+    expect(mergeCongestion(30, 30, 36, 20)).toBeCloseTo(0, 6);
+    expect(mergeCongestion(10.5, 30, 16, 20)).toBeCloseTo(1, 6);
+    const values = Array.from({ length: 101 }, (_, index) =>
+      mergeCongestion(10.5 + index * 0.12, 30, 16 + index * 0.2, 20),
+    );
+    for (let index = 1; index < values.length; index++) {
+      expect(values[index]).toBeLessThanOrEqual(values[index - 1]);
+      expect(Math.abs(values[index] - values[index - 1])).toBeLessThanOrEqual(0.05);
+    }
+  });
+
+  test('ランプ車は明示的な五状態と空の予約で初期化される', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, CONST.RAMP_Z_TOP - 10, 25);
+    expect(ramp.mergePlan).toMatchObject({
+      state: 'queued',
+      front: null,
+      rear: null,
+      congestion: 0,
+      targetPassTime: 0,
+      nextSource: null,
+    });
   });
 });

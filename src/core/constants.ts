@@ -61,6 +61,14 @@ export const CONST = {
   MERGE_STOP_MARGIN: 30, // ランプ終端までこの距離を切った時だけ(未合流なら)終端で止まれる速度に制限する。それより手前では加速車線として本線流速まで加速させ、止まらせない (m)
   MERGE_DETECT_RANGE: 40, // 本線車(lane 2)が加速車線の合流車を認識する縦方向の範囲 (m)。車間サーボの安全距離(≒ speed×0.55)と同オーダーで「視認できる前方」に相当
   MERGE_YIELD_SPEED_DIFF: 5.0, // 合流車と本線車の速度差がこれ未満なら「速度差が小さい」= 合流車を優先して本線車が譲る (m/s ≒ 18km/h)。加速車線1本ぶんの加速で埋められる差であり、車線変更安全判定が前方車を「+1で速い」とみなす幅より広く取った実用値
+  MERGE_POINT_Z: 278,
+  GORE_Z_START: 258,
+  GORE_Z_END: 242,
+  GORE_OUTER_X: -16.7,
+  GORE_MAIN_X: -13,
+  MERGE_CONGESTION_TIME_CONSTANT: 1,
+  MERGE_MAX_COOP_DECEL: 3.5,
+  MERGE_BODY_CLEARANCE: 2,
   REF_SPEED: 25, // スコア算出の基準速度 (m/s ≒ 90km/h)
   SCORE_WEIGHT_SPEED: 0.75,
   SCORE_WEIGHT_DENSITY: 0.25,
