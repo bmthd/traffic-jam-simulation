@@ -888,7 +888,8 @@ describe('複数台の安全で自然な合流 (Issue #48)', () => {
     ramps[0].mergePlan.state = 'completed';
     world.rebuildSectionIndex();
     world.prepareMergeCoordination(TIME_STEP);
-    expect(ramps[1].mergePlan.state).toBe('seeking');
+    expect(ramps[1].mergePlan.state).toBe('coordinating');
+    expect(ramps[1].mergePlan.nextSource).toBe('main');
     expect(ramps[2].mergePlan.state).toBe('queued');
   });
 
@@ -1355,6 +1356,28 @@ describe('低速ジッパー合流 (Issue #48)', () => {
     expect(main.mergeCooperationTarget).toBeNull();
   });
 
+  test('中間混雑でも本線が次順ならlane 1退避も減速協調も要求しない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    world.lastMergeSource.L = 'ramp';
+    const ramp = addVehicle(world, 'L', 3, 305, 6);
+    const main = addVehicle(world, 'L', 2, 309, 6);
+    const front = addVehicle(world, 'L', 2, 293, 6);
+    main.desiredSpeed = 10;
+    front.desiredSpeed = 10;
+    world.rebuildSectionIndex();
+    const rawCongestion = ramp.projectMergeCongestionSample(
+      ramp.projectMergeSlot(ramp.estimateMergeEta()),
+    );
+    expect(rawCongestion).toBeGreaterThan(0);
+    expect(rawCongestion).toBeLessThan(0.9);
+
+    world.step(TIME_STEP);
+
+    expect(ramp.mergePlan.nextSource).toBe('main');
+    expect(main.laneChange.state).toBe('none');
+    expect(main.mergeCooperationTarget).toBeNull();
+  });
+
   test('commit後は本線速度が変わっても予約枠・混雑度・順番を変えない', () => {
     const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
     const ramp = addVehicle(world, 'L', 3, 325, 22);
@@ -1450,5 +1473,28 @@ describe('低速ジッパー合流 (Issue #48)', () => {
     world.lastMergeSource.R = 'main';
     world.reset();
     expect(world.lastMergeSource).toEqual({ L: null, R: null });
+  });
+
+  test('合流点下流でランプ合流が完了しても次周のmain通過を捨てない', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    world.lastMergeSource.L = 'main';
+    const ramp = addVehicle(world, 'L', 3, CONST.MERGE_POINT_Z - 5, 10);
+    ramp.mergePlan.state = 'committed';
+    ramp.laneChange = {
+      state: 'changing',
+      from: 3,
+      to: 2,
+      progress: 0.99,
+      holdTime: 0,
+      checkTimer: 1,
+    };
+
+    world.step(TIME_STEP);
+    expect(world.lastMergeSource.L).toBe('ramp');
+
+    ramp.previousZ = CONST.MERGE_POINT_Z + 0.1;
+    ramp.z = CONST.MERGE_POINT_Z - 0.1;
+    world.recordMergePasses();
+    expect(world.lastMergeSource.L).toBe('main');
   });
 });

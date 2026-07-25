@@ -423,7 +423,7 @@ export class Vehicle {
       slot?.front === this.mergePlan.front &&
       slot.rear === reservedRear;
     if (keepsCooperationReservation) {
-      if (lowSpeedZipper && nextSource === 'main')
+      if (nextSource === 'main')
         return {
           ...this.mergePlan,
           congestion,
@@ -431,7 +431,7 @@ export class Vehicle {
           nextSource,
           cooperationDecel: 0,
         };
-      if (this.isProjectedSlotSafe(slot, congestion) && !(lowSpeedZipper && nextSource === 'main'))
+      if (this.isProjectedSlotSafe(slot, congestion))
         return { ...this.mergePlan, state: 'committed', congestion, nextSource };
       const rearGapShortage = Math.max(0, headways.rear * reservedRear.speed - slot.rearGap);
       const timeToTarget = Math.max(this.mergePlan.targetPassTime - this.world.time, deltaTime);
@@ -471,14 +471,13 @@ export class Vehicle {
       nextSource,
       cooperationDecel,
     });
-    if (lowSpeedZipper && nextSource === 'main') return plan('coordinating', targetPassTime, 0);
+    if (nextSource === 'main') return plan('coordinating', targetPassTime, 0);
     if (!slot || this.isProjectedSlotSafe(slot, congestion)) {
-      const waitsForTurn = lowSpeedZipper && nextSource === 'main';
       const waitsForCurrentSafety = this.checkLaneSafetyForChange(2) !== 'safe';
       return plan(
-        waitsForTurn || waitsForCurrentSafety ? 'coordinating' : 'committed',
+        waitsForCurrentSafety ? 'coordinating' : 'committed',
         targetPassTime,
-        waitsForTurn || waitsForCurrentSafety ? 0 : undefined,
+        waitsForCurrentSafety ? 0 : undefined,
       );
     }
     if (!slot.rear) {
@@ -790,7 +789,7 @@ export class Vehicle {
         laneChange.state = 'none';
         if (laneChange.from === 3 && laneChange.to === 2) {
           this.mergePlan.state = 'completed';
-          this.mergedFromRamp = true;
+          this.mergedFromRamp = this.z >= CONST.MERGE_POINT_Z;
           this.rampMergePassPending = true;
         }
         this.laneChangeCooldown = 4.0 + this.world.rng() * 5; // 変更直後は当分しない(面倒・疲れる)
