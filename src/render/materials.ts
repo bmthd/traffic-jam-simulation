@@ -200,8 +200,59 @@ export const mountainNearMaterial = new THREE.MeshBasicMaterial({
 });
 
 /* ---- 雲(昼のみ。夜はthemeがフェードアウト) ---- */
+function makeCloudTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+
+  // ひと続きの輪郭で、丸いスプライトを重ねたような継ぎ目を出さない。
+  const cloud = new Path2D();
+  cloud.moveTo(18, 91);
+  cloud.bezierCurveTo(13, 76, 25, 64, 43, 64);
+  cloud.bezierCurveTo(46, 46, 62, 35, 80, 39);
+  cloud.bezierCurveTo(88, 19, 112, 12, 130, 29);
+  cloud.bezierCurveTo(148, 21, 170, 31, 174, 50);
+  cloud.bezierCurveTo(192, 43, 212, 53, 213, 70);
+  cloud.bezierCurveTo(235, 69, 246, 82, 238, 96);
+  cloud.bezierCurveTo(226, 111, 45, 112, 25, 101);
+  cloud.bezierCurveTo(21, 99, 19, 95, 18, 91);
+  cloud.closePath();
+
+  ctx.save();
+  ctx.filter = 'blur(3px)';
+  const body = ctx.createLinearGradient(0, 18, 0, 108);
+  body.addColorStop(0, 'rgba(255,255,255,0.98)');
+  body.addColorStop(0.62, 'rgba(249,251,252,0.94)');
+  body.addColorStop(1, 'rgba(214,225,231,0.68)');
+  ctx.fillStyle = body;
+  ctx.fill(cloud);
+  ctx.restore();
+
+  // 上面だけに淡いハイライトを重ね、平板な白い板に見えないようにする。
+  ctx.save();
+  ctx.clip(cloud);
+  ctx.filter = 'blur(6px)';
+  for (const [x, y, radius] of [
+    [78, 49, 31],
+    [126, 36, 38],
+    [171, 53, 30],
+  ]) {
+    const highlight = ctx.createRadialGradient(x, y, 2, x, y, radius);
+    highlight.addColorStop(0, 'rgba(255,255,255,0.72)');
+    highlight.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = highlight;
+    ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+  }
+  ctx.restore();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.generateMipmaps = true;
+  return texture;
+}
+
 export const cloudMaterial = new THREE.SpriteMaterial({
-  map: makeGlowTexture('rgba(255,255,255,0.85)', 'rgba(255,255,255,0)'),
+  map: makeCloudTexture(),
   transparent: true,
   depthWrite: false,
   fog: false,
