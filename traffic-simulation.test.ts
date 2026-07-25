@@ -680,14 +680,19 @@ describe('合流(加速車線)の協調 (Issue #33)', () => {
     expect(main.mergeCooperationTarget, '速度差が小さいのに減速枠を予約しなかった').not.toBeNull();
   });
 
-  test('退避できず速度差が大きいときは即commitせず穏やかな協調に留める', () => {
-    const { world, main } = coopSetup(8, true); // 速度差 |25-8|=17 > 閾値, lane 1 は塞がれている
+  test('退避できず速度差が大きくTTCも短いときは譲らない', () => {
+    const { world, main, merger } = coopSetup(8, true); // 速度差 |25-8|=17 > 閾値, lane 1 は塞がれている
     expect(Math.abs(25 - 8), 'テスト前提: 速度差が閾値以上でない').toBeGreaterThan(
       CONST.MERGE_YIELD_SPEED_DIFF,
     );
+    merger.z = merger.latestMergeCommitZ() - 0.1;
+    world.rebuildSectionIndex();
+    const slot = merger.projectMergeSlot(merger.estimateMergeEta());
+    expect(slot?.rear, 'テスト前提: 本線車が予約後車でない').toBe(main);
+    expect(slot?.rearClosingTtc, 'テスト前提: TTCが3秒未満でない').toBeLessThan(3);
     world.step(TIME_STEP);
     expect(world.rampLeader('L')?.mergePlan.state).not.toBe('committed');
-    expect((25 - main.speed) / TIME_STEP).toBeLessThanOrEqual(CONST.MERGE_MAX_COOP_DECEL + 0.01);
+    expect(main.mergeCooperationTarget).toBeNull();
   });
 });
 
@@ -981,6 +986,23 @@ describe('自由流の合流枠予約 (Issue #48)', () => {
     expect(ramp.mergeHeadways(1)).toEqual({ front: 0.8, rear: 0.8 });
   });
 
+  test('局所本線の速度と車間から混雑度を平滑化し実際のheadwayへ反映する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 328, 25);
+    const front = addVehicle(world, 'L', 2, 291, 10);
+    const rear = addVehicle(world, 'L', 2, 305, 10);
+    front.desiredSpeed = 30;
+    rear.desiredSpeed = 30;
+    world.rebuildSectionIndex();
+
+    const plan = ramp.evaluateMergePlan(1, null);
+    const headways = ramp.mergeHeadways(plan.congestion);
+
+    expect(plan.congestion).toBeCloseTo(1 - Math.exp(-1), 6);
+    expect(headways.front).toBeLessThan(CONST.MERGE_FREE_FRONT_HEADWAY);
+    expect(headways.rear).toBeLessThan(CONST.MERGE_FREE_REAR_HEADWAY);
+  });
+
   test('現在のraw z間隔ではなく合流時点へ外挿した前後gapで判定する', () => {
     const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
     const ramp = addVehicle(world, 'L', 3, 328, 25);
@@ -1048,6 +1070,46 @@ describe('自由流の合流枠予約 (Issue #48)', () => {
     world.step(TIME_STEP);
     expect(targetPassTime).not.toBeNull();
     expect(rear.mergeCooperationTarget).toBe(targetPassTime);
+  });
+
+  test('予約維持中も期限時の必要減速度を再計算し3.0m/s²超なら再探索する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 328, 24);
+    const rear = addVehicle(world, 'L', 2, 340, 25);
+    const front = addVehicle(world, 'L', 2, 300, 25);
+    const wall = addVehicle(world, 'L', 1, 340, 25);
+    world.step(TIME_STEP);
+    expect(ramp.mergePlan).toMatchObject({ state: 'coordinating', front, rear });
+
+    ramp.z = ramp.latestMergeCommitZ() - 0.1;
+    front.z = 290;
+    rear.z = 315;
+    wall.z = 315;
+    world.rebuildSectionIndex();
+    const reevaluated = ramp.evaluateMergePlan(TIME_STEP, null);
+
+    expect(reevaluated).toMatchObject({
+      state: 'seeking',
+      front: null,
+      rear: null,
+    });
+  });
+
+  test('協調目標時刻は半車長合計を含めて予約後車とのnet gapを確保する', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 328, 24);
+    const rear = addVehicle(world, 'L', 2, 340, 25);
+    addVehicle(world, 'L', 2, 300, 25);
+    addVehicle(world, 'L', 1, 340, 25);
+    world.rebuildSectionIndex();
+
+    const plan = ramp.evaluateMergePlan(0, null);
+    const rearNetGapAtTarget =
+      (plan.targetPassTime - world.time - ramp.estimateMergeEta()) * rear.speed -
+      (ramp.length + rear.length) / 2;
+
+    expect(plan).toMatchObject({ state: 'coordinating', rear });
+    expect(rearNetGapAtTarget).toBeCloseTo(40, 6);
   });
 
   test('3.0m/s²を超える協調が必要な局所枠はcommitしない', () => {
