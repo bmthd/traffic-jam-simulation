@@ -313,8 +313,20 @@ export class World {
     this.vehicles.length = 0;
     this.spawnAccumulator = 0;
     this.time = 0;
+    this.sectionVehicles = { L: [], R: [] };
+    this.stats = {
+      changes: { L: 0, R: 0 },
+      yields: { L: 0, R: 0 },
+      cancels: { L: 0, R: 0 },
+      inflow: { L: 0, R: 0 },
+      outflow: { L: 0, R: 0 },
+    };
     this.smoothTime = { L: 0, R: 0, draw: 0 }; // 累積の比較もやり直す
+    this.absorberRoundRobin = null;
+    this.laneRoundRobin = 0;
+    this.perturbTimer = null;
     this.populateInitial();
+    this.rebuildSectionIndex();
   }
 
   rebuildSectionIndex(): void {
