@@ -3,7 +3,12 @@
    そこでカラーモード切替と同じ「押すたびに切り替わる丸ボタン」1つに集約し、
    マニュアル → オート → 各プリセット → マニュアル… と循環させる。
    カメラ状態そのものは render/camera.ts が持ち、ここは操作と表示だけを行う。 */
-import { cycleSpectatorMode, getSpectatorStatus, onSpectatorChange } from '../render/camera';
+import {
+  cycleSpectatorMode,
+  getSpectatorStatus,
+  onSpectatorChange,
+  onSpectatorProgress,
+} from '../render/camera';
 import type { SpectatorStatus } from '../render/camera';
 import { icon, renderIcons } from './icons';
 
@@ -18,6 +23,7 @@ export function setupSpectator(): void {
     // アイコンは「今どのモードか」を表す
     button.innerHTML = icon(status.mode.icon);
     button.classList.toggle('on', status.enabled);
+    button.classList.toggle('auto', status.auto);
     label.textContent = status.mode.label;
     label.classList.toggle('show', showLabel);
     clearTimeout(labelTimer);
@@ -34,5 +40,8 @@ export function setupSpectator(): void {
 
   button.addEventListener('click', cycleSpectatorMode);
   onSpectatorChange((status) => render(status, true));
+  onSpectatorProgress((progress) => {
+    button.style.setProperty('--auto-cycle-progress', String(progress));
+  });
   render(getSpectatorStatus(), false);
 }

@@ -240,6 +240,18 @@ function notify(): void {
   changeListener?.(getSpectatorStatus());
 }
 
+type SpectatorProgressListener = (progress: number) => void;
+let progressListener: SpectatorProgressListener | null = null;
+/** 自動巡回の次の視点切替までの進捗を 0〜1 で通知する */
+export function onSpectatorProgress(listener: SpectatorProgressListener): void {
+  progressListener = listener;
+  listener(
+    spectator.modeIndex === AUTO_MODE_INDEX
+      ? clamp(spectator.cycleTimer / AUTO_CYCLE_INTERVAL, 0, 1)
+      : 0,
+  );
+}
+
 // 今の姿勢を起点にして、目標姿勢への補間をやり直す
 function beginTransition(): void {
   spectator.transitionTime = 0;
@@ -252,6 +264,7 @@ function switchPreset(index: number): void {
   spectator.presetIndex = (index + SPECTATOR_PRESETS.length) % SPECTATOR_PRESETS.length;
   spectator.presetTime = 0;
   spectator.cycleTimer = 0;
+  progressListener?.(0);
   beginTransition();
   followVehicle = null; // プリセットが変わったら追尾対象は選び直す
   followChanged = false;
@@ -279,6 +292,7 @@ function setMode(index: number): void {
     // マニュアルモードへ戻す。今の見え方をそのまま軌道パラメータへ引き継ぐ
     syncOrbitFromCamera();
     followVehicle = null;
+    progressListener?.(0);
   } else if (spectator.modeIndex === AUTO_MODE_INDEX) {
     // オートモードは先頭のプリセットから始める
     switchPreset(0);
@@ -307,6 +321,7 @@ function updateSpectator(world: World, deltaTime: number): void {
       // プリセットごとに表示が入れ替わるとうるさいため (Issue #43)
       switchPreset(spectator.presetIndex + 1);
     }
+    progressListener?.(clamp(spectator.cycleTimer / AUTO_CYCLE_INTERVAL, 0, 1));
   }
   SPECTATOR_PRESETS[spectator.presetIndex].compute(goalPose, {
     time: spectator.presetTime,
