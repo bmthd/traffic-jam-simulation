@@ -417,11 +417,17 @@ export class Vehicle {
     const blendedPassTime = lerp(reservedPassTime, zipperPassTime, congestion);
     const distanceToDeadline = Math.max(0, this.z - this.latestMergeCommitZ());
     const urgency = 1 - smoothstepRange(0, CONST.MERGE_DETECT_RANGE, distanceToDeadline);
-    const rampArrivalTime = this.world.time + rampEta;
-    const targetDelay = blendedPassTime - rampArrivalTime;
-    const reservedDelay = reservedPassTime - rampArrivalTime;
-    const urgencyBias = urgency * Math.max(0, targetDelay - reservedDelay);
-    const targetPassTime = blendedPassTime - urgencyBias;
+    const urgencyBias = urgency * Math.max(0, blendedPassTime - reservedPassTime);
+    const urgencyTargetPassTime = blendedPassTime - urgencyBias;
+    const deadlineStepDistance = Math.max(this.speed * deltaTime, 0.001);
+    const safetyFloorUrgency = 1 - smoothstepRange(0, deadlineStepDistance, distanceToDeadline);
+    const targetPassTime =
+      nextSource === 'ramp'
+        ? Math.max(
+            urgencyTargetPassTime,
+            lerp(urgencyTargetPassTime, reservedPassTime, safetyFloorUrgency),
+          )
+        : urgencyTargetPassTime;
     const lowSpeedZipper = rawCongestion >= 0.9;
     const keepsCooperationReservation =
       this.mergePlan.state === 'coordinating' &&
@@ -1031,6 +1037,7 @@ export class Vehicle {
     // 前方車への追従・緊急ブレーキはこの後の通常ロジックがそのまま制限するため安全は保たれる
     if (this.returnBoostTimer > 0) desire += CONST.RETURN_BOOST_SPEED_DELTA;
     let targetSpeed = this.yieldSlowTimer > 0 ? Math.max(8, desire - 2.5) : desire;
+    let mergeArrivalDecel = 0;
     if (
       this.lane === 3 &&
       this.mergePlan.state !== 'queued' &&
@@ -1038,7 +1045,15 @@ export class Vehicle {
     ) {
       const time = this.mergePlan.targetPassTime - this.world.time;
       const mergeSpeed = Math.max(1, (this.z - CONST.MERGE_POINT_Z) / time);
-      targetSpeed = Math.min(targetSpeed, Math.max(this.speed, mergeSpeed));
+      const formsGapBeforeCommit =
+        (this.mergePlan.state === 'seeking' || this.mergePlan.state === 'coordinating') &&
+        (this.mergePlan.rear === null || this.mergePlan.nextSource === 'main') &&
+        this.checkLaneSafetyForChange(2) !== 'safe' &&
+        this.z - this.latestMergeCommitZ() <= CONST.MERGE_DETECT_RANGE;
+      if (formsGapBeforeCommit && mergeSpeed < targetSpeed) {
+        mergeArrivalDecel = CONST.MERGE_MAX_COOP_DECEL;
+        targetSpeed = mergeSpeed;
+      } else targetSpeed = Math.min(targetSpeed, Math.max(this.speed, mergeSpeed));
     }
     let mergeCooperationLimited = false;
     if (this.mergeCooperationTarget !== null) {
@@ -1162,6 +1177,7 @@ export class Vehicle {
         : requiredDecel > 0.5
           ? clamp(requiredDecel * brakeAmp, minBrakeDecel, 30)
           : voluntaryDecel;
+      if (mergeArrivalDecel > 0 && requiredDecel <= 0.5) decel = mergeArrivalDecel;
       if (mergeCooperationLimited && requiredDecel <= 0.5) decel = this.mergeCooperationDecel;
       if (this.perturbTimer > 0) decel = Math.max(decel, 9); // よそ見ブレーキは全員同じ強さ(公平)
       // 急ブレーキを踏んだら後続への警告にハザードを焚く
