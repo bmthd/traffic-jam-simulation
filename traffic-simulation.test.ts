@@ -1684,6 +1684,52 @@ describe('合流の終端安全と区間同一性 (Issue #48)', () => {
     expect(ramp.lane).toBe(2);
   });
 
+  test.each([
+    ['main z=300・5m/s', 300, 5],
+    ['main z=320・10m/s', 320, 10],
+  ] as const)('%sとの投影gapが成立するまで速度協調を継続する', (_, mainZ, mainSpeed) => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = addVehicle(world, 'L', 3, 380, 20);
+    const main = addVehicle(world, 'L', 2, mainZ, mainSpeed);
+    let previousRampSpeed = ramp.speed;
+    let previousRampZ = ramp.z;
+    let previousDeadline = ramp.latestMergeCommitZ();
+    let committedBeforeDeadline = false;
+    let observedCurrentSafeBeforeProjectedGap = false;
+
+    for (let step = 0; step < 600 && ramp.mergePlan.state !== 'completed'; step++) {
+      world.step(TIME_STEP);
+      const reservedSlot = ramp.projectReservedMergeSlot(ramp.mergePlan);
+      if (
+        ramp.mergePlan.state === 'coordinating' &&
+        reservedSlot &&
+        ramp.checkLaneSafetyForChange(2) === 'safe' &&
+        !ramp.isProjectedSlotSafe(reservedSlot, ramp.mergePlan.congestion)
+      )
+        observedCurrentSafeBeforeProjectedGap = true;
+      if (!committedBeforeDeadline && ramp.mergePlan.state === 'committed') {
+        expect(previousRampZ).toBeGreaterThanOrEqual(previousDeadline - 1e-8);
+        expect(reservedSlot).not.toBeNull();
+        expect(ramp.isProjectedSlotSafe(reservedSlot!, ramp.mergePlan.congestion)).toBe(true);
+        committedBeforeDeadline = true;
+      }
+      expect((previousRampSpeed - ramp.speed) / TIME_STEP).toBeLessThanOrEqual(
+        CONST.MERGE_MAX_COOP_DECEL + 0.01,
+      );
+      expect(main.mergeCooperationDecel).toBeLessThanOrEqual(CONST.MERGE_MAX_COOP_DECEL);
+      expect(ramp.lane === 3 && ramp.z <= CONST.GORE_Z_START).toBe(false);
+      previousRampSpeed = ramp.speed;
+      previousRampZ = ramp.z;
+      previousDeadline = ramp.latestMergeCommitZ();
+    }
+
+    expect(observedCurrentSafeBeforeProjectedGap).toBe(true);
+    expect(committedBeforeDeadline).toBe(true);
+    expect(ramp.mergePlan.state).toBe('completed');
+    expect(ramp.lane).toBe(2);
+    expect(ramp.z).toBeGreaterThan(CONST.GORE_Z_START);
+  });
+
   test('deadline直前の危険な横並びを安全確認なしでcommitしない', () => {
     const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
     const ramp = addVehicle(world, 'L', 3, 300, 2);
@@ -1726,9 +1772,11 @@ describe('合流の終端安全と区間同一性 (Issue #48)', () => {
   test('危険な横並びのランプ先頭車は予約時刻へ合う速度まで減速する', () => {
     const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
     const ramp = addVehicle(world, 'L', 3, 300, 20);
-    addVehicle(world, 'L', 2, 300, 20);
+    const main = addVehicle(world, 'L', 2, 300, 20);
     ramp.mergePlan.state = 'coordinating';
+    ramp.mergePlan.front = main;
     ramp.mergePlan.targetPassTime = 3;
+    ramp.mergePlan.nextSource = 'main';
     world.rebuildSectionIndex();
 
     ramp.update(TIME_STEP);

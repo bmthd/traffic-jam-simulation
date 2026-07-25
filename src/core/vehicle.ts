@@ -289,6 +289,44 @@ export class Vehicle {
     };
   }
 
+  projectReservedMergeSlot(plan: MergePlan): ProjectedMergeSlot | null {
+    const vehicles = [plan.front, plan.rear].filter(
+      (vehicle, index, all): vehicle is Vehicle =>
+        vehicle !== null && all.indexOf(vehicle) === index,
+    );
+    if (vehicles.length === 0 || plan.targetPassTime <= this.world.time) return null;
+    const rampEta = plan.targetPassTime - this.world.time;
+    const projected = vehicles.map((vehicle) => ({
+      vehicle,
+      z: vehicle.z - vehicle.speed * rampEta,
+    }));
+    // 予約時の rear が先に合流点を通る場合があるため、固定した車両参照を
+    // targetPassTime の位置へ投影してから前後を分類し直す
+    const front =
+      projected
+        .filter(({ z }) => z <= CONST.MERGE_POINT_Z)
+        .sort((a, b) => b.z - a.z || a.vehicle.spawnOrder - b.vehicle.spawnOrder)[0] ?? null;
+    const rear =
+      projected
+        .filter(({ z }) => z > CONST.MERGE_POINT_Z)
+        .sort((a, b) => a.z - b.z || a.vehicle.spawnOrder - b.vehicle.spawnOrder)[0] ?? null;
+    const frontGap = front
+      ? CONST.MERGE_POINT_Z - front.z - (front.vehicle.length + this.length) / 2
+      : Infinity;
+    const rearGap = rear
+      ? rear.z - CONST.MERGE_POINT_Z - (rear.vehicle.length + this.length) / 2
+      : Infinity;
+    const closingSpeed = rear ? rear.vehicle.speed - this.speed : 0;
+    return {
+      front: front?.vehicle ?? null,
+      rear: rear?.vehicle ?? null,
+      frontGap,
+      rearGap,
+      rearClosingTtc: rear && closingSpeed > 0 ? rearGap / closingSpeed : Infinity,
+      rampEta,
+    };
+  }
+
   isProjectedSlotSafe(slot: ProjectedMergeSlot, congestion: number): boolean {
     const headways = this.mergeHeadways(congestion);
     return (
@@ -376,6 +414,17 @@ export class Vehicle {
         return this.mergePlan;
       if (reservedRear.lane === 1 && reservedRear.laneChange.state === 'none')
         return { ...this.mergePlan, state: 'committed' };
+    }
+    const reservedSlot = this.projectReservedMergeSlot(this.mergePlan);
+    const keepsRampArrivalReservation =
+      this.mergePlan.state === 'coordinating' &&
+      (this.mergePlan.rear === null || this.mergePlan.nextSource === 'main') &&
+      reservedSlot !== null;
+    if (keepsRampArrivalReservation) {
+      // commit 判定は固定予約の投影条件で行い、現在位置の danger は apply 直前に別途判定する
+      if (this.isProjectedSlotSafe(reservedSlot, this.mergePlan.congestion))
+        return { ...this.mergePlan, state: 'committed' };
+      return this.mergePlan;
     }
     const rampEta = this.estimateMergeEta();
     const slot = this.projectMergeSlot(rampEta);
@@ -547,6 +596,16 @@ export class Vehicle {
       return;
     }
     if (plan.state === 'committed' && !this.isMergeApplySafe(plan)) {
+      const keepsRampArrivalReservation =
+        (plan.rear === null || plan.nextSource === 'main') &&
+        this.projectReservedMergeSlot(plan) !== null;
+      if (keepsRampArrivalReservation) {
+        this.mergePlan = {
+          ...plan,
+          state: 'coordinating',
+        };
+        return;
+      }
       if (plan.rear?.mergeCooperationTarget === plan.targetPassTime) {
         plan.rear.mergeCooperationTarget = null;
         plan.rear.mergeCooperationDecel = 0;
@@ -1038,6 +1097,7 @@ export class Vehicle {
     if (this.returnBoostTimer > 0) desire += CONST.RETURN_BOOST_SPEED_DELTA;
     let targetSpeed = this.yieldSlowTimer > 0 ? Math.max(8, desire - 2.5) : desire;
     let mergeArrivalDecel = 0;
+    let mergeArrivalLimited = false;
     if (
       this.lane === 3 &&
       this.mergePlan.state !== 'queued' &&
@@ -1045,14 +1105,24 @@ export class Vehicle {
     ) {
       const time = this.mergePlan.targetPassTime - this.world.time;
       const mergeSpeed = Math.max(1, (this.z - CONST.MERGE_POINT_Z) / time);
-      const formsGapBeforeCommit =
+      const reservedSlot = this.projectReservedMergeSlot(this.mergePlan);
+      mergeArrivalLimited = reservedSlot !== null;
+      const keepsReservedArrivalBeforeCommit =
         (this.mergePlan.state === 'seeking' || this.mergePlan.state === 'coordinating') &&
         (this.mergePlan.rear === null || this.mergePlan.nextSource === 'main') &&
-        this.checkLaneSafetyForChange(2) !== 'safe' &&
-        this.z - this.latestMergeCommitZ() <= CONST.MERGE_DETECT_RANGE;
-      if (formsGapBeforeCommit && mergeSpeed < targetSpeed) {
-        mergeArrivalDecel = CONST.MERGE_MAX_COOP_DECEL;
-        targetSpeed = mergeSpeed;
+        reservedSlot !== null;
+      if (keepsReservedArrivalBeforeCommit) {
+        const frontSpeedLimit = reservedSlot.front
+          ? reservedSlot.frontGap / this.mergeHeadways(this.mergePlan.congestion).front
+          : Infinity;
+        const arrivalSpeed = Math.max(1, Math.min(mergeSpeed, frontSpeedLimit));
+        // 固定予約の到着速度へ残り時間で合わせる必要減速度だけを使い、上限を越えない
+        mergeArrivalDecel = clamp(
+          (this.speed - arrivalSpeed) / time,
+          0,
+          CONST.MERGE_MAX_COOP_DECEL,
+        );
+        targetSpeed = Math.min(targetSpeed, arrivalSpeed);
       } else targetSpeed = Math.min(targetSpeed, Math.max(this.speed, mergeSpeed));
     }
     let mergeCooperationLimited = false;
@@ -1177,7 +1247,9 @@ export class Vehicle {
         : requiredDecel > 0.5
           ? clamp(requiredDecel * brakeAmp, minBrakeDecel, 30)
           : voluntaryDecel;
-      if (mergeArrivalDecel > 0 && requiredDecel <= 0.5) decel = mergeArrivalDecel;
+      if (mergeArrivalLimited && requiredDecel <= 0.5)
+        decel =
+          mergeArrivalDecel > 0 ? mergeArrivalDecel : Math.min(decel, CONST.MERGE_MAX_COOP_DECEL);
       if (mergeCooperationLimited && requiredDecel <= 0.5) decel = this.mergeCooperationDecel;
       if (this.perturbTimer > 0) decel = Math.max(decel, 9); // よそ見ブレーキは全員同じ強さ(公平)
       // 急ブレーキを踏んだら後続への警告にハザードを焚く
