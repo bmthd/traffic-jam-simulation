@@ -7,9 +7,9 @@ import type { Section, SimMode, VehicleTypeName } from './constants';
 import { clamp, wrapDelta, WRAP_LENGTH } from './utils';
 import type { Rng } from './utils';
 import {
+  isMergeTransactionAdmissible,
   MergeTransactionPlanningError,
   planMergeTransaction,
-  validateMergeTransactionCorridor,
 } from './merge-transaction';
 import { Vehicle } from './vehicle';
 import type {
@@ -419,7 +419,7 @@ export class World {
     for (const vehicle of heads) {
       if (!vehicle.waiting || vehicle.lane !== 3) continue;
       if (activeRampSections.has(vehicle.section)) continue;
-      const certificate = vehicle.evaluateEntryCertificate(snapshot);
+      const certificate = vehicle.evaluateEntryCertificate(snapshot, deltaTime);
       if (!certificate) continue;
       const provisionalPlan: MergePlan = {
         ...vehicle.mergePlan,
@@ -429,8 +429,8 @@ export class World {
         envelope: certificate.envelope,
         certificate,
       };
-      try {
-        validateMergeTransactionCorridor(
+      if (
+        !isMergeTransactionAdmissible(
           snapshot,
           {
             plan: provisionalPlan,
@@ -444,11 +444,9 @@ export class World {
               : null,
           },
           deltaTime,
-        );
-      } catch (error) {
-        if (error instanceof MergeTransactionPlanningError) continue;
-        throw error;
-      }
+        )
+      )
+        continue;
       candidates.push({
         vehicle,
         candidate: {

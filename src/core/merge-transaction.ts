@@ -14,6 +14,29 @@ import type {
 } from './vehicle';
 
 const MIN_AHEAD_DISTANCE = 0.001;
+const TIME_EPSILON = 1e-9;
+const LANE_CHANGE_COMPLETE_EPSILON = 1e-9;
+
+/**
+ * 予約期限を越えない一回分の離散時間を返す。
+ * 証明時と実行時で同じ最終 partial step を使い、remaining < deltaTime も矛盾なく扱う。
+ */
+export function mergeTransactionStepDuration(
+  currentTime: number,
+  targetPassTime: number,
+  deltaTime: number,
+): number | null {
+  const remaining = targetPassTime - currentTime;
+  if (!(deltaTime > 0) || !Number.isFinite(deltaTime) || remaining <= TIME_EPSILON) return null;
+  return Math.min(deltaTime, remaining);
+}
+
+/** 連続時間の到着予測を、証明と実行が共有する次の tick 境界へ切り上げる。 */
+export function quantizeMergeDuration(duration: number, deltaTime: number): number {
+  if (!(duration > 0) || !(deltaTime > 0) || !Number.isFinite(duration + deltaTime))
+    return duration;
+  return Math.ceil(duration / deltaTime - TIME_EPSILON) * deltaTime;
+}
 
 function wrappedAheadDistance(follower: VehicleSnapshot, ahead: VehicleSnapshot): number {
   return (((follower.z - ahead.z) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
@@ -230,7 +253,14 @@ export function planMergeTransaction(
     if (!certificate) throw new MergeTransactionPlanningError(directive.plan, '証明書なし');
     const ramp = snapshot.byOrder.get(certificate.rampOrder);
     if (!ramp) throw new MergeTransactionPlanningError(directive.plan, 'ランプrole消失');
-    const remaining = Math.max(certificate.targetPassTime - snapshot.time, deltaTime);
+    const remaining = certificate.targetPassTime - snapshot.time;
+    const stepDuration = mergeTransactionStepDuration(
+      snapshot.time,
+      certificate.targetPassTime,
+      deltaTime,
+    );
+    if (stepDuration === null)
+      throw new MergeTransactionPlanningError(directive.plan, '予約期限切れ');
 
     const cooperationOrder = certificate.cooperation?.rearOrder ?? null;
     const preferred = new Map<number, number>();
@@ -239,11 +269,11 @@ export function planMergeTransaction(
       const member = snapshot.byOrder.get(order);
       if (!member) throw new MergeTransactionPlanningError(directive.plan, `role消失:${order}`);
       const deceleration = order === cooperationOrder ? (certificate.cooperation?.decel ?? 0) : 0;
-      preferred.set(order, member.speed - deceleration * deltaTime);
+      preferred.set(order, member.speed - deceleration * stepDuration);
       const progressFloor = Math.min(member.speed, CONST.MERGE_TRANSACTION_MIN_SPEED);
       reachableMin.set(
         order,
-        Math.max(progressFloor, member.speed - CONST.MERGE_MAX_COOP_DECEL * deltaTime),
+        Math.max(progressFloor, member.speed - CONST.MERGE_MAX_COOP_DECEL * stepDuration),
       );
     }
 
@@ -285,7 +315,7 @@ export function planMergeTransaction(
       const terminalSpeed = resolveTerminalSpeed(order);
       const terminalTrajectoryMax =
         terminalSpeed +
-        ((member.speed - terminalSpeed) * Math.max(0, remaining - deltaTime)) / remaining;
+        ((member.speed - terminalSpeed) * Math.max(0, remaining - stepDuration)) / remaining;
       let nextSpeed = Math.min(wanted, terminalTrajectoryMax);
       let limitingEdge = '';
       for (const aheadOrder of aheadByFollower.get(order) ?? []) {
@@ -299,7 +329,7 @@ export function planMergeTransaction(
         const bodyGap = wrappedAheadDistance(member, ahead) - (member.length + ahead.length) / 2;
         const availableGap = bodyGap - CONST.MERGE_BODY_CLEARANCE;
         const collisionMax = Math.min(
-          aheadNextSpeed + availableGap / deltaTime,
+          aheadNextSpeed + availableGap / stepDuration,
           // 期限時に clearance だけでなく相対速度も 0 にして legacy へ戻す。
           aheadNextSpeed + (2 * availableGap) / remaining,
         );
@@ -326,7 +356,7 @@ export function planMergeTransaction(
       addMotion(directive, {
         vehicleOrder: order,
         nextSpeed,
-        nextZ: nextLongitudinalPosition(member, nextSpeed, deltaTime),
+        nextZ: nextLongitudinalPosition(member, nextSpeed, stepDuration),
         nextX: member.x,
         laneChangeProgress: null,
       });
@@ -336,15 +366,15 @@ export function planMergeTransaction(
     const rampMinimum = Math.max(
       progressFloor,
       directive.envelope.min,
-      ramp.speed - CONST.MERGE_MAX_COOP_DECEL * deltaTime,
+      ramp.speed - CONST.MERGE_MAX_COOP_DECEL * stepDuration,
     );
     const rampMaximum = Math.min(
       directive.envelope.max,
-      ramp.speed + ramp.maxAcceleration * deltaTime,
+      ramp.speed + ramp.maxAcceleration * stepDuration,
     );
     if (rampMinimum > rampMaximum)
       throw new MergeTransactionPlanningError(directive.plan, 'ランプ速度包絡なし');
-    const targetSpeed = (ramp.z - certificate.completionZ) / Math.max(remaining, deltaTime);
+    const targetSpeed = (ramp.z - certificate.completionZ) / remaining;
     const nextSpeed = clamp(targetSpeed, rampMinimum, rampMaximum);
     if (!Number.isFinite(nextSpeed) || nextSpeed <= 0)
       throw new MergeTransactionPlanningError(directive.plan, 'ランプ正速度なし');
@@ -357,7 +387,7 @@ export function planMergeTransaction(
     const progress =
       directive.startLaneChange && ramp.laneChange.state === 'none' ? 0 : ramp.laneChange.progress;
     const laneChangeProgress = changing
-      ? Math.min(1, progress + deltaTime / CONST.LANE_CHANGE_DURATION)
+      ? Math.min(1, progress + stepDuration / CONST.LANE_CHANGE_DURATION)
       : null;
     const nextX =
       laneChangeProgress === null
@@ -370,7 +400,7 @@ export function planMergeTransaction(
     addMotion(directive, {
       vehicleOrder: ramp.order,
       nextSpeed,
-      nextZ: nextLongitudinalPosition(ramp, nextSpeed, deltaTime),
+      nextZ: nextLongitudinalPosition(ramp, nextSpeed, stepDuration),
       nextX,
       laneChangeProgress,
     });
@@ -425,13 +455,22 @@ export function validateMergeTransactionHorizon(
     const current = makeSnapshot();
     const ramp = current.byOrder.get(certificate.rampOrder);
     if (!ramp) throw new MergeTransactionPlanningError(directive.plan, 'ランプrole消失');
+    const stepDuration = mergeTransactionStepDuration(
+      current.time,
+      certificate.targetPassTime,
+      deltaTime,
+    );
+    if (stepDuration === null) break;
     const envelope = {
-      min: Math.max(certificate.envelope.min, ramp.speed - CONST.MERGE_MAX_COOP_DECEL * deltaTime),
-      max: Math.min(certificate.envelope.max, ramp.speed + ramp.maxAcceleration * deltaTime),
+      min: Math.max(
+        certificate.envelope.min,
+        ramp.speed - CONST.MERGE_MAX_COOP_DECEL * stepDuration,
+      ),
+      max: Math.min(certificate.envelope.max, ramp.speed + ramp.maxAcceleration * stepDuration),
     };
     const startLaneChange =
       ramp.laneChange.state === 'none' &&
-      ramp.z <= certificate.completionZ + ramp.speed * (CONST.LANE_CHANGE_DURATION + deltaTime);
+      ramp.z <= certificate.completionZ + ramp.speed * (CONST.LANE_CHANGE_DURATION + stepDuration);
     const transaction = planMergeTransaction(
       current,
       [
@@ -441,7 +480,7 @@ export function validateMergeTransactionHorizon(
           startLaneChange,
         },
       ],
-      deltaTime,
+      stepDuration,
     );
     const motions = new Map(transaction.motions.map((motion) => [motion.vehicleOrder, motion]));
     const rampMotion = motions.get(certificate.rampOrder);
@@ -475,14 +514,14 @@ export function validateMergeTransactionHorizon(
       const progress = isRamp ? motion.laneChangeProgress : null;
       return {
         ...vehicle,
-        lane: progress !== null && progress >= 1 ? 2 : vehicle.lane,
+        lane: progress !== null && progress >= 1 - LANE_CHANGE_COMPLETE_EPSILON ? 2 : vehicle.lane,
         z: motion.nextZ,
         x: motion.nextX,
         speed: motion.nextSpeed,
         laneChange:
           progress === null
             ? vehicle.laneChange
-            : progress >= 1
+            : progress >= 1 - LANE_CHANGE_COMPLETE_EPSILON
               ? {
                   ...vehicle.laneChange,
                   state: 'none' as const,
@@ -498,10 +537,19 @@ export function validateMergeTransactionHorizon(
                 },
       };
     });
-    time += deltaTime;
-    if (rampMotion.laneChangeProgress !== null && rampMotion.laneChangeProgress >= 1) return;
+    time += stepDuration;
+    if (
+      rampMotion.laneChangeProgress !== null &&
+      rampMotion.laneChangeProgress >= 1 - LANE_CHANGE_COMPLETE_EPSILON
+    )
+      return;
   }
-  throw new MergeTransactionPlanningError(directive.plan, 'ランプ車線変更未完了');
+  const ramp = vehicles.find((vehicle) => vehicle.order === certificate.rampOrder);
+  throw new MergeTransactionPlanningError(
+    directive.plan,
+    `ランプ車線変更未完了:progress=${ramp?.laneChange.progress},z=${ramp?.z},` +
+      `time=${time},target=${certificate.targetPassTime}`,
+  );
 }
 
 /**
@@ -563,4 +611,19 @@ export function validateMergeTransactionCorridor(
     );
 
   validateMergeTransactionHorizon(snapshot, directive, deltaTime);
+}
+
+/** 離散軌道を最後まで証明できる入場候補だけを採用可能とする。 */
+export function isMergeTransactionAdmissible(
+  snapshot: WorldSnapshot,
+  directive: MergeDirective,
+  deltaTime: number,
+): boolean {
+  try {
+    validateMergeTransactionCorridor(snapshot, directive, deltaTime);
+    return true;
+  } catch (error) {
+    if (error instanceof MergeTransactionPlanningError) return false;
+    throw error;
+  }
 }

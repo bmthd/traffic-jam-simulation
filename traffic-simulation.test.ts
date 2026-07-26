@@ -7,10 +7,12 @@
  * 実行方法:  vp test run  (npm test)
  */
 import { describe, expect, test } from 'vitest';
+import { createAnimationFaultBoundary } from './src/animation-loop';
 import {
   buildMergeDependencyClosure,
   CONST,
   createRng,
+  isMergeTransactionAdmissible,
   mergeCongestion,
   nextArrivalDistance,
   planMergeTransaction,
@@ -2963,5 +2965,144 @@ describe('前方縦列予約 transaction (Issue #48)', () => {
     expect(ramp.speed).toBe(12);
     expect(actualMotion.nextSpeed).toBe(expectedMotion.nextSpeed);
     expect(actualMotion.nextZ).toBe(expectedMotion.nextZ);
+  });
+});
+
+describe('離散時間の合流証明書 (Issue #48)', () => {
+  test('ログで再現したclosure edgeが最大減速度で届かない証明書はactive化前に拒否する', () => {
+    const deltaTime = 0.016700000002980234;
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    world.time = 40.72679999998917;
+    const ramp = new Vehicle(world, 'L', 3, 289.906, 'Sedan', 19.023411173242454);
+    const follower = new Vehicle(world, 'L', 2, -274.601, 'Sedan', 13.77235242512215);
+    const ahead = new Vehicle(world, 'L', 2, -281.7486726740629, 'Sedan', 11.87032148304499);
+    ramp.speed = 19.023411173242454;
+    ramp.waiting = true;
+    follower.speed = 13.77235242512215;
+    ahead.speed = 11.87032148304499;
+    world.vehicles.push(ramp, follower, ahead);
+    const snapshot = world.captureSnapshot();
+    const certificate = {
+      rampOrder: ramp.spawnOrder,
+      frontOrder: null,
+      rearOrder: null,
+      targetPassTime: 41.35268198166156,
+      completionZ: CONST.MERGE_POINT_Z,
+      envelope: {
+        min: 18.97287904935719,
+        max: 19.023411173242454,
+      },
+      cooperation: null,
+      closure: {
+        orders: [follower.spawnOrder, ahead.spawnOrder],
+        edges: [
+          {
+            followerOrder: follower.spawnOrder,
+            aheadOrder: ahead.spawnOrder,
+          },
+        ],
+      },
+    };
+    const plan = {
+      ...ramp.mergePlan,
+      targetPassTime: certificate.targetPassTime,
+      completionZ: certificate.completionZ,
+      envelope: certificate.envelope,
+      certificate,
+    };
+
+    expect(
+      isMergeTransactionAdmissible(
+        snapshot,
+        {
+          plan,
+          envelope: certificate.envelope,
+          startLaneChange: false,
+          cooperation: null,
+        },
+        deltaTime,
+      ),
+    ).toBe(false);
+    expect(ramp.waiting).toBe(true);
+    expect(ramp.mergePlan.certificate).toBeNull();
+  });
+
+  test('seed=48の高流入を60fpsで300秒進めても回廊例外・導流帯侵入・activeからwaitingへの逆戻りがない', () => {
+    const deltaTime = 0.016700000002980234;
+    const world = new World({ rng: createRng(48), spawnInterval: 300 });
+    world.populateInitial();
+    let firstViolation: string | null = null;
+    let sawRampWaiting = false;
+
+    for (let step = 0; step < 300 / deltaTime && firstViolation === null; step++) {
+      const activeRampOrders = new Set(
+        world.vehicles
+          .filter((vehicle) => !vehicle.waiting && vehicle.lane === 3)
+          .map((vehicle) => vehicle.spawnOrder),
+      );
+      try {
+        world.step(deltaTime);
+      } catch (error) {
+        firstViolation = `step=${step}: ${error instanceof Error ? error.message : String(error)}`;
+        break;
+      }
+      sawRampWaiting ||= world.vehicles.some((vehicle) => vehicle.waiting && vehicle.lane === 3);
+      for (const vehicle of world.vehicles) {
+        if (activeRampOrders.has(vehicle.spawnOrder) && vehicle.waiting)
+          firstViolation = `step=${step}: active車両${vehicle.spawnOrder}がwaitingへ戻った`;
+        if (vehicle.waiting || vehicle.lane !== 3) continue;
+        if (
+          vehicle.z <= CONST.GORE_Z_START ||
+          rampBodyIntersectsGore(
+            sectionTrackX(vehicle.section, vehicle.x),
+            vehicle.z,
+            vehicle.width,
+            vehicle.length,
+          )
+        )
+          firstViolation = `step=${step}: lane 3車両${vehicle.spawnOrder}が導流帯へ侵入した`;
+      }
+    }
+
+    expect(firstViolation).toBeNull();
+    expect(sawRampWaiting).toBe(true);
+  });
+});
+
+describe('アニメーションループの障害境界 (Issue #48)', () => {
+  test('更新例外を一度だけ記録して更新を停止し、静止描画と明示リセットを維持する', () => {
+    const invariantError = new Error('導流帯不変条件違反');
+    const reported: unknown[] = [];
+    const boundary = createAnimationFaultBoundary((error) => reported.push(error));
+    let steps = 0;
+    let renders = 0;
+
+    boundary.runFrame(
+      () => {
+        steps++;
+        throw invariantError;
+      },
+      () => renders++,
+    );
+    boundary.runFrame(
+      () => steps++,
+      () => renders++,
+    );
+
+    expect(steps).toBe(1);
+    expect(renders).toBe(2);
+    expect(reported).toEqual([invariantError]);
+    expect(boundary.fault?.error).toBe(invariantError);
+
+    boundary.reset();
+    boundary.runFrame(
+      () => steps++,
+      () => renders++,
+    );
+
+    expect(boundary.fault).toBeNull();
+    expect(steps).toBe(2);
+    expect(renders).toBe(3);
+    expect(reported).toEqual([invariantError]);
   });
 });

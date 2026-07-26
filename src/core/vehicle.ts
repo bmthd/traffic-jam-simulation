@@ -4,7 +4,12 @@
    ============================================================ */
 import { CONST, TYPES } from './constants';
 import type { Section, VehicleTypeName, VehicleTypeSpec } from './constants';
-import { buildMergeDependencyClosure, mergeClosureTerminalSpeeds } from './merge-transaction';
+import {
+  buildMergeDependencyClosure,
+  mergeClosureTerminalSpeeds,
+  mergeTransactionStepDuration,
+  quantizeMergeDuration,
+} from './merge-transaction';
 import { clamp, lerp, smooth, wrapDelta, WRAP_LENGTH } from './utils';
 import type { World } from './world';
 
@@ -430,7 +435,7 @@ export class Vehicle {
    * 読み取り専用 snapshot から、入口待ちランプ車の入場可能性を証明する。
    * 直近の前後車だけを wrapped ETA で選ぶため、周回後の遠隔車は枠に混ぜない。
    */
-  evaluateEntryCertificate(snapshot: WorldSnapshot): MergeCertificate | null {
+  evaluateEntryCertificate(snapshot: WorldSnapshot, deltaTime = 1 / 20): MergeCertificate | null {
     const ramp = snapshot.vehicles.find((vehicle) => vehicle.order === this.spawnOrder);
     if (!ramp || !ramp.waiting || ramp.lane !== 3) return null;
 
@@ -445,11 +450,12 @@ export class Vehicle {
     const accelerationTime = Math.max(0, (cruiseSpeed - ramp.speed) / acceleration);
     const accelerationDistance =
       ramp.speed * accelerationTime + 0.5 * acceleration * accelerationTime ** 2;
-    const eta =
+    const continuousEta =
       distance <= accelerationDistance
         ? (-ramp.speed + Math.sqrt(ramp.speed ** 2 + 2 * acceleration * distance)) / acceleration
         : accelerationTime + (distance - accelerationDistance) / cruiseSpeed;
-    if (!Number.isFinite(eta) || eta < CONST.LANE_CHANGE_DURATION) return null;
+    if (!Number.isFinite(continuousEta) || continuousEta < CONST.LANE_CHANGE_DURATION) return null;
+    const eta = quantizeMergeDuration(continuousEta, deltaTime);
 
     const envelope: SpeedEnvelope = {
       min: Math.max(0, ramp.speed - CONST.MERGE_MAX_COOP_DECEL * eta),
@@ -542,8 +548,13 @@ export class Vehicle {
     const ramp = snapshot.vehicles.find((vehicle) => vehicle.order === this.spawnOrder);
     if (!certificate || !ramp || ramp.waiting || ramp.lane !== 3) return null;
     const remaining = certificate.targetPassTime - snapshot.time;
+    const stepDuration = mergeTransactionStepDuration(
+      snapshot.time,
+      certificate.targetPassTime,
+      deltaTime,
+    );
     const bodySafeCompletionZ = CONST.GORE_Z_START + ramp.length / 2 + CONST.MERGE_BODY_CLEARANCE;
-    if (remaining + 1e-9 < deltaTime || certificate.completionZ < bodySafeCompletionZ) return null;
+    if (stepDuration === null || certificate.completionZ < bodySafeCompletionZ) return null;
     const resolve = (order: number | null): VehicleSnapshot | null =>
       order === null
         ? null
@@ -577,8 +588,11 @@ export class Vehicle {
         ? rearGap / (rearSpeed - certificate.envelope.max)
         : Infinity;
     const envelope: SpeedEnvelope = {
-      min: Math.max(certificate.envelope.min, ramp.speed - CONST.MERGE_MAX_COOP_DECEL * deltaTime),
-      max: Math.min(certificate.envelope.max, ramp.speed + this.type.acceleration * deltaTime),
+      min: Math.max(
+        certificate.envelope.min,
+        ramp.speed - CONST.MERGE_MAX_COOP_DECEL * stepDuration,
+      ),
+      max: Math.min(certificate.envelope.max, ramp.speed + this.type.acceleration * stepDuration),
     };
     const headways = this.mergeHeadways(0);
     if (
@@ -594,7 +608,8 @@ export class Vehicle {
       envelope,
       startLaneChange:
         ramp.laneChange.state === 'none' &&
-        ramp.z <= certificate.completionZ + ramp.speed * (CONST.LANE_CHANGE_DURATION + deltaTime),
+        ramp.z <=
+          certificate.completionZ + ramp.speed * (CONST.LANE_CHANGE_DURATION + stepDuration),
       cooperation: cooperation
         ? { vehicleOrder: cooperation.rearOrder, decel: cooperation.decel }
         : null,

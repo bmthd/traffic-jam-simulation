@@ -25,9 +25,12 @@ export type { Rng } from './utils';
 export { Vehicle, mergeCongestion, nextArrivalDistance, smoothstepRange } from './vehicle';
 export {
   buildMergeDependencyClosure,
+  isMergeTransactionAdmissible,
   mergeClosureTerminalSpeeds,
+  mergeTransactionStepDuration,
   MergeTransactionPlanningError,
   planMergeTransaction,
+  quantizeMergeDuration,
   validateMergeTransactionCorridor,
   validateMergeTransactionHorizon,
 } from './merge-transaction';
