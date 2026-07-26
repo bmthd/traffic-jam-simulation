@@ -8,6 +8,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { CONST, createRng, Vehicle, World } from './src/core';
+import { headOnFollowPose } from './src/render/follow-camera';
 import { loopCopies } from './src/render/looping';
 
 /* ---------- ヘルパー: シナリオ実行 ---------- */
@@ -789,5 +790,17 @@ describe('リセット時の内部状態初期化 (Issue #54)', () => {
 describe('周回道路の描画 (Issue #73)', () => {
   test('境界の前後1周ぶんに同じ道路設備を配置する', () => {
     expect(loopCopies(0)).toEqual([-816, 0, 816]);
+  });
+});
+
+/* ============================================================
+   13. 正面追尾カメラ (Issue #77)
+   ============================================================ */
+describe('正面追尾カメラ (Issue #77)', () => {
+  test('進行方向(-Z)の前方から車両へ後方を向く構図を作る', () => {
+    expect(headOnFollowPose({ x: 18, z: -30 })).toEqual({
+      position: { x: 21.5, y: 3.3, z: -43 },
+      target: { x: 18, y: 1.25, z: -25.5 },
+    });
   });
 });

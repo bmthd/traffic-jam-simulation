@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { CONST, clamp, smooth } from '../core';
 import type { Vehicle, World } from '../core';
+import { headOnFollowPose } from './follow-camera';
 import { camera, renderer } from './scene';
 
 export interface CameraController {
@@ -43,7 +44,14 @@ function applyOrbit(): void {
    カメラが車から取り残されず、視点の移動だけが滑らかになる。
    状態管理はこのモジュールに閉じ、app.ts のループから毎フレーム更新する。 */
 
-export type SpectatorPresetId = 'drone' | 'overhead' | 'lookup' | 'follow' | 'driver' | 'ramp';
+export type SpectatorPresetId =
+  | 'drone'
+  | 'overhead'
+  | 'lookup'
+  | 'follow'
+  | 'front-follow'
+  | 'driver'
+  | 'ramp';
 
 interface Pose {
   position: THREE.Vector3;
@@ -139,6 +147,20 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
       // 車は -Z 方向へ進むので、後方 = +Z 側。少し横にずらして車体を見せる
       pose.position.set(vehicle.x - 5.5, 4.2, vehicle.z + 13);
       pose.target.set(vehicle.x, 1.3, vehicle.z - 6);
+    },
+  },
+  {
+    id: 'front-follow',
+    label: '正面追尾',
+    icon: 'video',
+    // 車の進行方向(-Z)の前方から、迫ってくる車両をなぞる。
+    // 追尾対象は通常の追尾・ドライバー視点と共有して、切替時も自然につながる
+    compute(pose, { world }) {
+      const vehicle = pickFollowVehicle(world);
+      if (!vehicle) return fallbackPose(pose);
+      const headOnPose = headOnFollowPose(vehicle);
+      pose.position.set(headOnPose.position.x, headOnPose.position.y, headOnPose.position.z);
+      pose.target.set(headOnPose.target.x, headOnPose.target.y, headOnPose.target.z);
     },
   },
   {

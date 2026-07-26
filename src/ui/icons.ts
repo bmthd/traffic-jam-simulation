@@ -28,6 +28,7 @@ import {
   Sun,
   Timer,
   TriangleAlert,
+  Video,
   X,
 } from 'lucide';
 
@@ -58,6 +59,7 @@ const ICONS = {
   Sun,
   Timer,
   TriangleAlert,
+  Video,
   X,
 };
 
