@@ -2017,22 +2017,6 @@ describe('導流帯越境不変条件 (Issue #48)', () => {
     expect(certificate!.cooperation!.decel).toBeLessThanOrEqual(CONST.MERGE_MAX_COOP_DECEL);
   });
 
-  test('front role自身の直前車へ追従余裕がない候補には証明書を発行しない', () => {
-    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
-    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
-    const front = new Vehicle(world, 'L', 2, 310, 'Sedan', 20);
-    const frontAhead = new Vehicle(world, 'L', 2, 300, 'Sedan', 20);
-    ramp.speed = 24;
-    front.speed = 20;
-    frontAhead.speed = 20;
-    ramp.waiting = true;
-    world.vehicles.push(ramp, front, frontAhead);
-
-    const certificate = ramp.evaluateEntryCertificate(world.captureSnapshot());
-
-    expect(certificate).toBeNull();
-  });
-
   test('予約後にrear速度が回廊を空にすると移動前に不変条件エラーにする', () => {
     const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
     const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
@@ -2286,5 +2270,39 @@ describe('前方縦列予約 transaction (Issue #48)', () => {
         1,
       ),
     ).toMatchObject({ ok: false, reason: 'limit' });
+  });
+
+  test('frontとrearから必要な前方縦列を証明書へ固定する', () => {
+    const world = dependencyWorld();
+    const ramp = world.vehicles.find((vehicle) => vehicle.lane === 3)!;
+    const [front, frontAhead, rear] = world.vehicles.filter((vehicle) => vehicle.lane === 2);
+
+    world.admitWaiting();
+
+    expect(ramp.waiting).toBe(false);
+    expect(ramp.mergePlan.certificate?.closure.orders).toEqual(
+      [front.spawnOrder, frontAhead.spawnOrder, rear.spawnOrder].sort((a, b) => a - b),
+    );
+    expect(ramp.mergePlan.certificate?.closure.edges).toEqual(
+      expect.arrayContaining([
+        { followerOrder: rear.spawnOrder, aheadOrder: front.spawnOrder },
+        { followerOrder: front.spawnOrder, aheadOrder: frontAhead.spawnOrder },
+      ]),
+    );
+  });
+
+  test('停止member・lane change・cycle・limitの候補はwaitingを解除しない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const stoppedFront = new Vehicle(world, 'L', 2, 310, 'Sedan', 20);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    stoppedFront.speed = 0;
+    world.vehicles.push(ramp, stoppedFront);
+
+    world.admitWaiting();
+
+    expect(ramp.waiting).toBe(true);
+    expect(ramp.mergePlan.certificate).toBeNull();
   });
 });

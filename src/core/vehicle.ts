@@ -4,6 +4,7 @@
    ============================================================ */
 import { CONST, TYPES } from './constants';
 import type { Section, VehicleTypeName, VehicleTypeSpec } from './constants';
+import { buildMergeDependencyClosure } from './merge-transaction';
 import { clamp, lerp, smooth, wrapDelta, WRAP_LENGTH } from './utils';
 import type { World } from './world';
 
@@ -79,6 +80,7 @@ export interface MergeCertificate {
   readonly completionZ: number;
   readonly envelope: SpeedEnvelope;
   readonly cooperation: Readonly<{ rearOrder: number; decel: number }> | null;
+  readonly closure: MergeDependencyClosure;
 }
 
 /** snapshot から評価した待機ランプ車の入場候補。 */
@@ -462,43 +464,6 @@ export class Vehicle {
     const rearIndex = arrivals.findIndex((arrival) => arrival.eta > eta);
     const front = rearIndex < 0 ? arrivals.at(-1) : arrivals[rearIndex - 1];
     const rear = rearIndex < 0 ? null : arrivals[rearIndex];
-    const protectedOrders = new Set(
-      [front?.vehicle.order, rear?.vehicle.order].filter(
-        (order): order is number => order !== undefined,
-      ),
-    );
-    const hasFollowingMargin = (role: VehicleSnapshot): boolean => {
-      const ahead = snapshot.vehicles
-        .filter(
-          (vehicle) =>
-            vehicle.order !== role.order &&
-            vehicle.order !== ramp.order &&
-            !vehicle.waiting &&
-            vehicle.section === role.section &&
-            occupiesLane2(vehicle),
-        )
-        .map((vehicle) => ({
-          vehicle,
-          distance: (((role.z - vehicle.z) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH,
-        }))
-        .filter(({ distance }) => distance > 0.001)
-        .sort(
-          (left, right) =>
-            left.distance - right.distance || left.vehicle.order - right.vehicle.order,
-        )[0];
-      if (!ahead) return true;
-      const gap = ahead.distance - (role.length + ahead.vehicle.length) / 2;
-      const followingGap = role.length * 1.2 + 2.5 + role.speed * 0.55 * 1.35;
-      const requiredGap = protectedOrders.has(ahead.vehicle.order)
-        ? followingGap
-        : Math.max(followingGap, role.speed * eta + CONST.MERGE_BODY_CLEARANCE);
-      return gap >= requiredGap;
-    };
-    if (
-      (front && !hasFollowingMargin(front.vehicle)) ||
-      (rear && !hasFollowingMargin(rear.vehicle))
-    )
-      return null;
     const frontGap = front
       ? (eta - front.eta) * front.vehicle.speed - (front.vehicle.length + ramp.length) / 2
       : Infinity;
@@ -533,6 +498,19 @@ export class Vehicle {
       if (decel > 0) cooperation = { rearOrder: rear.vehicle.order, decel };
     }
 
+    const roots = [
+      front?.vehicle.order,
+      rear?.vehicle.order,
+      cooperation?.rearOrder,
+    ].filter((order, index, all): order is number => order !== undefined && all.indexOf(order) === index);
+    const closureResult = buildMergeDependencyClosure(
+      snapshot,
+      ramp.section,
+      roots,
+      snapshot.time + eta,
+    );
+    if (!closureResult.ok) return null;
+
     return {
       rampOrder: ramp.order,
       frontOrder: front?.vehicle.order ?? null,
@@ -541,6 +519,7 @@ export class Vehicle {
       completionZ,
       envelope,
       cooperation,
+      closure: closureResult.closure,
     };
   }
 

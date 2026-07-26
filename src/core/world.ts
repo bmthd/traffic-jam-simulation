@@ -312,13 +312,8 @@ export class World {
       if (vehicle.waiting || vehicle.lane !== 3) continue;
       const certificate = vehicle.mergePlan.certificate;
       if (!certificate) continue;
-      for (const order of [
-        certificate.frontOrder,
-        certificate.rearOrder,
-        certificate.cooperation?.rearOrder,
-      ])
-        if (order !== null && order !== undefined)
-          locks.add(this.entryLockKey(vehicle.section, order));
+      for (const order of certificate.closure.orders)
+        locks.add(this.entryLockKey(vehicle.section, order));
     }
     return locks;
   }
@@ -342,9 +337,7 @@ export class World {
   }
 
   private certificateLocks(section: Section, certificate: MergeCertificate): string[] {
-    return [certificate.frontOrder, certificate.rearOrder, certificate.cooperation?.rearOrder]
-      .filter((order): order is number => order !== null && order !== undefined)
-      .map((order) => this.entryLockKey(section, order));
+    return certificate.closure.orders.map((order) => this.entryLockKey(section, order));
   }
 
   /**
