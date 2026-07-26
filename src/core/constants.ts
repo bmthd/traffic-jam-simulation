@@ -104,6 +104,86 @@ export const CONST = {
   ABSORB_DENSITY_FACTOR: 62400, // absorbモードは準安定領域(約13台/車線)に合わせる
 };
 
+/** 加速車線終端の導流帯。座標はL区間を基準にする。 */
+export interface GoreGeometry {
+  readonly startZ: number;
+  readonly endZ: number;
+  readonly outerX: number;
+  readonly mainX: number;
+}
+
+/** コアの安全判定と描画で共有する合流ランプの不変座標。 */
+export const RAMP_GEOMETRY: Readonly<{ entryZ: number; gore: GoreGeometry }> = Object.freeze({
+  entryZ: CONST.RAMP_Z_TOP,
+  gore: Object.freeze({
+    startZ: CONST.GORE_Z_START,
+    endZ: CONST.GORE_Z_END,
+    outerX: CONST.GORE_OUTER_X,
+    mainX: CONST.GORE_MAIN_X,
+  }),
+});
+
+/** 区間の実座標を、共有するL区間基準のトラック座標へ戻す。 */
+export function sectionTrackX(section: Section, worldX: number): number {
+  return worldX - CONST.SECTION_OFFSET_X[section];
+}
+
+interface TrackPoint {
+  x: number;
+  z: number;
+}
+
+function polygonsOverlap(first: readonly TrackPoint[], second: readonly TrackPoint[]): boolean {
+  for (const polygon of [first, second]) {
+    for (let index = 0; index < polygon.length; index++) {
+      const current = polygon[index];
+      const next = polygon[(index + 1) % polygon.length];
+      const axisX = -(next.z - current.z);
+      const axisZ = next.x - current.x;
+      let firstMin = Infinity,
+        firstMax = -Infinity,
+        secondMin = Infinity,
+        secondMax = -Infinity;
+      for (const point of first) {
+        const projection = point.x * axisX + point.z * axisZ;
+        firstMin = Math.min(firstMin, projection);
+        firstMax = Math.max(firstMax, projection);
+      }
+      for (const point of second) {
+        const projection = point.x * axisX + point.z * axisZ;
+        secondMin = Math.min(secondMin, projection);
+        secondMax = Math.max(secondMax, projection);
+      }
+      if (firstMax < secondMin || secondMax < firstMin) return false;
+    }
+  }
+  return true;
+}
+
+/** 加速車線上の車体矩形が、導流帯三角形と接するかを判定する。 */
+export function rampBodyIntersectsGore(
+  centerXInTrack: number,
+  centerZ: number,
+  width: number,
+  length: number,
+): boolean {
+  const { gore } = RAMP_GEOMETRY;
+  const halfWidth = width / 2;
+  const halfLength = length / 2;
+  const body = [
+    { x: centerXInTrack - halfWidth, z: centerZ - halfLength },
+    { x: centerXInTrack + halfWidth, z: centerZ - halfLength },
+    { x: centerXInTrack + halfWidth, z: centerZ + halfLength },
+    { x: centerXInTrack - halfWidth, z: centerZ + halfLength },
+  ];
+  const goreTriangle = [
+    { x: gore.outerX, z: gore.startZ },
+    { x: gore.mainX, z: gore.startZ },
+    { x: gore.mainX, z: gore.endZ },
+  ];
+  return polygonsOverlap(body, goreTriangle);
+}
+
 /** CONST のうち数値のキー(パラメータ調整室が書き換えてよい対象) */
 export type NumericSimParam = {
   [K in keyof typeof CONST]: (typeof CONST)[K] extends number ? K : never;

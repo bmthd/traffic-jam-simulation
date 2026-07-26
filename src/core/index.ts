@@ -4,8 +4,16 @@
    Node のテスト (traffic-simulation.test.ts) はこのモジュールを
    直接 import して実行する。描画コードをここに書かないこと。
    ============================================================ */
-export { CONST, TYPES, TYPE_WEIGHTS } from './constants';
+export {
+  CONST,
+  RAMP_GEOMETRY,
+  rampBodyIntersectsGore,
+  sectionTrackX,
+  TYPES,
+  TYPE_WEIGHTS,
+} from './constants';
 export type {
+  GoreGeometry,
   Section,
   SimMode,
   NumericSimParam,

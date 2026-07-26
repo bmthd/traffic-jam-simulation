@@ -1,6 +1,6 @@
 /* ================= 道路・標識などの静的な情景 ================= */
 import * as THREE from 'three';
-import { CONST, WRAP_LENGTH } from '../core';
+import { CONST, RAMP_GEOMETRY, WRAP_LENGTH } from '../core';
 import type { Section } from '../core';
 import { scene } from './scene';
 import { delineatorMaterial, asphaltTexture } from './materials';
@@ -86,8 +86,9 @@ dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, 
 
 /* ---- 合流ランプ(加速車線) ---- */
 for (const section of SECTIONS) {
-  const zTop = CONST.RAMP_Z_TOP + 14,
-    zEnd = CONST.RAMP_Z_END - 16;
+  const { gore } = RAMP_GEOMETRY;
+  const zTop = RAMP_GEOMETRY.entryZ + 14,
+    zEnd = gore.endZ - 8;
   const length = zTop - zEnd,
     zCenter = (zTop + zEnd) / 2;
   const ramp = new THREE.Mesh(
@@ -98,23 +99,27 @@ for (const section of SECTIONS) {
   ramp.receiveShadow = true;
   scene.add(ramp);
   const edge = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.02, length), whiteLineMaterial);
-  edge.position.set(sectionX(section, -16.7), 0.012, zCenter);
+  edge.position.set(sectionX(section, gore.outerX), 0.012, zCenter);
   scene.add(edge);
   // 本線との境界は破線(合流可)
   const dashGeometry = new THREE.BoxGeometry(0.15, 0.02, 3);
   const dashPositions: [number, number, number][] = [];
-  for (let z = zEnd + 12; z < zTop - 6; z += 9)
-    dashPositions.push([sectionX(section, -13), 0.012, z]);
+  for (let z = gore.startZ + 6; z < zTop - 6; z += 9)
+    dashPositions.push([sectionX(section, gore.mainX), 0.012, z]);
   scene.add(instancedAt(dashGeometry, whiteLineMaterial, dashPositions));
-  // 終端の導流帯(先細りのゼブラ)。単位ボックスをX方向スケールで先細りに
+  // 終端の導流帯(先細りのゼブラ)。三角形の辺を補間して配置する。
   const zebraGeometry = new THREE.BoxGeometry(1, 0.02, 1.3);
   const zebraMatrices: THREE.Matrix4[] = [];
-  for (let i = 0; i < 5; i++) {
-    const width = 3.0 * (1 - i / 5);
+  const zebraCount = 5;
+  for (let i = 0; i < zebraCount; i++) {
+    const progress = (i + 0.5) / zebraCount;
+    const z = gore.startZ + (gore.endZ - gore.startZ) * progress;
+    const outerX = gore.outerX + (gore.mainX - gore.outerX) * progress;
+    const width = gore.mainX - outerX;
     zebraMatrices.push(
       new THREE.Matrix4()
         .makeScale(width, 1, 1)
-        .setPosition(sectionX(section, -13.1 - width / 2), 0.012, zEnd + 9 - i * 3.2),
+        .setPosition(sectionX(section, outerX + width / 2), 0.012, z),
     );
   }
   scene.add(instancedWith(zebraGeometry, whiteLineMaterial, zebraMatrices));

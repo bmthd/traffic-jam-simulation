@@ -12,6 +12,9 @@ import {
   createRng,
   mergeCongestion,
   nextArrivalDistance,
+  RAMP_GEOMETRY,
+  rampBodyIntersectsGore,
+  sectionTrackX,
   Vehicle,
   World,
   WRAP_LENGTH,
@@ -1889,4 +1892,31 @@ describe('時刻スナップショットと合流期限 (Issue #48)', () => {
       expect(completionEvent!).toBeLessThan(goreCrossEvent!);
     },
   );
+});
+
+describe('導流帯越境不変条件 (Issue #48)', () => {
+  function expectNoGoreVehicle(world: World): void {
+    for (const vehicle of world.vehicles) {
+      if (vehicle.waiting || vehicle.lane !== 3) continue;
+      expect(vehicle.z).toBeGreaterThan(CONST.GORE_Z_START);
+      expect(
+        rampBodyIntersectsGore(
+          sectionTrackX(vehicle.section, vehicle.x),
+          vehicle.z,
+          vehicle.width,
+          vehicle.length,
+        ),
+      ).toBe(false);
+    }
+  }
+
+  test('導流帯座標はコアで共有し、R区間の実座標をL区間座標へ正規化する', () => {
+    expect(RAMP_GEOMETRY.gore.startZ).toBe(CONST.GORE_Z_START);
+    expect(sectionTrackX('R', CONST.LANE_X.R[3])).toBe(CONST.LANE_X.L[3]);
+  });
+
+  test('加速車線の車体先端が導流帯の始端を越えると導流帯と交差する', () => {
+    expect(rampBodyIntersectsGore(-15, 260, 1.8, 4.6)).toBe(true);
+    expect(rampBodyIntersectsGore(-15, 261, 1.8, 4.6)).toBe(false);
+  });
 });
