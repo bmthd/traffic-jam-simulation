@@ -8,6 +8,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { CONST, createRng, Vehicle, World } from './src/core';
+import { loopCopies } from './src/render/looping';
 
 /* ---------- ヘルパー: シナリオ実行 ---------- */
 const TIME_STEP = 1 / 20;
@@ -674,5 +675,15 @@ describe('合流(加速車線)の協調 (Issue #33)', () => {
     );
     world.step(TIME_STEP);
     expect(main.yieldSlowTimer, '速度差が大きいのに譲ってしまった').toBe(0);
+  });
+});
+
+/* ============================================================
+   12. 周回道路の描画 (Issue #73)
+   車両が周回境界を越える追尾視点でも、道路設備が前後に続いて見える。
+   ============================================================ */
+describe('周回道路の描画 (Issue #73)', () => {
+  test('境界の前後1周ぶんに同じ道路設備を配置する', () => {
+    expect(loopCopies(0)).toEqual([-816, 0, 816]);
   });
 });

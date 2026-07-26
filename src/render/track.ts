@@ -1,12 +1,11 @@
 /* ================= 道路・標識などの静的な情景 ================= */
 import * as THREE from 'three';
-import { CONST } from '../core';
+import { CONST, WRAP_LENGTH } from '../core';
 import type { Section } from '../core';
 import { scene } from './scene';
 import { delineatorMaterial, asphaltTexture } from './materials';
 import { instancedAt, instancedWith } from './instancing';
-
-const ROAD_HALF = CONST.ROAD_HALF;
+import { loopCopies } from './looping';
 
 /* ---- 区間テーマカラー(どの角度から見ても区別できるように) ---- */
 export interface SectionTheme {
@@ -45,35 +44,41 @@ export function sectionX(section: Section, xInSectionFrame: number): number {
 
 /* ---- 道路(アスファルト質感 + 区間ごとの色味) ---- */
 for (const section of SECTIONS) {
-  const road = new THREE.Mesh(
-    new THREE.BoxGeometry(13.2, 0.12, ROAD_HALF * 2),
-    new THREE.MeshLambertMaterial({ color: SECTION_THEME[section].road, map: asphaltTexture }),
-  );
-  road.position.set(sectionX(section, -7), -0.06, 0);
-  road.receiveShadow = true;
-  scene.add(road);
-  // 進行方向左側(加速車線側)の路肩ライン(テーマカラー)
-  const strip = new THREE.Mesh(
-    new THREE.BoxGeometry(0.7, 0.06, ROAD_HALF * 2),
-    new THREE.MeshBasicMaterial({ color: SECTION_THEME[section].strip }),
-  );
-  strip.position.set(sectionX(section, -14.1), -0.03, 0);
-  scene.add(strip);
+  for (const z of loopCopies(0)) {
+    const road = new THREE.Mesh(
+      new THREE.BoxGeometry(13.2, 0.12, WRAP_LENGTH),
+      new THREE.MeshLambertMaterial({ color: SECTION_THEME[section].road, map: asphaltTexture }),
+    );
+    road.position.set(sectionX(section, -7), -0.06, z);
+    road.receiveShadow = true;
+    scene.add(road);
+    // 進行方向左側(加速車線側)の路肩ライン(テーマカラー)
+    const strip = new THREE.Mesh(
+      new THREE.BoxGeometry(0.7, 0.06, WRAP_LENGTH),
+      new THREE.MeshBasicMaterial({ color: SECTION_THEME[section].strip }),
+    );
+    strip.position.set(sectionX(section, -14.1), -0.03, z);
+    scene.add(strip);
+  }
 }
 
 /* ---- 車線マーキング ---- */
 const whiteLineMaterial = new THREE.MeshBasicMaterial({ color: 0xf2f2f2 });
 function solidLine(x: number): void {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.02, ROAD_HALF * 2), whiteLineMaterial);
-  mesh.position.set(x, 0.01, 0);
-  scene.add(mesh);
+  for (const z of loopCopies(0)) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.02, WRAP_LENGTH), whiteLineMaterial);
+    mesh.position.set(x, 0.01, z);
+    scene.add(mesh);
+  }
 }
 // 車線境界の破線は全車線ぶんを1つのInstancedMeshに(draw call削減)
 function dashedLines(xPositions: number[]): void {
   const geometry = new THREE.BoxGeometry(0.15, 0.02, 4);
   const positions: [number, number, number][] = [];
   for (const x of xPositions)
-    for (let z = -ROAD_HALF + 2; z < ROAD_HALF; z += 12) positions.push([x, 0.01, z]);
+    for (const offset of loopCopies(0))
+      for (let z = -WRAP_LENGTH / 2 + 2; z < WRAP_LENGTH / 2; z += 12)
+        positions.push([x, 0.01, z + offset]);
   scene.add(instancedAt(geometry, whiteLineMaterial, positions));
 }
 for (const section of SECTIONS) for (const x of [-1, -13]) solidLine(sectionX(section, x));
@@ -119,29 +124,32 @@ for (const section of SECTIONS) {
    両区間は同じ向きに走る独立した道路なので「中央分離帯」ではなく、
    L区間の右路肩と R区間の加速車線の間に立つ仕切りの防護柵 */
 (function buildDivider() {
-  const base = new THREE.Mesh(
-    new THREE.BoxGeometry(0.8, 0.5, ROAD_HALF * 2),
-    new THREE.MeshLambertMaterial({ color: 0x9aa0a6 }),
-  );
-  base.position.set(0, 0.25, 0);
-  base.castShadow = true;
-  base.receiveShadow = true;
-  scene.add(base);
+  const baseGeometry = new THREE.BoxGeometry(0.8, 0.5, WRAP_LENGTH);
+  const baseMaterial = new THREE.MeshLambertMaterial({ color: 0x9aa0a6 });
   const railMaterial = new THREE.MeshLambertMaterial({ color: 0xe9edf0 });
-  for (const railX of [-0.3, 0.3]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, ROAD_HALF * 2), railMaterial);
-    rail.position.set(railX, 0.95, 0);
-    scene.add(rail);
+  for (const z of loopCopies(0)) {
+    const base = new THREE.Mesh(baseGeometry, baseMaterial);
+    base.position.set(0, 0.25, z);
+    base.castShadow = true;
+    base.receiveShadow = true;
+    scene.add(base);
+    for (const railX of [-0.3, 0.3]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, WRAP_LENGTH), railMaterial);
+      rail.position.set(railX, 0.95, z);
+      scene.add(rail);
+    }
   }
   const postGeometry = new THREE.BoxGeometry(0.12, 0.55, 0.12);
   const delineatorGeometry = new THREE.BoxGeometry(0.16, 0.16, 0.06); // 視線誘導標(デリネーター)
   const postPositions: [number, number, number][] = [];
   const delineatorPositions: [number, number, number][] = [];
-  for (let z = -ROAD_HALF + 6; z < ROAD_HALF; z += 18) {
-    postPositions.push([0, 0.75, z]);
-    // 両進行方向から見えるよう両面に
-    for (const offsetZ of [-0.09, 0.09]) delineatorPositions.push([0, 1.12, z + offsetZ]);
-  }
+  for (const offset of loopCopies(0))
+    for (let z = -WRAP_LENGTH / 2 + 6; z < WRAP_LENGTH / 2; z += 18) {
+      postPositions.push([0, 0.75, z + offset]);
+      // 両進行方向から見えるよう両面に
+      for (const offsetZ of [-0.09, 0.09])
+        delineatorPositions.push([0, 1.12, z + offset + offsetZ]);
+    }
   scene.add(instancedAt(postGeometry, railMaterial, postPositions));
   scene.add(instancedAt(delineatorGeometry, delineatorMaterial, delineatorPositions));
 })();
