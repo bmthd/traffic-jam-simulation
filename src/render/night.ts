@@ -125,6 +125,7 @@ const MEDIAN_X = (sectionX('L', -7) + sectionX('R', -7)) / 2; // 2区間の中�
     for (const side of [-1, 1]) {
       headPositions.push([MEDIAN_X + side * 2.6, 7.0, z]);
       // 電球のにじみ(夜のみ): 灯具が光源として「光って見える」ように
+      // 発光表現が影を落とすと不自然なため castShadow は設定しない
       const bulb = new THREE.Sprite(bulbMaterial);
       bulb.scale.set(2.6, 2.6, 1);
       bulb.position.set(MEDIAN_X + side * 2.6, 6.92, z);
@@ -133,13 +134,21 @@ const MEDIAN_X = (sectionX('L', -7) + sectionX('R', -7)) / 2; // 2区間の中�
       glowMatrices.push(glowRotation.clone().setPosition(MEDIAN_X + side * 3.2, 0.03, z));
     }
   }
-  scene.add(instancedAt(poleGeometry, poleMaterial, polePositions));
-  scene.add(instancedAt(armGeometry, poleMaterial, armPositions));
-  scene.add(instancedAt(headGeometry, lampHeadMaterial, headPositions));
+  const poles = instancedAt(poleGeometry, poleMaterial, polePositions);
+  poles.castShadow = true;
+  scene.add(poles);
+  const arms = instancedAt(armGeometry, poleMaterial, armPositions);
+  arms.castShadow = true;
+  scene.add(arms);
+  const heads = instancedAt(headGeometry, lampHeadMaterial, headPositions);
+  heads.castShadow = true;
+  scene.add(heads);
+  // 夜のみ表示する発光表現が影を落とすと不自然なため castShadow は設定しない
   nightGroup.add(instancedWith(glowGeometry, lampGlowMaterial, glowMatrices));
 })();
 
 // 標識ゲートの投光(夜は案内標識が照明で浮かび上がる)
+// 夜のみ表示する発光表現が影を落とすと不自然なため castShadow は設定しない
 {
   const signGlowPositions: [number, number, number][] = [];
   for (const z of GANTRY_Z)
