@@ -2,6 +2,7 @@
    アプリ組み立て: コア(World)と描画・UIを配線しメインループを回す
    ============================================================ */
 import * as THREE from 'three';
+import { createAnimationFaultBoundary, createFixedStepAccumulator } from './animation-loop';
 import { World } from './core';
 import { scene, camera, renderer } from './render/scene';
 import './render/track';
@@ -19,6 +20,17 @@ import { setupSpectator } from './ui/spectator';
 
 export function start(): void {
   const world = new World({ rng: Math.random, spawnInterval: 800 });
+  const fixedStep = createFixedStepAccumulator();
+  const animationFault = createAnimationFaultBoundary(
+    (error) => {
+      console.error('シミュレーションの安全性エラーにより更新を停止しました', error);
+      showMessage(
+        icon('triangle-alert') +
+          '安全性エラーのため更新を停止しました。状態は保持されています。リセットで再開できます',
+      );
+    },
+    (error) => console.error('描画またはUI更新中にエラーが発生しました', error),
+  );
 
   /* ---- コントロールパネル ---- */
   elements.slider.addEventListener('input', () => {
@@ -26,6 +38,8 @@ export function start(): void {
     elements.intervalLabel.textContent = String(world.spawnInterval);
   });
   function resetWorld(): void {
+    animationFault.reset();
+    fixedStep.reset();
     world.reset();
     showMessage(icon('rotate-ccw') + 'シミュレーションをリセットしました');
   }
@@ -52,17 +66,21 @@ export function start(): void {
     if (frameAccumulator < MIN_FRAME_TIME) return; // このリフレッシュ周期は描画を休む
     const deltaTime = Math.min(frameAccumulator, 0.05);
     frameAccumulator = 0;
-    tickTheme(deltaTime); // 夕暮れ/夜明けのクロスフェード
-    world.step(deltaTime);
-    syncMeshes(world, deltaTime);
-    hudAccumulator += deltaTime;
-    if (hudAccumulator >= 0.25) {
-      hudAccumulator = 0;
-      updateHUD(world);
-    }
-    updateCamera(world, deltaTime);
-    updateVehicleCameraOcclusion(world);
-    renderer.render(scene, camera);
+    animationFault.runFrame(
+      () => fixedStep.advance(deltaTime, (fixedDeltaTime) => world.step(fixedDeltaTime)),
+      () => renderer.render(scene, camera),
+      () => {
+        tickTheme(deltaTime); // 夕暮れ/夜明けのクロスフェード
+        syncMeshes(world, deltaTime);
+        hudAccumulator += deltaTime;
+        if (hudAccumulator >= 0.25) {
+          hudAccumulator = 0;
+          updateHUD(world);
+        }
+        updateCamera(world, deltaTime);
+        updateVehicleCameraOcclusion(world);
+      },
+    );
   }
 
   window.addEventListener('resize', function () {

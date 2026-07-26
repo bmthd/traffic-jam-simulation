@@ -61,6 +61,20 @@ export const CONST = {
   MERGE_STOP_MARGIN: 30, // ランプ終端までこの距離を切った時だけ(未合流なら)終端で止まれる速度に制限する。それより手前では加速車線として本線流速まで加速させ、止まらせない (m)
   MERGE_DETECT_RANGE: 40, // 本線車(lane 2)が加速車線の合流車を認識する縦方向の範囲 (m)。車間サーボの安全距離(≒ speed×0.55)と同オーダーで「視認できる前方」に相当
   MERGE_YIELD_SPEED_DIFF: 5.0, // 合流車と本線車の速度差がこれ未満なら「速度差が小さい」= 合流車を優先して本線車が譲る (m/s ≒ 18km/h)。加速車線1本ぶんの加速で埋められる差であり、車線変更安全判定が前方車を「+1で速い」とみなす幅より広く取った実用値
+  MERGE_POINT_Z: 278,
+  GORE_Z_START: 258,
+  GORE_Z_END: 242,
+  GORE_OUTER_X: -16.7,
+  GORE_MAIN_X: -13,
+  MERGE_CONGESTION_TIME_CONSTANT: 1,
+  MERGE_FREE_FRONT_HEADWAY: 1.4,
+  MERGE_FREE_REAR_HEADWAY: 1.6,
+  MERGE_CONGESTED_HEADWAY: 0.8,
+  MERGE_TARGET_COOP_DECEL: 1.2,
+  MERGE_MAX_COOP_DECEL: 3,
+  MERGE_BODY_CLEARANCE: 2,
+  MERGE_TRANSACTION_CLOSURE_MAX: 24,
+  MERGE_TRANSACTION_MIN_SPEED: 1,
   REF_SPEED: 25, // スコア算出の基準速度 (m/s ≒ 90km/h)
   SCORE_WEIGHT_SPEED: 0.75,
   SCORE_WEIGHT_DENSITY: 0.25,
@@ -91,6 +105,86 @@ export const CONST = {
   PERTURB_FACTOR: 0.3, // きっかけブレーキの強さ(希望速度比) — 左右ミラーで同時注入
   ABSORB_DENSITY_FACTOR: 62400, // absorbモードは準安定領域(約13台/車線)に合わせる
 };
+
+/** 加速車線終端の導流帯。座標はL区間を基準にする。 */
+export interface GoreGeometry {
+  readonly startZ: number;
+  readonly endZ: number;
+  readonly outerX: number;
+  readonly mainX: number;
+}
+
+/** コアの安全判定と描画で共有する合流ランプの不変座標。 */
+export const RAMP_GEOMETRY: Readonly<{ entryZ: number; gore: GoreGeometry }> = Object.freeze({
+  entryZ: CONST.RAMP_Z_TOP,
+  gore: Object.freeze({
+    startZ: CONST.GORE_Z_START,
+    endZ: CONST.GORE_Z_END,
+    outerX: CONST.GORE_OUTER_X,
+    mainX: CONST.GORE_MAIN_X,
+  }),
+});
+
+/** 区間の実座標を、共有するL区間基準のトラック座標へ戻す。 */
+export function sectionTrackX(section: Section, worldX: number): number {
+  return worldX - CONST.SECTION_OFFSET_X[section];
+}
+
+interface TrackPoint {
+  x: number;
+  z: number;
+}
+
+function polygonsOverlap(first: readonly TrackPoint[], second: readonly TrackPoint[]): boolean {
+  for (const polygon of [first, second]) {
+    for (let index = 0; index < polygon.length; index++) {
+      const current = polygon[index];
+      const next = polygon[(index + 1) % polygon.length];
+      const axisX = -(next.z - current.z);
+      const axisZ = next.x - current.x;
+      let firstMin = Infinity,
+        firstMax = -Infinity,
+        secondMin = Infinity,
+        secondMax = -Infinity;
+      for (const point of first) {
+        const projection = point.x * axisX + point.z * axisZ;
+        firstMin = Math.min(firstMin, projection);
+        firstMax = Math.max(firstMax, projection);
+      }
+      for (const point of second) {
+        const projection = point.x * axisX + point.z * axisZ;
+        secondMin = Math.min(secondMin, projection);
+        secondMax = Math.max(secondMax, projection);
+      }
+      if (firstMax < secondMin || secondMax < firstMin) return false;
+    }
+  }
+  return true;
+}
+
+/** 加速車線上の車体矩形が、導流帯三角形と接するかを判定する。 */
+export function rampBodyIntersectsGore(
+  centerXInTrack: number,
+  centerZ: number,
+  width: number,
+  length: number,
+): boolean {
+  const { gore } = RAMP_GEOMETRY;
+  const halfWidth = width / 2;
+  const halfLength = length / 2;
+  const body = [
+    { x: centerXInTrack - halfWidth, z: centerZ - halfLength },
+    { x: centerXInTrack + halfWidth, z: centerZ - halfLength },
+    { x: centerXInTrack + halfWidth, z: centerZ + halfLength },
+    { x: centerXInTrack - halfWidth, z: centerZ + halfLength },
+  ];
+  const goreTriangle = [
+    { x: gore.outerX, z: gore.startZ },
+    { x: gore.mainX, z: gore.startZ },
+    { x: gore.mainX, z: gore.endZ },
+  ];
+  return polygonsOverlap(body, goreTriangle);
+}
 
 /** CONST のうち数値のキー(パラメータ調整室が書き換えてよい対象) */
 export type NumericSimParam = {

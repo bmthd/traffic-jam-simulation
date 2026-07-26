@@ -2,11 +2,27 @@
    シミュレーションコア: ワールド（車両生成・時間発展・スコア）
    （DOM / THREE 非依存・テスト対象）
    ============================================================ */
-import { CONST, TYPES, TYPE_WEIGHTS } from './constants';
+import { CONST, rampBodyIntersectsGore, sectionTrackX, TYPES, TYPE_WEIGHTS } from './constants';
 import type { Section, SimMode, VehicleTypeName } from './constants';
 import { clamp, wrapDelta, WRAP_LENGTH } from './utils';
 import type { Rng } from './utils';
+import {
+  isMergeTransactionAdmissible,
+  MergeTransactionPlanningError,
+  planMergeTransaction,
+} from './merge-transaction';
 import { Vehicle } from './vehicle';
+import type {
+  MergeCandidate,
+  MergeCertificate,
+  MergeDirective,
+  MergePlan,
+  MergeSource,
+  MergeTransaction,
+  ReservedMotion,
+  VehicleSnapshot,
+  WorldSnapshot,
+} from './vehicle';
 
 export interface WorldOptions {
   rng?: Rng;
@@ -35,6 +51,9 @@ export class World {
   spawnAccumulator: number;
   time: number;
   sectionVehicles: Record<Section, Vehicle[]>;
+  lastMergeSource: Record<Section, MergeSource | null> = { L: null, R: null };
+  nextVehicleOrder = 0;
+  nextMergePlanId = 0;
   stats: {
     changes: Record<Section, number>;
     yields: Record<Section, number>;
@@ -212,8 +231,11 @@ export class World {
     const z = viaRamp ? CONST.RAMP_Z_TOP : CONST.ROAD_HALF + spec.length;
     let added = false;
     for (const section of ['L', 'R'] as const) {
-      if (this.waitingCount(section) >= CONST.RAMP_QUEUE_MAX) continue;
-      const lane = this.admissibleLane(section, lanes, z);
+      if (this.waitingCount(section, viaRamp ? 'ramp' : 'mainline') >= CONST.RAMP_QUEUE_MAX)
+        continue;
+      // ランプ需要は入口の lane 3 が空いていても、lane 2 の将来枠を証明するまで
+      // 有効道路状態へ入れない。本線需要は従来通り入口判定だけで扱う。
+      const lane = viaRamp ? null : this.admissibleLane(section, lanes, z);
       const vehicle = new Vehicle(
         this,
         section,
@@ -222,7 +244,9 @@ export class World {
         typeName,
         speed,
       );
-      if (lane != null) {
+      if (viaRamp) {
+        vehicle.waiting = true;
+      } else if (lane != null) {
         vehicle.speed = this.safeSpawnSpeed(section, lane, z, vehicle.length, vehicle.speed, null);
       } else {
         vehicle.waiting = true; // 入口が塞がっている → 手前で待つ(見えない上流の滞留)
@@ -234,26 +258,437 @@ export class World {
     return added;
   }
 
-  waitingCount(section: Section): number {
+  waitingCount(section: Section, entrance: 'all' | 'ramp' | 'mainline' = 'all'): number {
     let count = 0;
-    for (const vehicle of this.vehicles)
-      if (vehicle.waiting && vehicle.section === section) count++;
+    for (const vehicle of this.vehicles) {
+      if (!vehicle.waiting || vehicle.section !== section) continue;
+      if (entrance === 'ramp' && vehicle.lane !== 3) continue;
+      if (entrance === 'mainline' && vehicle.lane === 3) continue;
+      count++;
+    }
     return count;
+  }
+
+  /** 更新中に不変な合流評価用の状態を取得する。 */
+  captureSnapshot(): WorldSnapshot {
+    const vehicles: VehicleSnapshot[] = this.vehicles
+      .map((vehicle) => ({
+        order: vehicle.spawnOrder,
+        section: vehicle.section,
+        lane: vehicle.lane,
+        z: vehicle.z,
+        x: vehicle.x,
+        speed: vehicle.speed,
+        desiredSpeed: vehicle.desiredSpeed,
+        maxAcceleration: vehicle.type.acceleration,
+        length: vehicle.length,
+        width: vehicle.width,
+        waiting: vehicle.waiting,
+        laneChange: { ...vehicle.laneChange },
+      }))
+      .sort((a, b) => a.order - b.order);
+    const byOrder = new Map(vehicles.map((vehicle) => [vehicle.order, vehicle]));
+    const lane2BySection = {
+      L: vehicles
+        .filter(
+          (vehicle) =>
+            vehicle.section === 'L' &&
+            (vehicle.lane === 2 ||
+              (vehicle.laneChange.state !== 'none' && vehicle.laneChange.to === 2)) &&
+            !vehicle.waiting &&
+            vehicle.lane !== 3,
+        )
+        .sort((left, right) => left.z - right.z || left.order - right.order),
+      R: vehicles
+        .filter(
+          (vehicle) =>
+            vehicle.section === 'R' &&
+            (vehicle.lane === 2 ||
+              (vehicle.laneChange.state !== 'none' && vehicle.laneChange.to === 2)) &&
+            !vehicle.waiting &&
+            vehicle.lane !== 3,
+        )
+        .sort((left, right) => left.z - right.z || left.order - right.order),
+    };
+    return { time: this.time, vehicles, byOrder, lane2BySection };
+  }
+
+  private entryLockKey(section: Section, order: number): string {
+    return `${section}:${order}`;
+  }
+
+  /** 走行中のランプ車の証明書を lock として再構築する。 */
+  private activeEntryLocks(): Set<string> {
+    const locks = new Set<string>();
+    for (const vehicle of this.vehicles) {
+      if (vehicle.waiting || vehicle.lane !== 3) continue;
+      const certificate = vehicle.mergePlan.certificate;
+      if (!certificate) continue;
+      for (const order of certificate.closure.orders)
+        locks.add(this.entryLockKey(vehicle.section, order));
+    }
+    return locks;
+  }
+
+  /** 確定済み回廊へ投影上割り込む lane 2 車線変更を開始させない。 */
+  blocksReservedLaneChange(vehicle: Vehicle, toLane: number): boolean {
+    if (toLane !== 2) return false;
+    const lockedOrders = new Set<number>();
+    const activeReservations: {
+      ramp: Vehicle;
+      certificate: MergeCertificate;
+    }[] = [];
+    for (const ramp of this.vehicles) {
+      if (ramp.waiting || ramp.lane !== 3 || ramp.section !== vehicle.section) continue;
+      const certificate = ramp.mergePlan.certificate;
+      if (!certificate) continue;
+      activeReservations.push({ ramp, certificate });
+      for (const order of certificate.closure.orders) lockedOrders.add(order);
+    }
+    if (activeReservations.length === 0) return false;
+    if (lockedOrders.has(vehicle.spawnOrder)) return true;
+    if (
+      activeReservations.some(({ certificate }) => {
+        const remaining = certificate.targetPassTime - this.time;
+        const distance =
+          (((vehicle.z - certificate.completionZ) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+        const arrivalTime = distance / Math.max(vehicle.speed, 1);
+        return Math.abs(arrivalTime - remaining) <= CONST.LANE_CHANGE_DURATION;
+      })
+    )
+      return true;
+
+    let nearestAhead: { vehicle: Vehicle; distance: number } | null = null;
+    let nearestBehind: { vehicle: Vehicle; distance: number } | null = null;
+    for (const candidate of this.sectionVehicles[vehicle.section]) {
+      if (candidate === vehicle || candidate.waiting || !candidate.occupies(toLane)) continue;
+      const aheadDistance = (((vehicle.z - candidate.z) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+      const behindDistance =
+        (((candidate.z - vehicle.z) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+      if (aheadDistance > 0.001 && (!nearestAhead || aheadDistance < nearestAhead.distance))
+        nearestAhead = {
+          vehicle: candidate,
+          distance: aheadDistance,
+        };
+      if (behindDistance > 0.001 && (!nearestBehind || behindDistance < nearestBehind.distance))
+        nearestBehind = {
+          vehicle: candidate,
+          distance: behindDistance,
+        };
+    }
+    const remaining = Math.max(
+      ...activeReservations.map(({ certificate }) =>
+        Math.max(0, certificate.targetPassTime - this.time),
+      ),
+    );
+    const blocks = (
+      neighbor: { vehicle: Vehicle; distance: number } | null,
+      closingSpeed: number,
+    ) =>
+      neighbor !== null &&
+      lockedOrders.has(neighbor.vehicle.spawnOrder) &&
+      neighbor.distance <=
+        (vehicle.length + neighbor.vehicle.length) / 2 +
+          CONST.MERGE_BODY_CLEARANCE +
+          Math.max(0, closingSpeed) * remaining;
+    return (
+      blocks(nearestAhead, vehicle.speed - (nearestAhead?.vehicle.speed ?? vehicle.speed)) ||
+      blocks(nearestBehind, (nearestBehind?.vehicle.speed ?? vehicle.speed) - vehicle.speed)
+    );
+  }
+
+  private certificateLocks(section: Section, certificate: MergeCertificate): string[] {
+    return certificate.closure.orders.map((order) => this.entryLockKey(section, order));
+  }
+
+  /**
+   * 入口待ちランプ車を一つの snapshot で評価し、衝突しない証明書だけを同時に適用する。
+   * 各区間の FIFO 先頭だけを候補にするため、後続が先に割り込むことはない。
+   */
+  private admitRampWaiting(
+    snapshot: WorldSnapshot,
+    heads: readonly Vehicle[],
+    deltaTime: number,
+  ): void {
+    const candidates: { vehicle: Vehicle; candidate: MergeCandidate }[] = [];
+    const activeRampSections = new Set(
+      this.vehicles
+        .filter((vehicle) => !vehicle.waiting && vehicle.lane === 3)
+        .map((vehicle) => vehicle.section),
+    );
+    for (const vehicle of heads) {
+      if (!vehicle.waiting || vehicle.lane !== 3) continue;
+      if (activeRampSections.has(vehicle.section)) continue;
+      const certificate = vehicle.evaluateEntryCertificate(snapshot, deltaTime);
+      if (!certificate) continue;
+      const provisionalPlan: MergePlan = {
+        ...vehicle.mergePlan,
+        state: 'seeking',
+        targetPassTime: certificate.targetPassTime,
+        completionZ: certificate.completionZ,
+        envelope: certificate.envelope,
+        certificate,
+      };
+      if (
+        !isMergeTransactionAdmissible(
+          snapshot,
+          {
+            plan: provisionalPlan,
+            envelope: certificate.envelope,
+            startLaneChange: false,
+            cooperation: certificate.cooperation
+              ? {
+                  vehicleOrder: certificate.cooperation.rearOrder,
+                  decel: certificate.cooperation.decel,
+                }
+              : null,
+          },
+          deltaTime,
+        )
+      )
+        continue;
+      candidates.push({
+        vehicle,
+        candidate: {
+          certificate,
+          queueOrder: vehicle.spawnOrder,
+          reservationTime: snapshot.time,
+        },
+      });
+    }
+    const locks = this.activeEntryLocks();
+    const accepted = candidates
+      .sort(
+        (left, right) =>
+          left.candidate.queueOrder - right.candidate.queueOrder ||
+          left.candidate.certificate.targetPassTime - right.candidate.certificate.targetPassTime ||
+          left.vehicle.spawnOrder - right.vehicle.spawnOrder,
+      )
+      .filter(({ vehicle, candidate }) => {
+        const candidateLocks = this.certificateLocks(vehicle.section, candidate.certificate);
+        if (candidateLocks.some((lock) => locks.has(lock))) return false;
+        for (const lock of candidateLocks) locks.add(lock);
+        return true;
+      });
+    for (const { vehicle, candidate } of accepted) {
+      const { certificate } = candidate;
+      vehicle.waiting = false;
+      vehicle.x = CONST.LANE_X[vehicle.section][3];
+      vehicle.speed = snapshot.byOrder.get(vehicle.spawnOrder)!.speed;
+      vehicle.mergePlan = {
+        ...vehicle.mergePlan,
+        id: this.nextMergePlanId++,
+        state: 'seeking',
+        targetPassTime: certificate.targetPassTime,
+        completionZ: certificate.completionZ,
+        envelope: certificate.envelope,
+        certificate,
+      };
+    }
+  }
+
+  /** tick 境界で lane 3 の車体が導流帯へ侵入していないことを検査する。 */
+  assertGoreInvariant(phase: 'start' | 'end'): void {
+    for (const vehicle of this.vehicles) {
+      if (vehicle.waiting || vehicle.lane !== 3) continue;
+      const intersects = rampBodyIntersectsGore(
+        sectionTrackX(vehicle.section, vehicle.x),
+        vehicle.z,
+        vehicle.width,
+        vehicle.length,
+      );
+      if (vehicle.z <= CONST.GORE_Z_START || intersects)
+        throw new Error(`導流帯不変条件違反(${phase}): vehicle=${vehicle.spawnOrder}`);
+    }
+  }
+
+  private corridorError(
+    plan: MergePlan,
+    snapshot: WorldSnapshot,
+    deltaTime: number,
+    reason: string,
+  ): Error {
+    const certificate = plan.certificate;
+    const roleOrders = certificate ? [certificate.rampOrder, ...certificate.closure.orders] : [];
+    const roles = roleOrders.map((order) => {
+      const vehicle = snapshot.byOrder.get(order);
+      return vehicle
+        ? `${order}:${vehicle.lane}@${vehicle.z.toFixed(3)}/${vehicle.speed.toFixed(3)}`
+        : `${order}:missing`;
+    });
+    return new Error(
+      [
+        '合流予約回廊が空:',
+        `plan=${plan.id}`,
+        `ramp=${certificate?.rampOrder}`,
+        `front=${certificate?.frontOrder}`,
+        `rear=${certificate?.rearOrder}`,
+        `cooperator=${certificate?.cooperation?.rearOrder ?? null}`,
+        `target=${certificate?.targetPassTime}`,
+        `time=${snapshot.time}`,
+        `dt=${deltaTime}`,
+        `envelope=[${plan.envelope?.min},${plan.envelope?.max}]`,
+        `roles=[${roles.join(',')}]`,
+        `reason=${reason}`,
+      ].join(' '),
+    );
+  }
+
+  /** 全ての証明済みランプ予約と protected role の運動を同一 snapshot から確定する。 */
+  evaluateTick(snapshot: WorldSnapshot, deltaTime: number): MergeTransaction {
+    const directives: MergeDirective[] = [];
+    for (const vehicle of this.vehicles) {
+      if (vehicle.waiting || vehicle.lane !== 3 || !vehicle.mergePlan.certificate) continue;
+      const directive = vehicle.projectReservation(snapshot, vehicle.mergePlan, deltaTime);
+      if (!directive)
+        throw this.corridorError(vehicle.mergePlan, snapshot, deltaTime, '予約投影不能');
+      directives.push(directive);
+    }
+    try {
+      return planMergeTransaction(snapshot, directives, deltaTime);
+    } catch (error) {
+      if (error instanceof MergeTransactionPlanningError)
+        throw this.corridorError(error.plan, snapshot, deltaTime, error.reason);
+      throw error;
+    }
+  }
+
+  private assertTransactionSafety(
+    snapshot: WorldSnapshot,
+    transaction: MergeTransaction,
+    deltaTime: number,
+  ): void {
+    const snapshots = new Map(snapshot.vehicles.map((vehicle) => [vehicle.order, vehicle]));
+    const motions = new Map(transaction.motions.map((motion) => [motion.vehicleOrder, motion]));
+    const projectedZ = (order: number): number | null => motions.get(order)?.nextZ ?? null;
+    for (const directive of transaction.directives) {
+      const certificate = directive.plan.certificate;
+      if (!certificate)
+        throw this.corridorError(directive.plan, snapshot, deltaTime, '適用前証明書なし');
+      const ramp = snapshots.get(certificate.rampOrder);
+      const rampMotion = motions.get(certificate.rampOrder);
+      if (!ramp || !rampMotion)
+        throw this.corridorError(directive.plan, snapshot, deltaTime, 'ランプ運動なし');
+      const changing = rampMotion.laneChangeProgress !== null;
+      const nextProgress = rampMotion.laneChangeProgress ?? ramp.laneChange.progress;
+      const nextRampZ = rampMotion.nextZ;
+      const nextRampX = rampMotion.nextX;
+      if (
+        nextProgress < 1 &&
+        (nextRampZ <= CONST.GORE_Z_START ||
+          rampBodyIntersectsGore(
+            sectionTrackX(ramp.section, nextRampX),
+            nextRampZ,
+            ramp.width,
+            ramp.length,
+          ))
+      )
+        throw this.corridorError(directive.plan, snapshot, deltaTime, '次位置が導流帯へ侵入');
+      if (!changing) continue;
+      for (const [role, order] of [
+        ['front', certificate.frontOrder],
+        ['rear', certificate.rearOrder],
+      ] as const) {
+        if (order === null) continue;
+        const roleSnapshot = snapshots.get(order);
+        const nextRoleZ = projectedZ(order);
+        if (!roleSnapshot || nextRoleZ === null)
+          throw this.corridorError(directive.plan, snapshot, deltaTime, `${role}運動なし`);
+        const centerDistance =
+          role === 'front'
+            ? (((nextRampZ - nextRoleZ) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH
+            : (((nextRoleZ - nextRampZ) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+        const bodyGap = centerDistance - (ramp.length + roleSnapshot.length) / 2;
+        const lateralGap =
+          Math.abs(nextRampX - roleSnapshot.x) - (ramp.width + roleSnapshot.width) / 2;
+        if (bodyGap < 0 && lateralGap < 0)
+          throw this.corridorError(
+            directive.plan,
+            snapshot,
+            deltaTime,
+            `${role}車体間隔=${bodyGap},rampZ=${nextRampZ},roleZ=${nextRoleZ},` +
+              `rampSpeed=${rampMotion.nextSpeed},roleSpeed=${motions.get(order)?.nextSpeed},` +
+              `横間隔=${lateralGap},progress=${nextProgress}`,
+          );
+      }
+      for (const edge of certificate.closure.edges) {
+        const follower = snapshots.get(edge.followerOrder);
+        const ahead = snapshots.get(edge.aheadOrder);
+        const followerMotion = motions.get(edge.followerOrder);
+        const aheadMotion = motions.get(edge.aheadOrder);
+        if (!follower || !ahead || !followerMotion || !aheadMotion)
+          throw this.corridorError(
+            directive.plan,
+            snapshot,
+            deltaTime,
+            `closure運動なし:${edge.followerOrder}->${edge.aheadOrder}`,
+          );
+        const centerDistance =
+          (((followerMotion.nextZ - aheadMotion.nextZ) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+        const bodyGap = centerDistance - (follower.length + ahead.length) / 2;
+        if (bodyGap + 1e-9 < CONST.MERGE_BODY_CLEARANCE)
+          throw this.corridorError(
+            directive.plan,
+            snapshot,
+            deltaTime,
+            `closure車体間隔=${bodyGap}:${edge.followerOrder}->${edge.aheadOrder}`,
+          );
+      }
+    }
+  }
+
+  private applyMergeTransaction(
+    transaction: MergeTransaction,
+  ): ReadonlyMap<number, ReservedMotion> {
+    const motionByOrder = new Map(
+      transaction.motions.map((motion) => [motion.vehicleOrder, motion]),
+    );
+    for (const vehicle of this.vehicles) {
+      vehicle.reservedMotion = null;
+      vehicle.mergeDirective = null;
+    }
+    for (const directive of transaction.directives) {
+      const certificate = directive.plan.certificate;
+      const ramp = certificate
+        ? this.vehicles.find((vehicle) => vehicle.spawnOrder === certificate.rampOrder)
+        : null;
+      if (!ramp) continue;
+      ramp.mergeDirective = directive;
+      ramp.mergePlan = directive.plan;
+      if (directive.cooperation) {
+        const rear = this.vehicles.find(
+          (candidate) => candidate.spawnOrder === directive.cooperation!.vehicleOrder,
+        );
+        if (rear) {
+          rear.mergeCooperationTarget = directive.plan.targetPassTime;
+          rear.mergeCooperationDecel = directive.cooperation.decel;
+        }
+      }
+      if (directive.startLaneChange) ramp.startReservedMergeLaneChange();
+    }
+    return motionByOrder;
   }
 
   // 入口待ちの車を、受け入れ可能になり次第(各側1台/ステップ)流入させる。
   // ランプ待ちはランプへ、本線待ちは空いている本線レーンへ入る。
-  // 待ち行列からの発進なので、初速は控えめ + 前方に対して安全な速度に丸める
-  admitWaiting(): void {
+  // 本線は控えめな安全速度、ランプはcertificateを証明したsnapshot速度で発進する。
+  admitWaiting(snapshot: WorldSnapshot = this.captureSnapshot(), deltaTime = 1 / 20): void {
+    const rampHeads: Vehicle[] = [];
+    const mainlineHeads: Vehicle[] = [];
     for (const section of ['L', 'R'] as const) {
-      const vehicle = this.vehicles.find(
-        (candidate) => candidate.waiting && candidate.section === section,
-      ); // 挿入順 = FIFO
-      if (!vehicle) continue;
-      const lanes =
-        vehicle.lane === 3
-          ? [3]
-          : [vehicle.lane, 0, 1, 2].filter((lane, index, all) => all.indexOf(lane) === index);
+      const waiting = this.vehicles
+        .filter((candidate) => candidate.waiting && candidate.section === section)
+        .sort((left, right) => left.spawnOrder - right.spawnOrder);
+      const rampHead = waiting.find((vehicle) => vehicle.lane === 3);
+      const mainlineHead = waiting.find((vehicle) => vehicle.lane !== 3);
+      if (rampHead) rampHeads.push(rampHead);
+      if (mainlineHead) mainlineHeads.push(mainlineHead);
+    }
+    for (const vehicle of mainlineHeads) {
+      const section = vehicle.section;
+      const lanes = [vehicle.lane, 0, 1, 2].filter(
+        (lane, index, all) => all.indexOf(lane) === index,
+      );
       const lane = this.admissibleLane(section, lanes, vehicle.z);
       if (lane == null) continue;
       vehicle.waiting = false;
@@ -268,6 +703,7 @@ export class World {
         vehicle,
       );
     }
+    this.admitRampWaiting(snapshot, rampHeads, deltaTime);
   }
 
   // 出口まで走り切った車を流出させる(rulesモードのみ。absorbは周回で退出しない)
@@ -311,6 +747,8 @@ export class World {
 
   reset(): void {
     this.vehicles.length = 0;
+    this.nextVehicleOrder = 0;
+    this.nextMergePlanId = 0;
     this.spawnAccumulator = 0;
     this.time = 0;
     this.sectionVehicles = { L: [], R: [] };
@@ -321,6 +759,7 @@ export class World {
       inflow: { L: 0, R: 0 },
       outflow: { L: 0, R: 0 },
     };
+    this.lastMergeSource = { L: null, R: null };
     this.smoothTime = { L: 0, R: 0, draw: 0 }; // 累積の比較もやり直す
     this.absorberRoundRobin = null;
     this.laneRoundRobin = 0;
@@ -342,8 +781,116 @@ export class World {
     this.sectionVehicles.R = vehiclesR;
   }
 
+  recordMergePasses(): void {
+    for (const vehicle of this.vehicles) {
+      if (vehicle.waiting) continue;
+      const crossedMergePoint =
+        vehicle.previousZ >= CONST.MERGE_POINT_Z && vehicle.z < CONST.MERGE_POINT_Z;
+      if (vehicle.rampMergePassPending) {
+        this.lastMergeSource[vehicle.section] = 'ramp';
+        vehicle.rampMergePassPending = false;
+        if (crossedMergePoint) vehicle.mergedFromRamp = false;
+        continue;
+      }
+      if (!crossedMergePoint || vehicle.lane !== 2) continue;
+      if (vehicle.mergedFromRamp) {
+        vehicle.mergedFromRamp = false;
+      } else {
+        this.lastMergeSource[vehicle.section] = 'main';
+      }
+    }
+  }
+
+  rampLeader(section: Section): Vehicle | null {
+    return (
+      this.sectionVehicles[section]
+        .filter(
+          (vehicle) =>
+            vehicle.lane === 3 ||
+            (vehicle.laneChange.from === 3 && vehicle.laneChange.state !== 'none'),
+        )
+        .sort((a, b) => a.z - b.z || a.spawnOrder - b.spawnOrder)[0] ?? null
+    );
+  }
+
+  applyMergeEvaluations(evaluations: { leader: Vehicle; plan: MergePlan }[]): void {
+    const reservedRears = new Set<Vehicle>();
+    const sorted = [...evaluations].sort(
+      (a, b) =>
+        a.plan.targetPassTime - b.plan.targetPassTime ||
+        Math.abs(a.leader.z - CONST.MERGE_POINT_Z) - Math.abs(b.leader.z - CONST.MERGE_POINT_Z) ||
+        a.leader.spawnOrder - b.leader.spawnOrder,
+    );
+    for (const evaluation of sorted) {
+      const rear = evaluation.plan.rear;
+      if (rear && reservedRears.has(rear)) {
+        evaluation.leader.applyMergePlan({
+          ...evaluation.leader.mergePlan,
+          state: 'seeking',
+          front: null,
+          rear: null,
+          targetPassTime: 0,
+          nextSource: null,
+        });
+        continue;
+      }
+      if (rear) reservedRears.add(rear);
+      evaluation.leader.applyMergePlan(evaluation.plan);
+    }
+  }
+
+  prepareMergeCoordination(
+    deltaTime: number,
+    protectedOrders: ReadonlySet<number> = new Set(),
+  ): void {
+    const leaders = (['L', 'R'] as const).map((section) => this.rampLeader(section));
+    const leaderSet = new Set(leaders.filter((vehicle): vehicle is Vehicle => vehicle !== null));
+    for (const vehicle of this.vehicles) {
+      if (
+        vehicle.waiting ||
+        vehicle.mergePlan.state === 'completed' ||
+        protectedOrders.has(vehicle.spawnOrder)
+      )
+        continue;
+      if (!leaderSet.has(vehicle)) vehicle.mergePlan.state = 'queued';
+    }
+    const evaluations = leaders
+      .filter(
+        (leader): leader is Vehicle =>
+          leader !== null &&
+          leader.mergePlan.state !== 'committed' &&
+          leader.mergePlan.certificate === null,
+      )
+      .map((leader) => ({
+        leader,
+        plan: leader.evaluateMergePlan(deltaTime, this.lastMergeSource[leader.section]),
+      }));
+    this.applyMergeEvaluations(evaluations);
+    const activeRears = new Set(
+      leaders
+        .filter(
+          (leader): leader is Vehicle =>
+            leader !== null &&
+            (leader.mergePlan.state === 'coordinating' || leader.mergePlan.state === 'committed'),
+        )
+        .map((leader) => leader.mergePlan.rear)
+        .filter((rear): rear is Vehicle => rear !== null),
+    );
+    for (const leader of leaders) {
+      const rearOrder = leader?.mergePlan.certificate?.cooperation?.rearOrder;
+      if (rearOrder === undefined) continue;
+      const rear = this.vehicles.find((vehicle) => vehicle.spawnOrder === rearOrder);
+      if (rear) activeRears.add(rear);
+    }
+    for (const vehicle of this.vehicles) {
+      if (activeRears.has(vehicle) || protectedOrders.has(vehicle.spawnOrder)) continue;
+      vehicle.mergeCooperationTarget = null;
+      vehicle.mergeCooperationDecel = 0;
+    }
+  }
+
   step(deltaTime: number): void {
-    this.time += deltaTime;
+    this.assertGoreInvariant('start');
     this.spawnAccumulator += deltaTime * 1000;
     // rulesモードの流入間隔は、終端で流出する分(EXIT_RATIO)とつり合う需要に換算する。
     // 「間隔が短い = 交通需要が多い」の意味は従来通り(密度は間隔に反比例)
@@ -379,12 +926,32 @@ export class World {
         }
       }
     }
-    // rulesモード: 入口待ちの車を、入口が空き次第流入させる
-    if (this.mode !== 'absorb') this.admitWaiting();
     this.rebuildSectionIndex();
-    for (const vehicle of this.vehicles) if (!vehicle.waiting) vehicle.update(deltaTime);
+    const snapshot = this.captureSnapshot();
+    const transaction = this.evaluateTick(snapshot, deltaTime);
+    this.assertTransactionSafety(snapshot, transaction, deltaTime);
+    const motionByOrder = this.applyMergeTransaction(transaction);
+    const protectedOrders = new Set(motionByOrder.keys());
+    this.prepareMergeCoordination(deltaTime, protectedOrders);
+    for (const vehicle of this.vehicles) {
+      if (vehicle.waiting) continue;
+      const motion = motionByOrder.get(vehicle.spawnOrder);
+      if (motion) vehicle.applyReservedMotion(motion, deltaTime);
+      else vehicle.update(deltaTime);
+    }
+    // 合流評価と速度更新は移動前の位置と同じ時刻スナップショットで行い、
+    // 全車両を次フレームの位置へ進めた後にシミュレーション時刻を更新する
+    this.time += deltaTime;
+    this.assertGoreInvariant('end');
+    this.recordMergePasses();
     // rulesモード: 出口まで走り切った車は流出する(捌けた分だけ出る)
     if (this.mode !== 'absorb') this.collectExited();
+    // 待機車の有効化は移動後 snapshot から証明し、この tick の運動へ混ぜない。
+    if (this.mode !== 'absorb') this.admitWaiting(this.captureSnapshot(), deltaTime);
+    for (const vehicle of this.vehicles) {
+      vehicle.reservedMotion = null;
+      vehicle.mergeDirective = null;
+    }
     this.accumulateSmoothTime(deltaTime);
   }
 
