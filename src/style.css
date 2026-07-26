@@ -7,11 +7,50 @@
 *::after {
   box-sizing: border-box;
 }
+:root {
+  --focus-ring-color: #fff;
+}
 button,
 input {
   font-family: inherit;
   font-size: inherit;
   line-height: inherit;
+}
+
+/* ---- フォーカスリング ----
+   操作対象の背景色に応じて描画位置と色を調整し、既存の立体的な影を保つ */
+/* :focus-visible に対応しない環境でクリック時のリングが出ないようにする */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+:is(button, input, [tabindex]):focus-visible {
+  outline: 3px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
+/* 白地のボタンは外側が緑のパネルなので、リングをボタンの内側に描いて濃い緑で示す */
+#resetBtn:focus-visible,
+#paramsBtn:focus-visible,
+#paramApply:focus-visible {
+  outline-color: #05613b;
+  outline-offset: -4px;
+}
+/* タイトル行は緑→琥珀のグラデーション上にあり単色では琥珀側で埋もれる。
+   白いリングの外に暗いハローを重ねて、どちらの地色でも輪郭が立つようにする */
+button.panel-title:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 7px rgba(3, 24, 15, 0.75);
+}
+/* 右上の丸ボタンは3Dの空の上にあるため、地色の明暗が反転する。
+   デイは明るい空に対して濃い緑、ナイトは暗い空に対して淡い黄で示す */
+#nightBtn:focus-visible,
+#spectatorBtn:focus-visible {
+  outline-color: #05613b;
+  outline-offset: 4px;
+}
+body.night #nightBtn:focus-visible,
+body.night #spectatorBtn:focus-visible {
+  outline-color: #ffe9a8;
 }
 
 html,
@@ -164,6 +203,20 @@ canvas {
   border-bottom: 2px solid rgba(255, 255, 255, 0.55);
   padding-bottom: 7px;
   margin-bottom: 9px;
+}
+button.panel-title {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  border-width: 0 0 2px;
+  border-style: solid;
+  border-color: rgba(255, 255, 255, 0.55);
+  padding: 0 0 7px;
+  margin: 0 0 9px;
+  text-align: left;
 }
 .route-badge {
   display: inline-flex;
@@ -321,7 +374,6 @@ input[type='range'] {
   height: 6px;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.35);
-  outline: none;
   margin: 6px 0 2px;
 }
 input[type='range']::-webkit-slider-thumb {
@@ -384,7 +436,6 @@ body.night {
   -webkit-tap-highlight-color: transparent;
   -webkit-appearance: none;
   appearance: none;
-  outline: none;
   border: 3px solid #fff;
   border-radius: 50%;
   color: #fff;
@@ -454,7 +505,6 @@ body.night #nightBtn {
   -webkit-tap-highlight-color: transparent;
   -webkit-appearance: none;
   appearance: none;
-  outline: none;
   border: 3px solid #fff;
   border-radius: 50%;
   color: #fff;
@@ -707,6 +757,9 @@ body.night #nightBtn {
 }
 #paramModal .panel-title {
   cursor: default;
+}
+#paramModal:focus-visible {
+  outline-offset: 4px;
 }
 #paramClose {
   margin-left: auto;

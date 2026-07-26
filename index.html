@@ -29,12 +29,17 @@
 
     <!-- コントロールパネル（左上） -->
     <div id="controlPanel" class="sign panel">
-      <div class="panel-title">
+      <button
+        type="button"
+        class="panel-title"
+        aria-expanded="true"
+        aria-controls="controlPanelBody"
+      >
         <img class="app-icon" src="/traffic-jam.svg" alt="" />渋滞シミュレーション<span class="chev"
           ><i data-lucide="chevron-down"></i
         ></span>
-      </div>
-      <div class="panel-body">
+      </button>
+      <div id="controlPanelBody" class="panel-body">
         <div class="row">
           総車両数: <span class="num" id="vehicleCount">0</span> /
           <span class="num" id="maxVehicleCount"></span>
@@ -44,7 +49,9 @@
           <input type="range" id="intervalSlider" min="100" max="3000" step="50" value="800" />
         </div>
         <button id="resetBtn"><i data-lucide="rotate-ccw"></i>リセット</button>
-        <button id="paramsBtn"><i data-lucide="sliders-horizontal"></i>パラメータ調整室</button>
+        <button id="paramsBtn" aria-haspopup="dialog">
+          <i data-lucide="sliders-horizontal"></i>パラメータ調整室
+        </button>
         <div class="hint">
           <i data-lucide="mouse"></i>ドラッグ: 視点回転 ／ ホイール: ズーム<br /><i
             data-lucide="smartphone"
@@ -56,15 +63,15 @@
 
     <!-- 下部: 2区間の比較パネル(1枚) -->
     <div id="infoPanel" class="sign panel" style="position: fixed">
-      <div class="panel-title">
+      <button type="button" class="panel-title" aria-expanded="true" aria-controls="infoPanelBody">
         <span class="route-badge">比</span>渋滞スコア比較
         <span class="mini-pair"
           ><span class="mL" id="miniLeft">0.0</span><span class="sep">vs</span
           ><span class="mR" id="miniRight">0.0</span></span
         >
         <span class="chev"><i data-lucide="chevron-down"></i></span>
-      </div>
-      <div class="panel-body">
+      </button>
+      <div id="infoPanelBody" class="panel-body">
         <div class="compare">
           <div class="side left">
             <div class="crown" id="crownLeft"><i data-lucide="crown"></i>こちらがスムーズ</div>
@@ -127,8 +134,15 @@
 
     <!-- パラメータ調整室 -->
     <div id="paramOverlay">
-      <div id="paramModal" class="sign">
-        <div class="panel-title">
+      <div
+        id="paramModal"
+        class="sign"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="paramModalTitle"
+        tabindex="-1"
+      >
+        <div id="paramModalTitle" class="panel-title">
           <span class="route-badge">調</span>パラメータ調整室
           <button id="paramClose" aria-label="閉じる"><i data-lucide="x"></i></button>
         </div>
