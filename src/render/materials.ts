@@ -84,7 +84,7 @@ export function makeGrassTexture(): THREE.CanvasTexture {
   texture.repeat.set(56, 56);
   return texture;
 }
-export function makeAsphaltTexture(): THREE.CanvasTexture {
+export function makeAsphaltTexture(drawRuts = true, repeatX = 1): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 512;
@@ -111,17 +111,19 @@ export function makeAsphaltTexture(): THREE.CanvasTexture {
       1 + Math.random() * 2,
     );
   }
-  // 轍(わだち): タイヤが通る位置はゴムと油で黒ずむ。3車線ぶん左右2本ずつ
-  for (const laneCenterU of [0.197, 0.5, 0.803]) {
-    // 路面幅13.2mに対する各車線中心
-    for (const side of [-1, 1]) {
-      const x = (laneCenterU + side * 0.062) * 256;
-      const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
-      gradient.addColorStop(0, 'rgba(40,40,44,0)');
-      gradient.addColorStop(0.5, 'rgba(40,40,44,0.22)');
-      gradient.addColorStop(1, 'rgba(40,40,44,0)');
-      ctx.fillStyle = gradient;
-      ctx.fillRect(x - 15, 0, 30, 512);
+  if (drawRuts) {
+    // 轍(わだち): タイヤが通る位置はゴムと油で黒ずむ。3車線ぶん左右2本ずつ
+    for (const laneCenterU of [0.197, 0.5, 0.803]) {
+      // 路面幅13.2mに対する各車線中心
+      for (const side of [-1, 1]) {
+        const x = (laneCenterU + side * 0.062) * 256;
+        const gradient = ctx.createLinearGradient(x - 15, 0, x + 15, 0);
+        gradient.addColorStop(0, 'rgba(40,40,44,0)');
+        gradient.addColorStop(0.5, 'rgba(40,40,44,0.22)');
+        gradient.addColorStop(1, 'rgba(40,40,44,0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x - 15, 0, 30, 512);
+      }
     }
   }
   // 補修痕・シミ
@@ -136,10 +138,12 @@ export function makeAsphaltTexture(): THREE.CanvasTexture {
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(1, 34);
+  texture.repeat.set(repeatX, 34);
   return texture;
 }
 export const asphaltTexture = makeAsphaltTexture();
+// 側道用。幅が本線の3.6/13.2なので、骨材の粒を横に引き伸ばさず本線と同じ縮尺にするためrepeat.xも合わせる。
+export const frontageAsphaltTexture = makeAsphaltTexture(false, 3.6 / 13.2);
 
 /* ---- 遠景の山並み(白で描き、themeがcolorで昼夜の色を乗せる) ---- */
 // relief: 稜線の起伏の大きさ / baseY: 稜線の基準高さ(キャンバス座標・小さいほど高い)
