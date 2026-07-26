@@ -4,7 +4,7 @@
    ============================================================ */
 import { CONST, TYPES } from './constants';
 import type { Section, VehicleTypeName, VehicleTypeSpec } from './constants';
-import { buildMergeDependencyClosure } from './merge-transaction';
+import { buildMergeDependencyClosure, mergeClosureTerminalSpeeds } from './merge-transaction';
 import { clamp, lerp, smooth, wrapDelta, WRAP_LENGTH } from './utils';
 import type { World } from './world';
 
@@ -102,7 +102,9 @@ export interface MergeDirective {
 export interface ReservedMotion {
   readonly vehicleOrder: number;
   readonly nextSpeed: number;
-  readonly lockLaneChange: boolean;
+  readonly nextZ: number;
+  readonly nextX: number;
+  readonly laneChangeProgress: number | null;
 }
 
 export interface MergeTransaction {
@@ -351,10 +353,8 @@ export class Vehicle {
     return lane === this.lane || (this.laneChange.state !== 'none' && lane === this.laneChange.to);
   }
 
-  /** legacy 判断を通さず、予約 transaction の連続運動だけを反映する。 */
-  updateReservedMotion(deltaTime: number): void {
-    const motion = this.reservedMotion;
-    if (!motion) return;
+  /** legacy 判断を通さず、snapshot から確定済みの運動だけを反映する。 */
+  applyReservedMotion(motion: ReservedMotion, deltaTime: number): void {
     this.previousZ = this.z;
     const previousSpeed = this.speed;
     this.speed = motion.nextSpeed;
@@ -362,10 +362,10 @@ export class Vehicle {
     this.lampDeceleration = Math.max(0, (previousSpeed - this.speed) / deltaTime);
     this.brakeChainSignal = this.lampDeceleration >= 1.5;
     this.braking = this.lampDeceleration >= 5;
-    this.z -= this.speed * deltaTime;
-    if (this.z < -CONST.ROAD_HALF - 8) this.z += WRAP_LENGTH;
-    if (!motion.lockLaneChange) this.advanceReservedLaneChange(deltaTime);
-    this.updateX();
+    this.z = motion.nextZ;
+    this.x = motion.nextX;
+    if (motion.laneChangeProgress !== null)
+      this.advanceReservedLaneChange(motion.laneChangeProgress);
   }
 
   /** 証明済み transaction だけが呼ぶ、再評価も cancel も行わない合流開始。 */
@@ -381,16 +381,24 @@ export class Vehicle {
   }
 
   /** transaction が証明した横移動を、mutable な周囲状態を読み直さず進める。 */
-  private advanceReservedLaneChange(deltaTime: number): void {
+  private advanceReservedLaneChange(progress: number): void {
     const laneChange = this.laneChange;
     if (laneChange.state === 'none') return;
     if (laneChange.from !== 3 || laneChange.to !== 2 || laneChange.state !== 'changing')
       throw new Error(`予約外の車線変更状態: vehicle=${this.spawnOrder}`);
-    laneChange.progress += deltaTime / CONST.LANE_CHANGE_DURATION;
+    laneChange.progress = progress;
     if (laneChange.progress < 1 - 1e-9) return;
     laneChange.progress = 1;
     this.lane = 2;
     laneChange.state = 'none';
+    const cooperation = this.mergePlan.certificate?.cooperation;
+    const cooperator = cooperation
+      ? this.world.vehicles.find((vehicle) => vehicle.spawnOrder === cooperation.rearOrder)
+      : null;
+    if (cooperator?.mergeCooperationTarget === this.mergePlan.targetPassTime) {
+      cooperator.mergeCooperationTarget = null;
+      cooperator.mergeCooperationDecel = 0;
+    }
     this.mergePlan = {
       ...this.mergePlan,
       state: 'completed',
@@ -399,6 +407,9 @@ export class Vehicle {
       targetPassTime: 0,
       nextSource: null,
       cooperationDecel: undefined,
+      certificate: null,
+      envelope: undefined,
+      completionZ: undefined,
     };
     this.mergedFromRamp = this.z >= CONST.MERGE_POINT_Z;
     this.rampMergePassPending = true;
@@ -498,11 +509,9 @@ export class Vehicle {
       if (decel > 0) cooperation = { rearOrder: rear.vehicle.order, decel };
     }
 
-    const roots = [
-      front?.vehicle.order,
-      rear?.vehicle.order,
-      cooperation?.rearOrder,
-    ].filter((order, index, all): order is number => order !== undefined && all.indexOf(order) === index);
+    const roots = [front?.vehicle.order, rear?.vehicle.order, cooperation?.rearOrder].filter(
+      (order, index, all): order is number => order !== undefined && all.indexOf(order) === index,
+    );
     const closureResult = buildMergeDependencyClosure(
       snapshot,
       ramp.section,
@@ -548,20 +557,21 @@ export class Vehicle {
       (certificate.cooperation !== null && !cooperator)
     )
       return null;
-    const projectedOffset = (vehicle: VehicleSnapshot, decel = 0): number =>
-      wrapDelta(
-        vehicle.z -
-          (vehicle.speed * remaining - 0.5 * decel * remaining ** 2) -
-          certificate.completionZ,
-      );
-    const frontGap = front ? -projectedOffset(front) - (front.length + ramp.length) / 2 : Infinity;
     const cooperation = certificate.cooperation;
-    const rearDecel = cooperation?.decel ?? 0;
-    const rearGap = rear
-      ? projectedOffset(rear, rearDecel) - (rear.length + ramp.length) / 2
+    const terminalSpeeds = mergeClosureTerminalSpeeds(snapshot, certificate);
+    const frontGap = front
+      ? -(
+          wrapDelta(front.z - certificate.completionZ) -
+          0.5 * (front.speed + (terminalSpeeds.get(front.order) ?? front.speed)) * remaining
+        ) -
+        (front.length + ramp.length) / 2
       : Infinity;
-    const rearSpeed = rear ? rear.speed - rearDecel * remaining : 0;
-    const headways = this.mergeHeadways(0);
+    const rearGap = rear
+      ? nextArrivalDistance(rear.z, certificate.completionZ) -
+        0.5 * (rear.speed + (terminalSpeeds.get(rear.order) ?? rear.speed)) * remaining -
+        (rear.length + ramp.length) / 2
+      : Infinity;
+    const rearSpeed = rear ? (terminalSpeeds.get(rear.order) ?? rear.speed) : 0;
     const rearTtc =
       rear && rearSpeed > certificate.envelope.max
         ? rearGap / (rearSpeed - certificate.envelope.max)
@@ -570,9 +580,10 @@ export class Vehicle {
       min: Math.max(certificate.envelope.min, ramp.speed - CONST.MERGE_MAX_COOP_DECEL * deltaTime),
       max: Math.min(certificate.envelope.max, ramp.speed + this.type.acceleration * deltaTime),
     };
+    const headways = this.mergeHeadways(0);
     if (
       envelope.min > envelope.max ||
-      frontGap < headways.front * envelope.max ||
+      frontGap < CONST.MERGE_BODY_CLEARANCE ||
       rearGap < headways.rear * rearSpeed ||
       rearTtc < 4 ||
       rearSpeed < 0
@@ -1428,12 +1439,6 @@ export class Vehicle {
     // 前方車への追従・緊急ブレーキはこの後の通常ロジックがそのまま制限するため安全は保たれる
     if (this.returnBoostTimer > 0) desire += CONST.RETURN_BOOST_SPEED_DELTA;
     let targetSpeed = this.yieldSlowTimer > 0 ? Math.max(8, desire - 2.5) : desire;
-    if (this.mergeDirective)
-      targetSpeed = clamp(
-        targetSpeed,
-        this.mergeDirective.envelope.min,
-        this.mergeDirective.envelope.max,
-      );
     let mergeArrivalDecel = 0;
     let mergeArrivalLimited = false;
     if (

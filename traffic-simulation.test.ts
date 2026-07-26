@@ -13,9 +13,11 @@ import {
   createRng,
   mergeCongestion,
   nextArrivalDistance,
+  planMergeTransaction,
   RAMP_GEOMETRY,
   rampBodyIntersectsGore,
   sectionTrackX,
+  validateMergeTransactionHorizon,
   Vehicle,
   World,
   WRAP_LENGTH,
@@ -37,6 +39,7 @@ interface ScenarioResult {
   countL: number;
   countR: number;
   minGap: number;
+  minGapDetail: string;
   world: World;
 }
 
@@ -51,6 +54,7 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
     sumCountR = 0,
     samples = 0,
     minGap = Infinity;
+  let minGapDetail = '';
   const steps = Math.round(seconds / TIME_STEP);
   for (let i = 0; i < steps; i++) {
     world.step(TIME_STEP);
@@ -65,7 +69,23 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
           if (ahead.laneChange.state !== 'none' || behind.laneChange.state !== 'none') continue;
           if (ahead.lane !== behind.lane) continue;
           const gap = Math.abs(behind.z - ahead.z) - (ahead.length + behind.length) / 2;
-          if (gap < minGap) minGap = gap;
+          if (gap < minGap) {
+            minGap = gap;
+            const activeClosures = world.vehicles
+              .filter((vehicle) => vehicle.mergePlan.certificate)
+              .map((vehicle) => ({
+                ramp: vehicle.spawnOrder,
+                lane: vehicle.lane,
+                state: vehicle.mergePlan.state,
+                targetPassTime: vehicle.mergePlan.certificate!.targetPassTime,
+                orders: vehicle.mergePlan.certificate!.closure.orders,
+                edges: vehicle.mergePlan.certificate!.closure.edges,
+              }));
+            minGapDetail =
+              `seed=${seed},time=${world.time},section=${section},` +
+              `ahead=${ahead.spawnOrder}@${ahead.z},behind=${behind.spawnOrder}@${behind.z},` +
+              `speed=${ahead.speed}/${behind.speed},closures=${JSON.stringify(activeClosures)}`;
+          }
         }
       }
       if (elapsed >= measureFrom) {
@@ -85,6 +105,7 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
     countL: sumCountL / samples,
     countR: sumCountR / samples,
     minGap,
+    minGapDetail,
     world,
   };
 }
@@ -313,7 +334,11 @@ describe('衝突回避・貫通防止', () => {
   test('長時間運転しても同一車線内で車両が重ならない (許容 -1.0m)', () => {
     let worstGap = Infinity;
     for (const result of getResults()) worstGap = Math.min(worstGap, result.minGap);
-    expect(worstGap, `車間が ${worstGap.toFixed(2)}m まで縮まり貫通が発生`).toBeGreaterThan(-1.0);
+    const result = getResults().find((entry) => entry.minGap === worstGap)!;
+    expect(
+      worstGap,
+      `車間が ${worstGap.toFixed(2)}m まで縮まり貫通が発生: ${result.minGapDetail}`,
+    ).toBeGreaterThan(-1.0);
   });
 });
 
@@ -369,7 +394,8 @@ describe('渋滞スコア算出', () => {
    ============================================================ */
 describe('流入・流出と滞留 (Issue #12)', () => {
   test('流入需要は左右同ペース(混雑側の流入が上回ることはない)', () => {
-    for (const result of getResults()) {
+    const results = getResults();
+    for (const result of results) {
       expect(
         result.world.stats.inflow.L,
         `seed=${result.seed}: 混雑側(R)の流入 ${result.world.stats.inflow.R} が L ${result.world.stats.inflow.L} を上回った`,
@@ -2075,7 +2101,6 @@ describe('導流帯越境不変条件 (Issue #48)', () => {
 
     world.step(TIME_STEP);
 
-    expect(front.reservedMotion).not.toBeNull();
     expect(front.speed).toBe(speedBefore);
     expect(front.perturbTimer).toBe(2);
     expect(front.laneChange.state).toBe('none');
@@ -2149,28 +2174,6 @@ describe('導流帯越境不変条件 (Issue #48)', () => {
     expect(intruder.checkLaneSafetyForChange(2)).toBe('safe');
     expect(intruder.tryLaneChange(2)).toBe(false);
     expect(intruder.laneChange.state).toBe('none');
-  });
-
-  test('protected本線roleの次速度はsnapshot上の直前車を貫通しない上限を持つ', () => {
-    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
-    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
-    const rear = new Vehicle(world, 'L', 2, 375, 'Sedan', 20);
-    ramp.speed = 24;
-    rear.speed = 20;
-    ramp.waiting = true;
-    world.vehicles.push(ramp, rear);
-    world.admitWaiting();
-    const ahead = new Vehicle(world, 'L', 2, 370.082, 'Sedan', 15);
-    ahead.speed = 15;
-    world.vehicles.push(ahead);
-
-    const transaction = world.evaluateTick(world.captureSnapshot(), TIME_STEP);
-    const rearMotion = transaction.motions.find(
-      (motion) => motion.vehicleOrder === rear.spawnOrder,
-    );
-
-    expect(rearMotion).toBeDefined();
-    expect(rearMotion!.nextSpeed).toBeLessThanOrEqual(19.861);
   });
 });
 
@@ -2272,6 +2275,30 @@ describe('前方縦列予約 transaction (Issue #48)', () => {
     ).toMatchObject({ ok: false, reason: 'limit' });
   });
 
+  test('lane 2へ変更中の直前車を途中で凍結せず候補を拒否する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const role = new Vehicle(world, 'L', 2, 320, 'Sedan', 20);
+    const changingAhead = new Vehicle(world, 'L', 1, 300, 'Sedan', 20);
+    role.speed = changingAhead.speed = 20;
+    changingAhead.laneChange = {
+      state: 'changing',
+      from: 1,
+      to: 2,
+      progress: 0.5,
+      holdTime: 0,
+      checkTimer: 0,
+    };
+    world.vehicles.push(role, changingAhead);
+
+    expect(
+      buildMergeDependencyClosure(world.captureSnapshot(), 'L', [role.spawnOrder], world.time + 2),
+    ).toMatchObject({
+      ok: false,
+      reason: 'lane-change-in-progress',
+      order: changingAhead.spawnOrder,
+    });
+  });
+
   test('frontとrearから必要な前方縦列を証明書へ固定する', () => {
     const world = dependencyWorld();
     const ramp = world.vehicles.find((vehicle) => vehicle.lane === 3)!;
@@ -2304,5 +2331,479 @@ describe('前方縦列予約 transaction (Issue #48)', () => {
 
     expect(ramp.waiting).toBe(true);
     expect(ramp.mergePlan.certificate).toBeNull();
+  });
+
+  test('direct roleだけでなく前方dependencyも同じtransaction motionを持つ', () => {
+    const world = dependencyWorld();
+    const ramp = world.vehicles.find((vehicle) => vehicle.lane === 3)!;
+    world.admitWaiting();
+    const snapshot = world.captureSnapshot();
+
+    const transaction = world.evaluateTick(snapshot, TIME_STEP);
+    const expected = [ramp.spawnOrder, ...(ramp.mergePlan.certificate?.closure.orders ?? [])].sort(
+      (a, b) => a - b,
+    );
+
+    expect(transaction.motions.map((motion) => motion.vehicleOrder).sort((a, b) => a - b)).toEqual(
+      expected,
+    );
+  });
+
+  test('follower速度は同時更新するahead速度と車体間隔から得たhard upper bound以下になる', () => {
+    const world = dependencyWorld();
+    const ramp = world.vehicles.find((vehicle) => vehicle.lane === 3)!;
+    world.admitWaiting();
+    const snapshot = world.captureSnapshot();
+    const transaction = world.evaluateTick(snapshot, TIME_STEP);
+    const edge = ramp.mergePlan.certificate!.closure.edges[0];
+    const bySnapshot = new Map(snapshot.vehicles.map((vehicle) => [vehicle.order, vehicle]));
+    const byMotion = new Map(transaction.motions.map((motion) => [motion.vehicleOrder, motion]));
+    const follower = bySnapshot.get(edge.followerOrder)!;
+    const ahead = bySnapshot.get(edge.aheadOrder)!;
+    const distance = (((follower.z - ahead.z) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+    const bodyGap = distance - (follower.length + ahead.length) / 2;
+    const collisionMax =
+      byMotion.get(ahead.order)!.nextSpeed + (bodyGap - CONST.MERGE_BODY_CLEARANCE) / TIME_STEP;
+
+    expect(byMotion.get(follower.order)!.nextSpeed).toBeLessThanOrEqual(collisionMax + 1e-9);
+    expect(byMotion.get(follower.order)!.nextSpeed).toBeGreaterThan(0);
+  });
+
+  test('全motionのnextZは同じsnapshotとnextSpeedから一度だけ計算する', () => {
+    const world = dependencyWorld();
+    world.admitWaiting();
+    const snapshot = world.captureSnapshot();
+    const transaction = world.evaluateTick(snapshot, TIME_STEP);
+    const bySnapshot = new Map(snapshot.vehicles.map((vehicle) => [vehicle.order, vehicle]));
+
+    for (const motion of transaction.motions) {
+      const vehicle = bySnapshot.get(motion.vehicleOrder)!;
+      let expectedZ = vehicle.z - motion.nextSpeed * TIME_STEP;
+      if (expectedZ < -CONST.ROAD_HALF - 8) expectedZ += WRAP_LENGTH;
+      expect(motion.nextZ).toBeCloseTo(expectedZ, 12);
+    }
+  });
+
+  test('次tickに速度区間が空になるclosureは初回motion前に拒否する', () => {
+    const world = dependencyWorld();
+    const ramp = world.vehicles.find((vehicle) => vehicle.lane === 3)!;
+    world.admitWaiting();
+    const certificate = ramp.mergePlan.certificate!;
+    const edge = certificate.closure.edges.find(
+      (candidate) => candidate.followerOrder === certificate.frontOrder,
+    )!;
+    const follower = world.vehicles.find((vehicle) => vehicle.spawnOrder === edge.followerOrder)!;
+    const ahead = world.vehicles.find((vehicle) => vehicle.spawnOrder === edge.aheadOrder)!;
+    follower.speed = 28;
+    ahead.speed = 20;
+    follower.z = 300;
+    ahead.z = 292.9;
+    const snapshot = world.captureSnapshot();
+
+    expect(() =>
+      planMergeTransaction(
+        snapshot,
+        [
+          {
+            plan: ramp.mergePlan,
+            envelope: certificate.envelope,
+            startLaneChange: false,
+            cooperation: certificate.cooperation
+              ? {
+                  vehicleOrder: certificate.cooperation.rearOrder,
+                  decel: certificate.cooperation.decel,
+                }
+              : null,
+          },
+        ],
+        TIME_STEP,
+      ),
+    ).toThrow(/closure速度区間なし/);
+  });
+
+  test('aheadの期限時減速を後続memberの初回motionへ伝播する', () => {
+    const world = dependencyWorld();
+    const ramp = world.vehicles.find((vehicle) => vehicle.lane === 3)!;
+    world.admitWaiting();
+    const original = ramp.mergePlan.certificate!;
+    const front = world.vehicles.find((vehicle) => vehicle.spawnOrder === original.frontOrder)!;
+    const rear = world.vehicles.find((vehicle) => vehicle.spawnOrder === original.rearOrder)!;
+    front.speed = 20;
+    rear.speed = 20;
+    front.z = 300;
+    rear.z = 307.1;
+    const certificate = {
+      ...original,
+      cooperation: { rearOrder: front.spawnOrder, decel: CONST.MERGE_MAX_COOP_DECEL },
+    };
+    const plan = { ...ramp.mergePlan, certificate };
+
+    const transaction = planMergeTransaction(
+      world.captureSnapshot(),
+      [
+        {
+          plan,
+          envelope: certificate.envelope,
+          startLaneChange: false,
+          cooperation: {
+            vehicleOrder: front.spawnOrder,
+            decel: CONST.MERGE_MAX_COOP_DECEL,
+          },
+        },
+      ],
+      TIME_STEP,
+    );
+    const motions = new Map(transaction.motions.map((motion) => [motion.vehicleOrder, motion]));
+
+    expect(motions.get(rear.spawnOrder)!.nextSpeed).toBeLessThanOrEqual(
+      motions.get(front.spawnOrder)!.nextSpeed,
+    );
+  });
+
+  test('closure付きtransactionはvehicle配列をreverseしても同じになる', () => {
+    const world = dependencyWorld();
+    world.admitWaiting();
+    const snapshot = world.captureSnapshot();
+    const first = world.evaluateTick(snapshot, TIME_STEP);
+
+    world.vehicles.reverse();
+    const second = world.evaluateTick(snapshot, TIME_STEP);
+    const ordered = (transaction: typeof first) => ({
+      directives: [...transaction.directives].sort(
+        (left, right) => left.plan.certificate!.rampOrder - right.plan.certificate!.rampOrder,
+      ),
+      motions: [...transaction.motions].sort(
+        (left, right) => left.vehicleOrder - right.vehicleOrder,
+      ),
+    });
+
+    expect(ordered(second)).toEqual(ordered(first));
+  });
+
+  test('予約がなければtransactionは空で通常車だけがlegacy更新される', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const normal = new Vehicle(world, 'L', 1, 0, 'Sedan', 20);
+    normal.speed = 20;
+    normal.perturbTimer = 1;
+    world.vehicles.push(normal);
+
+    expect(world.evaluateTick(world.captureSnapshot(), TIME_STEP)).toEqual({
+      directives: [],
+      motions: [],
+    });
+    world.step(TIME_STEP);
+    expect(normal.perturbTimer).toBeLessThan(1);
+  });
+
+  test('closure memberはlegacyを通らず非closure車だけが通常更新される', () => {
+    const world = dependencyWorld();
+    const unrelated = new Vehicle(world, 'L', 1, 50, 'Sedan', 20);
+    unrelated.speed = 20;
+    unrelated.perturbTimer = 1;
+    world.vehicles.push(unrelated);
+    world.admitWaiting();
+    const closureOrders = new Set(
+      world.vehicles.find((vehicle) => vehicle.lane === 3)!.mergePlan.certificate!.closure.orders,
+    );
+    for (const vehicle of world.vehicles)
+      if (closureOrders.has(vehicle.spawnOrder)) vehicle.perturbTimer = 1;
+
+    world.step(TIME_STEP);
+
+    expect(unrelated.perturbTimer).toBeLessThan(1);
+    for (const vehicle of world.vehicles)
+      if (closureOrders.has(vehicle.spawnOrder)) expect(vehicle.perturbTimer).toBe(1);
+  });
+
+  test('事前計算済み位置を一括適用しephemeral予約状態をtick末に破棄する', () => {
+    const world = dependencyWorld();
+    world.admitWaiting();
+    const transaction = world.evaluateTick(world.captureSnapshot(), TIME_STEP);
+    const motions = new Map(transaction.motions.map((motion) => [motion.vehicleOrder, motion]));
+
+    world.step(TIME_STEP);
+
+    for (const vehicle of world.vehicles) {
+      const motion = motions.get(vehicle.spawnOrder);
+      if (motion) {
+        expect(vehicle.z).toBe(motion.nextZ);
+        expect(vehicle.x).toBe(motion.nextX);
+      }
+      expect(vehicle.reservedMotion).toBeNull();
+      expect(vehicle.mergeDirective).toBeNull();
+    }
+  });
+
+  test('closureから離れたlane 2車線変更は予約中も一律拒否しない', () => {
+    const world = dependencyWorld();
+    world.admitWaiting();
+    const far = new Vehicle(world, 'L', 1, -200, 'Sedan', 20);
+    far.speed = 20;
+    world.vehicles.push(far);
+    world.rebuildSectionIndex();
+
+    expect(world.blocksReservedLaneChange(far, 2)).toBe(false);
+  });
+
+  test('target laneの直前または直後がclosure memberなら割込みを拒否する', () => {
+    const world = dependencyWorld();
+    world.admitWaiting();
+    const ramp = world.vehicles.find((vehicle) => vehicle.lane === 3)!;
+    const roleOrder = ramp.mergePlan.certificate!.closure.orders[0];
+    const role = world.vehicles.find((vehicle) => vehicle.spawnOrder === roleOrder)!;
+    const intruder = new Vehicle(world, 'L', 1, role.z + 3, 'Sedan', role.speed);
+    intruder.speed = role.speed;
+    world.vehicles.push(intruder);
+    world.rebuildSectionIndex();
+
+    expect(world.blocksReservedLaneChange(intruder, 2)).toBe(true);
+  });
+
+  test('予約合流完了時にcertificateとclosure lockを解放する', () => {
+    const world = dependencyWorld();
+    world.admitWaiting();
+    const ramp = world.vehicles.find((vehicle) => vehicle.lane === 3)!;
+    const observer = new Vehicle(world, 'L', 1, 310, 'Sedan', 20);
+    observer.speed = 20;
+    world.vehicles.push(observer);
+
+    for (let step = 0; step < 200 && ramp.lane === 3; step++) world.step(TIME_STEP);
+
+    expect(ramp.lane).toBe(2);
+    expect(ramp.mergePlan.certificate).toBeNull();
+    expect(ramp.mergePlan.envelope).toBeUndefined();
+    expect(world.blocksReservedLaneChange(observer, 2)).toBe(false);
+  });
+
+  test('高流入でもlane 3を停止させず導流帯へ入れずwaitingへ滞留させる', () => {
+    const world = new World({ rng: createRng(48), spawnInterval: 300 });
+    world.populateInitial();
+    let sawRampWaiting = false;
+
+    for (let step = 0; step < 3600; step++) {
+      world.step(TIME_STEP);
+      sawRampWaiting ||= world.vehicles.some((vehicle) => vehicle.waiting && vehicle.lane === 3);
+      for (const vehicle of world.vehicles) {
+        if (vehicle.waiting || vehicle.lane !== 3) continue;
+        expect(vehicle.speed).toBeGreaterThan(0);
+        expect(vehicle.z).toBeGreaterThan(CONST.GORE_Z_START);
+        expect(
+          rampBodyIntersectsGore(
+            sectionTrackX(vehicle.section, vehicle.x),
+            vehicle.z,
+            vehicle.width,
+            vehicle.length,
+          ),
+        ).toBe(false);
+      }
+    }
+
+    expect(sawRampWaiting).toBe(true);
+  });
+
+  function mirroredDependencyWorld(): World {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    for (const section of ['L', 'R'] as const) {
+      const ramp = new Vehicle(world, section, 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+      const front = new Vehicle(world, section, 2, 310, 'Sedan', 20);
+      const frontAhead = new Vehicle(world, section, 2, 285, 'Sedan', 20);
+      const rear = new Vehicle(world, section, 2, 375, 'Sedan', 20);
+      const safeBoundary = new Vehicle(world, section, 2, 150, 'Sedan', 20);
+      ramp.speed = 24;
+      ramp.waiting = true;
+      for (const vehicle of [front, frontAhead, rear, safeBoundary]) vehicle.speed = 20;
+      world.vehicles.push(ramp, front, frontAhead, rear, safeBoundary);
+    }
+    return world;
+  }
+
+  function sectionOrderRanks(world: World, section: 'L' | 'R'): Map<number, number> {
+    return new Map(
+      world.vehicles
+        .filter((vehicle) => vehicle.section === section)
+        .sort((left, right) => left.spawnOrder - right.spawnOrder)
+        .map((vehicle, index) => [vehicle.spawnOrder, index]),
+    );
+  }
+
+  function normalizeClosure(ramp: Vehicle) {
+    const ranks = sectionOrderRanks(ramp.world, ramp.section);
+    const closure = ramp.mergePlan.certificate!.closure;
+    return {
+      orders: closure.orders.map((order) => ranks.get(order)!),
+      edges: closure.edges
+        .map((edge) => ({
+          followerOrder: ranks.get(edge.followerOrder)!,
+          aheadOrder: ranks.get(edge.aheadOrder)!,
+        }))
+        .sort(
+          (left, right) =>
+            left.followerOrder - right.followerOrder || left.aheadOrder - right.aheadOrder,
+        ),
+    };
+  }
+
+  function normalizeMotions(
+    world: World,
+    transaction: ReturnType<World['evaluateTick']>,
+    section: 'L' | 'R',
+  ) {
+    const ranks = sectionOrderRanks(world, section);
+    const byOrder = new Map(world.vehicles.map((vehicle) => [vehicle.spawnOrder, vehicle]));
+    return transaction.motions
+      .filter((motion) => byOrder.get(motion.vehicleOrder)?.section === section)
+      .map((motion) => ({
+        vehicleOrder: ranks.get(motion.vehicleOrder)!,
+        nextSpeed: motion.nextSpeed,
+        nextZ: motion.nextZ,
+        nextX: motion.nextX - CONST.SECTION_OFFSET_X[section],
+        laneChangeProgress: motion.laneChangeProgress,
+      }))
+      .sort((left, right) => left.vehicleOrder - right.vehicleOrder);
+  }
+
+  test('L/Rのdependency closureとmotionはorder正規化後に一致する', () => {
+    const world = mirroredDependencyWorld();
+    world.admitWaiting();
+    const transaction = world.evaluateTick(world.captureSnapshot(), TIME_STEP);
+    const ramps = (['L', 'R'] as const).map(
+      (section) =>
+        world.vehicles.find((vehicle) => vehicle.section === section && vehicle.lane === 3)!,
+    );
+
+    expect(normalizeClosure(ramps[0])).toEqual(normalizeClosure(ramps[1]));
+    expect(normalizeMotions(world, transaction, 'L')).toEqual(
+      normalizeMotions(world, transaction, 'R'),
+    );
+  });
+
+  test('seed=44でも義務あり側の流入が義務なし側を下回らない', () => {
+    const result = getResults().find((entry) => entry.seed === 44)!;
+    expect(
+      result.world.stats.inflow.L,
+      `seed=44: inflow L=${result.world.stats.inflow.L}, R=${result.world.stats.inflow.R}`,
+    ).toBeGreaterThanOrEqual(result.world.stats.inflow.R);
+  });
+
+  test('初期は前方でも合流途中にrearとなる車両との時空間交差を拒否する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Van', 18.97017482877709);
+    const front = new Vehicle(world, 'L', 2, 278.02193000383994, 'Van', 18.059128418564796);
+    const rear = new Vehicle(world, 'L', 2, 310.30953521438084, 'Truck', 15.46403223881498);
+    ramp.speed = 17.724271619194656;
+    ramp.waiting = true;
+    front.speed = 18.049215928541813;
+    rear.speed = 4.67294305712168;
+    world.vehicles.push(ramp, front, rear);
+    const snapshot = world.captureSnapshot();
+    const certificate = ramp.evaluateEntryCertificate(snapshot)!;
+    const plan = {
+      ...ramp.mergePlan,
+      targetPassTime: certificate.targetPassTime,
+      completionZ: certificate.completionZ,
+      envelope: certificate.envelope,
+      certificate,
+    };
+
+    expect(() =>
+      validateMergeTransactionHorizon(
+        snapshot,
+        {
+          plan,
+          envelope: certificate.envelope,
+          startLaneChange: false,
+          cooperation: certificate.cooperation
+            ? {
+                vehicleOrder: certificate.cooperation.rearOrder,
+                decel: certificate.cooperation.decel,
+              }
+            : null,
+        },
+        TIME_STEP,
+      ),
+    ).toThrow(/rear車体間隔/);
+  });
+
+  test('ランプ待ちが本線側の独立した入口待ちを塞がない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const blocker = new Vehicle(world, 'L', 2, CONST.RAMP_Z_TOP, 'Sedan', 20);
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const mainline = new Vehicle(world, 'L', 0, CONST.ROAD_HALF + 4.6, 'Sedan', 24);
+    blocker.speed = 24;
+    ramp.speed = 24;
+    ramp.waiting = true;
+    mainline.waiting = true;
+    world.vehicles.push(blocker, ramp, mainline);
+
+    world.admitWaiting();
+
+    expect(ramp.waiting).toBe(true);
+    expect(mainline.waiting).toBe(false);
+  });
+
+  test('closureの終端速度へは必要な制動開始時刻まで現在速度を保つ', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const follower = new Vehicle(world, 'L', 2, 350, 'Sedan', 20);
+    const ahead = new Vehicle(world, 'L', 2, 280, 'Sedan', 10);
+    ramp.speed = 24;
+    follower.speed = 20;
+    ahead.speed = 10;
+    world.vehicles.push(ramp, follower, ahead);
+    const certificate = {
+      rampOrder: ramp.spawnOrder,
+      frontOrder: follower.spawnOrder,
+      rearOrder: null,
+      targetPassTime: world.time + 4,
+      completionZ: CONST.MERGE_POINT_Z,
+      envelope: { min: 1, max: 30 },
+      cooperation: null,
+      closure: {
+        orders: [follower.spawnOrder, ahead.spawnOrder].sort((left, right) => left - right),
+        edges: [
+          {
+            followerOrder: follower.spawnOrder,
+            aheadOrder: ahead.spawnOrder,
+          },
+        ],
+      },
+    };
+    const transaction = planMergeTransaction(
+      world.captureSnapshot(),
+      [
+        {
+          plan: {
+            ...ramp.mergePlan,
+            targetPassTime: certificate.targetPassTime,
+            completionZ: certificate.completionZ,
+            envelope: certificate.envelope,
+            certificate,
+          },
+          envelope: certificate.envelope,
+          startLaneChange: false,
+          cooperation: null,
+        },
+      ],
+      TIME_STEP,
+    );
+    const motion = transaction.motions.find(
+      (candidate) => candidate.vehicleOrder === follower.spawnOrder,
+    )!;
+
+    expect(motion.nextSpeed).toBe(follower.speed);
+  });
+
+  test('入口待ち上限はランプと本線の独立した待ち列ごとに数える', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    for (let index = 0; index < CONST.RAMP_QUEUE_MAX; index++) {
+      const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+      ramp.waiting = true;
+      world.vehicles.push(ramp);
+    }
+
+    world.spawnPair();
+
+    expect(world.stats.inflow.L).toBe(1);
+    expect(world.stats.inflow.R).toBe(1);
   });
 });

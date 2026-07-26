@@ -23,7 +23,14 @@ export type {
 export { clamp, lerp, smooth, createRng, WRAP_LENGTH, wrapDelta } from './utils';
 export type { Rng } from './utils';
 export { Vehicle, mergeCongestion, nextArrivalDistance, smoothstepRange } from './vehicle';
-export { buildMergeDependencyClosure } from './merge-transaction';
+export {
+  buildMergeDependencyClosure,
+  mergeClosureTerminalSpeeds,
+  MergeTransactionPlanningError,
+  planMergeTransaction,
+  validateMergeTransactionCorridor,
+  validateMergeTransactionHorizon,
+} from './merge-transaction';
 export type {
   LaneChange,
   LaneChangeState,
