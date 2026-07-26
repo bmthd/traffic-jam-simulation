@@ -29,6 +29,7 @@ import {
   WRAP_LENGTH,
 } from './src/core';
 import { isLandscapeViewport } from './src/render/camera-layout';
+import { flybyPose } from './src/render/flyby';
 import { loopCopies } from './src/render/looping';
 
 /* ---------- ヘルパー: シナリオ実行 ---------- */
@@ -848,6 +849,27 @@ describe('リセット時の内部状態初期化 (Issue #54)', () => {
 describe('周回道路の描画 (Issue #73)', () => {
   test('境界の前後1周ぶんに同じ道路設備を配置する', () => {
     expect(loopCopies(0)).toEqual([-816, 0, 816]);
+  });
+});
+
+/* ============================================================
+   13. フライバイカメラ (Issue #77)
+   ============================================================ */
+describe('フライバイカメラ (Issue #77)', () => {
+  test('時間経過とともに車両と逆の +Z へ進み、移動方向を向く', () => {
+    const start = flybyPose(0, 12);
+    const afterTenSeconds = flybyPose(10, 12);
+
+    expect(start.position).toEqual({ x: 12, y: 25, z: -400 });
+    expect(afterTenSeconds.position).toEqual({ x: 12, y: 25, z: -160 });
+    expect(afterTenSeconds.target).toEqual({ x: 12, y: 4, z: -112 });
+  });
+
+  test('車両を参照せず道路の周回長を越えると開始地点へ戻る', () => {
+    expect(flybyPose(34, 12)).toEqual({
+      position: { x: 12, y: 25, z: -400 },
+      target: { x: 12, y: 4, z: -352 },
+    });
   });
 });
 
