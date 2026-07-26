@@ -58,8 +58,10 @@ function shadowHalfExtent(axis: THREE.Vector3): number {
 const shadowHalfWidth = shadowHalfExtent(shadowAxisX);
 const shadowHalfHeight = shadowHalfExtent(shadowAxisY);
 const shadowHalfDepth = shadowHalfExtent(shadowAxisZ);
-sun.shadow.mapSize.set(4096, 1024);
-// WebGL の MAX_TEXTURE_SIZE 保証値は 2048。上限が低い端末では three が 2048x1024 へ縮める。
+sun.shadow.mapSize.set(4096, 2048);
+// 約841m×189mの範囲で縦約10.8px/mを確保し、太さ0.2mの支柱を約2テクセルで描く。
+// 深度テクスチャは約32MBになるが、静的な設備中心で追加描画は数十 draw call に留まる。
+// WebGL の MAX_TEXTURE_SIZE 保証値は 2048。上限が低い端末では three が 2048x2048 へ縮める。
 sun.shadow.camera.left = -shadowHalfWidth;
 sun.shadow.camera.right = shadowHalfWidth;
 sun.shadow.camera.top = shadowHalfHeight;

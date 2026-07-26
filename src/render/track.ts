@@ -141,6 +141,7 @@ for (const section of SECTIONS) {
     for (const railX of [-0.3, 0.3]) {
       const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, WRAP_LENGTH), railMaterial);
       rail.position.set(railX, 0.95, z);
+      rail.castShadow = true;
       scene.add(rail);
     }
   }
@@ -155,7 +156,10 @@ for (const section of SECTIONS) {
       for (const offsetZ of [-0.09, 0.09])
         delineatorPositions.push([0, 1.12, z + offset + offsetZ]);
     }
-  scene.add(instancedAt(postGeometry, railMaterial, postPositions));
+  const posts = instancedAt(postGeometry, railMaterial, postPositions);
+  posts.castShadow = true;
+  scene.add(posts);
+  // 1テクセル未満で影を視認できない極小装飾のため castShadow は設定しない
   scene.add(instancedAt(delineatorGeometry, delineatorMaterial, delineatorPositions));
 })();
 
@@ -264,6 +268,8 @@ function buildGantry(section: Section, z: number): void {
     const board = new THREE.Mesh(boardGeometry, boardMaterial);
     board.position.set(centerX, 8.3, z + dir * 0.06);
     if (dir === -1) board.rotation.y = Math.PI;
+    // 表裏の影はほぼ完全に重なるため、片面だけ描画してシャドウパスを抑える
+    if (dir === 1) board.castShadow = true;
     group.add(board);
   }
   scene.add(group);
