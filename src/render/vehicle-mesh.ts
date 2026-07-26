@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { BufferGeometryUtils } from 'three/examples/jsm/utils/BufferGeometryUtils';
 import { CONST, TYPES, clamp } from '../core';
 import type { Vehicle, VehicleTypeName, World } from '../core';
-import { scene } from './scene';
+import { camera, scene } from './scene';
 import {
   paint,
   glassMaterial,
@@ -23,6 +23,7 @@ import {
   beamGeometry,
 } from './materials';
 import { themeState } from './theme';
+import { loopCopies } from './looping';
 
 // ドライバーの「手癖」(描画上の個性)。実際の車は車線の中央ぴったりを走らない。
 // 車線内の定位置(左寄り/右寄り)、無意識の蛇行の周期・振幅、修正舵の細かさは
@@ -41,10 +42,13 @@ interface DriverHabit {
 
 export interface VehicleMesh {
   group: THREE.Group;
+  loopGroups: THREE.Group[];
+  shellParts: THREE.Mesh[];
   brakeMaterial: THREE.MeshBasicMaterial;
   blinkLeft: THREE.MeshBasicMaterial;
   blinkRight: THREE.MeshBasicMaterial;
   beam: THREE.Mesh;
+  loopBeams: THREE.Mesh[];
   beamDistance: number;
   brakeGlow: THREE.Mesh;
   previousX: number;
@@ -108,6 +112,7 @@ interface Blueprint {
 }
 
 const blueprintCache: Partial<Record<VehicleTypeName, Blueprint>> = {};
+const cameraLocalPosition = new THREE.Vector3();
 
 function buildBlueprint(typeName: VehicleTypeName): Blueprint {
   const spec = TYPES[typeName],
@@ -447,30 +452,38 @@ function buildVehicleMesh(vehicle: Vehicle): VehicleMesh {
   const vehicleBlueprint = blueprint(vehicle.typeName);
   const bodyLength = vehicle.type.length;
   const group = new THREE.Group();
+  const shellParts: THREE.Mesh[] = [];
   // 各パーツはブループリント側で位置決め済み(ローカル変換は恒等)なので、
   // 毎フレームの行列再計算を止めて描画コストを下げる
-  function addPart(slot: PartSlot, material: THREE.Material, castShadow?: boolean): void {
+  function addPart(
+    slot: PartSlot,
+    material: THREE.Material,
+    castShadow?: boolean,
+  ): THREE.Mesh | null {
     const geometry = vehicleBlueprint.parts[slot];
-    if (!geometry) return;
+    if (!geometry) return null;
     const mesh = new THREE.Mesh(geometry, material);
     if (castShadow) mesh.castShadow = true;
     mesh.matrixAutoUpdate = false;
     group.add(mesh);
+    return mesh;
   }
-  addPart('body', paint(vehicle.color), true);
-  addPart('glass', glassMaterial, true);
-  addPart('trim', trimMaterial);
+  const body = addPart('body', paint(vehicle.color), true);
+  const glass = addPart('glass', glassMaterial, true);
+  const trim = addPart('trim', trimMaterial);
   addPart('tire', tireMaterial, true);
   addPart('hub', hubMaterial);
-  addPart('cargo', cargoMaterial, true);
+  const cargo = addPart('cargo', cargoMaterial, true);
   addPart('plate', plateMaterial);
   addPart('head', headlightMaterial);
+  for (const part of [body, glass, trim, cargo]) if (part) shellParts.push(part);
   if (vehicle.isTaxi) {
     const sign = new THREE.Mesh(taxiSignGeometry, taxiSignMaterial);
     sign.position.set(0, vehicle.type.height * 0.97 + 0.14, (bodyLength / 2) * 0.15);
     sign.matrixAutoUpdate = false;
     sign.updateMatrix();
     group.add(sign);
+    shellParts.push(sign);
   }
   // 灯火類は照明の影響を受けない発光体として描く(昼でもはっきり光って見える)。
   // 色を車両ごとに切り替えるため、マテリアルだけ個別に持つ
@@ -497,6 +510,23 @@ function buildVehicleMesh(vehicle: Vehicle): VehicleMesh {
   brakeGlow.updateMatrix();
   brakeGlow.visible = false;
   group.add(brakeGlow);
+  // 周回境界の前後に置く表示専用コピー。Vehicle とは紐付けず、描画だけを複製する。
+  const loopGroups = loopCopies(0)
+    .filter((offset) => offset !== 0)
+    .map((offset) => {
+      const copy = group.clone(true);
+      copy.position.z = offset;
+      scene.add(copy);
+      return copy;
+    });
+  const loopBeams = loopCopies(0)
+    .filter((offset) => offset !== 0)
+    .map((offset) => {
+      const copy = beam.clone();
+      copy.position.z = offset;
+      scene.add(copy);
+      return copy;
+    });
   const bodyWidth = vehicle.type.width;
   const margin = Math.max(0, (3.7 - bodyWidth) / 2 - 0.42); // 車線内で安全に振れる余白
   const habit: DriverHabit = {
@@ -512,10 +542,13 @@ function buildVehicleMesh(vehicle: Vehicle): VehicleMesh {
   };
   return {
     group,
+    loopGroups,
+    shellParts,
     brakeMaterial,
     blinkLeft,
     blinkRight,
     beam,
+    loopBeams,
     beamDistance,
     brakeGlow,
     previousX: vehicle.x + habit.bias,
@@ -525,6 +558,20 @@ function buildVehicleMesh(vehicle: Vehicle): VehicleMesh {
     roll: 0,
     habit,
   };
+}
+
+function updateShellVisibility(mesh: VehicleMesh, vehicle: Vehicle): void {
+  mesh.group.updateMatrixWorld(true);
+  cameraLocalPosition.copy(camera.position);
+  mesh.group.worldToLocal(cameraLocalPosition);
+  const halfWidth = vehicle.type.width / 2 + 0.45;
+  const halfLength = vehicle.type.length / 2 + 0.9;
+  const insideUpperBody =
+    Math.abs(cameraLocalPosition.x) < halfWidth &&
+    Math.abs(cameraLocalPosition.z) < halfLength &&
+    cameraLocalPosition.y > 0.55 &&
+    cameraLocalPosition.y < vehicle.type.height + 0.9;
+  for (const part of mesh.shellParts) part.visible = !insideUpperBody;
 }
 
 /* ---- ワールドとメッシュの同期 ---- */
@@ -539,8 +586,10 @@ export function syncMeshes(world: World, deltaTime: number): void {
       scene.add(mesh.group);
     }
     mesh.group.visible = !vehicle.waiting;
+    for (const copy of mesh.loopGroups) copy.visible = !vehicle.waiting;
     if (vehicle.waiting) {
       mesh.beam.visible = false;
+      for (const beam of mesh.loopBeams) beam.visible = false;
       continue;
     }
     // ---- ハンドル操作の個性: 定位置のズレ + 無意識の蛇行(速度が低いほど収まる) ----
@@ -553,6 +602,10 @@ export function syncMeshes(world: World, deltaTime: number): void {
     const amplitude = habit.swayAmplitude * (0.25 + 0.75 * clamp(vehicle.speed / 25, 0, 1));
     const x = vehicle.x + habit.bias + sway * amplitude;
     mesh.group.position.set(x, 0, vehicle.z);
+    const copyZs = loopCopies(vehicle.z).filter((z) => z !== vehicle.z);
+    mesh.loopGroups.forEach((copy, index) => {
+      copy.position.set(x, 0, copyZs[index]);
+    });
     const lateralVelocity = deltaTime > 0 ? (x - mesh.previousX) / deltaTime : 0;
     mesh.previousX = x;
     // 操舵ヨー + 車体ロール + 加減速のピッチ(ノーズダイブ/スクワット)
@@ -573,6 +626,7 @@ export function syncMeshes(world: World, deltaTime: number): void {
     mesh.pitch +=
       (clamp(acceleration * 0.0075, -0.05, 0.03) - mesh.pitch) * Math.min(1, deltaTime * 6);
     mesh.group.rotation.x = mesh.pitch;
+    for (const copy of mesh.loopGroups) copy.rotation.copy(mesh.group.rotation);
     // ヘッドライトの光だまり: 車体の揺れに追従させず、常に路面上へ平置きする
     mesh.beam.visible = themeState.mix > 0.04;
     const yaw = mesh.group.rotation.y;
@@ -582,6 +636,11 @@ export function syncMeshes(world: World, deltaTime: number): void {
       vehicle.z - Math.cos(yaw) * mesh.beamDistance,
     );
     mesh.beam.rotation.y = yaw;
+    mesh.loopBeams.forEach((beam, index) => {
+      beam.position.set(mesh.beam.position.x, mesh.beam.position.y, copyZs[index]);
+      beam.rotation.copy(mesh.beam.rotation);
+      beam.visible = mesh.beam.visible;
+    });
     mesh.brakeMaterial.color.setHex(vehicle.braking ? 0xff2a2a : themeState.tailIdleHex);
     mesh.brakeGlow.visible = vehicle.braking;
     if (vehicle.braking) brakeGlowMaterial.opacity = 0.45 + 0.45 * themeState.mix;
@@ -600,7 +659,9 @@ export function syncMeshes(world: World, deltaTime: number): void {
     for (const [vehicle, mesh] of meshMap) {
       if (!alive.has(vehicle)) {
         scene.remove(mesh.group);
+        for (const copy of mesh.loopGroups) scene.remove(copy);
         scene.remove(mesh.beam); // 光だまりはシーン直下にあるため個別に外す
+        for (const beam of mesh.loopBeams) scene.remove(beam);
         // ジオメトリはブループリント共有なので破棄しない(マテリアルのみ個別)
         mesh.brakeMaterial.dispose();
         mesh.blinkLeft.dispose();
@@ -608,5 +669,19 @@ export function syncMeshes(world: World, deltaTime: number): void {
         meshMap.delete(vehicle);
       }
     }
+  }
+}
+
+export function updateVehicleCameraOcclusion(world: World): void {
+  for (const vehicle of world.vehicles) {
+    const mesh = meshMap.get(vehicle);
+    if (!mesh) continue;
+    if (vehicle.waiting) {
+      for (const part of mesh.shellParts) part.visible = true;
+      continue;
+    }
+    // カメラが車体にめり込んだ時だけ、車体上部のシェルを消して視界を確保する。
+    // 個体ごとの描画グループなので、交通挙動や他車の見た目には影響しない。
+    updateShellVisibility(mesh, vehicle);
   }
 }

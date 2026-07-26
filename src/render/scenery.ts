@@ -2,10 +2,11 @@
    道路施設(track.js)とは別の「風景」を担当する。
    山・雲のマテリアルは materials.js にあり、昼夜の色は theme.js が補間する */
 import * as THREE from 'three';
-import { CONST } from '../core';
+import { CONST, WRAP_LENGTH } from '../core';
 import { scene } from './scene';
 import { mountainFarMaterial, mountainNearMaterial, cloudMaterial } from './materials';
 import { instancedAt } from './instancing';
+import { loopCopies } from './looping';
 
 const ROAD_HALF = CONST.ROAD_HALF;
 
@@ -16,10 +17,13 @@ const ROAD_HALF = CONST.ROAD_HALF;
   const postGeometry = new THREE.BoxGeometry(0.12, 0.8, 0.12);
   const postPositions: [number, number, number][] = [];
   for (const side of [-1, 1]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, ROAD_HALF * 2), railMaterial);
-    rail.position.set(18.2 * side, 0.62, 0);
-    scene.add(rail);
-    for (let z = -ROAD_HALF + 4; z < ROAD_HALF; z += 12) postPositions.push([18.2 * side, 0.4, z]);
+    for (const offset of loopCopies(0)) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, WRAP_LENGTH), railMaterial);
+      rail.position.set(18.2 * side, 0.62, offset);
+      scene.add(rail);
+      for (let z = -WRAP_LENGTH / 2 + 4; z < WRAP_LENGTH / 2; z += 12)
+        postPositions.push([18.2 * side, 0.4, z + offset]);
+    }
   }
   scene.add(instancedAt(postGeometry, postMaterial, postPositions));
   // 遮音壁: 下段コンクリート + 上段の半透明パネル(高速道路らしさ)
@@ -117,18 +121,24 @@ const ROAD_HALF = CONST.ROAD_HALF;
     const centerX = Math.cos(theta) * radius,
       centerZ = Math.sin(theta) * radius,
       centerY = 150 + Math.random() * 110;
+    let width = 0,
+      aspect = 0;
     for (let k = 0; k < 3; k++) {
-      // ひと塊を3枚のスプライトでもこもこに
-      const sprite = new THREE.Sprite(cloudMaterial);
-      const width = 90 + Math.random() * 120;
-      sprite.scale.set(width, width * (0.28 + Math.random() * 0.14), 1);
-      sprite.position.set(
-        centerX + (Math.random() - 0.5) * 70,
-        centerY + (Math.random() - 0.5) * 18,
-        centerZ + (Math.random() - 0.5) * 70,
-      );
-      sprite.renderOrder = -14;
-      scene.add(sprite);
+      // 後続の星・車両外観の乱数列を変えないよう、旧3枚構成と同じ順序・回数で消費する。
+      const widthRandom = Math.random(),
+        aspectRandom = Math.random();
+      Math.random(); // 房ごとのXずれ
+      Math.random(); // 房ごとのYずれ
+      Math.random(); // 房ごとのZずれ
+      if (k === 0) {
+        width = 130 + widthRandom * 130;
+        aspect = 0.32 + aspectRandom * 0.08;
+      }
     }
+    const sprite = new THREE.Sprite(cloudMaterial);
+    sprite.scale.set(width, width * aspect, 1);
+    sprite.position.set(centerX, centerY, centerZ);
+    sprite.renderOrder = -14;
+    scene.add(sprite);
   }
 })();

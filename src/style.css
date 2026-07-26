@@ -435,10 +435,11 @@ body.night #nightBtn {
   }
 }
 
-/* ---- 観賞モード切替(右上・カラーモード切替の下) ----
+/* ---- カメラモード切替(右上・カラーモード切替の下) ----
    専用パネルではなく丸ボタン1つに集約しているため、
    画面が狭くても他のパネル(スコア比較・コントロール)と干渉しない */
 #spectatorBtn {
+  --auto-cycle-progress: 0;
   position: fixed;
   top: 78px;
   right: 14px;
@@ -466,6 +467,28 @@ body.night #nightBtn {
     box-shadow 0.3s ease,
     background 0.3s ease;
 }
+/* 自動巡回中は、次の視点切替までの進捗を外周が一周する光で示す */
+#spectatorBtn.auto::before {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: conic-gradient(
+    from -90deg,
+    #ffe88a calc(var(--auto-cycle-progress) * 1turn),
+    rgba(255, 213, 74, 0.16) 0
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 0);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 0);
+  filter: drop-shadow(0 0 4px rgba(255, 213, 74, 0.72));
+}
+@media (prefers-reduced-motion: reduce) {
+  #spectatorBtn.auto::before {
+    /* 動きを抑える設定では、進捗アニメーションの代わりに静止した一周表示にする */
+    background: #ffd54a;
+  }
+}
 #spectatorBtn .lucide {
   width: 26px;
   height: 26px;
@@ -479,7 +502,7 @@ body.night #nightBtn {
 #spectatorBtn:active {
   transform: scale(0.93);
 }
-/* 観賞モード中は縁を光らせて「動作中」を示す */
+/* オート/プリセット固定中は縁を光らせて「動作中」を示す */
 #spectatorBtn.on {
   border-color: #ffd54a;
   box-shadow:
@@ -487,7 +510,7 @@ body.night #nightBtn {
     inset 0 1px 0 rgba(255, 255, 255, 0.35),
     0 0 20px rgba(255, 213, 74, 0.55);
 }
-/* 現在の視点名。ボタンの下に右揃えで出す(観賞モード中のみ) */
+/* 現在のモード名。モード変更時だけボタンの下に右揃えで出す */
 #spectatorLabel {
   position: fixed;
   top: 138px;

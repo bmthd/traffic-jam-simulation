@@ -9,6 +9,7 @@ function byId<T extends HTMLElement = HTMLElement>(id: string): T {
 
 export const elements = {
   count: byId('vehicleCount'),
+  maxCount: byId('maxVehicleCount'),
   intervalLabel: byId('intervalLabel'),
   slider: byId<HTMLInputElement>('intervalSlider'),
   countLeft: byId('countLeft'),
@@ -30,6 +31,8 @@ export const elements = {
   smoothBarLeft: byId('smoothBarLeft'),
   smoothLead: byId('smoothLead'),
 };
+
+elements.maxCount.textContent = String(CONST.MAX_VEHICLES);
 
 // 渋滞スコアに応じた状態(段階が変わった時だけ DOM を書き換えてアイコンを再生成)
 function statusTier(score: number): { icon: string; label: string } {
