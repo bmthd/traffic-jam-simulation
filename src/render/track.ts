@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { CONST, RAMP_GEOMETRY, WRAP_LENGTH } from '../core';
 import type { Section } from '../core';
 import { scene } from './scene';
-import { delineatorMaterial, asphaltTexture } from './materials';
+import { asphaltTexture, delineatorMaterial, frontageAsphaltTexture } from './materials';
 import { instancedAt, instancedWith } from './instancing';
 import { loopCopies } from './looping';
 
@@ -78,10 +78,15 @@ for (const section of SECTIONS) {
   road.receiveShadow = true;
   scene.add(road);
 
+  // 側道には車列を描かないので、轍を省いた専用テクスチャを使う。
+  const frontageRoadMaterial = new THREE.MeshLambertMaterial({
+    color: SECTION_THEME[section].road,
+    map: frontageAsphaltTexture,
+  });
   // 合流部と同じ舗装帯を全周へ延ばし、側道がそのまま加速車線になる形にする。
   const frontageRoad = instancedAt(
     frontageRoadGeometry,
-    roadMaterial,
+    frontageRoadMaterial,
     loopCopies(0).map((z): [number, number, number] => [sectionX(section, -15), -0.055, z]),
   );
   frontageRoad.frustumCulled = false;
