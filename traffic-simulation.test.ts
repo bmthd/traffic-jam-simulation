@@ -7,7 +7,11 @@
  * 実行方法:  vp test run  (npm test)
  */
 import { describe, expect, test } from 'vitest';
-import { createAnimationFaultBoundary } from './src/animation-loop';
+import {
+  createAnimationFaultBoundary,
+  createFixedStepAccumulator,
+  FIXED_SIMULATION_DELTA_TIME,
+} from './src/animation-loop';
 import {
   buildMergeDependencyClosure,
   CONST,
@@ -3104,5 +3108,123 @@ describe('アニメーションループの障害境界 (Issue #48)', () => {
     expect(steps).toBe(2);
     expect(renders).toBe(3);
     expect(reported).toEqual([invariantError]);
+  });
+});
+
+describe('可変描画周期と固定物理tick (Issue #48)', () => {
+  test('可変dtの高流入でもactive証明書を同一tickで実行し回廊例外・導流帯侵入を起こさない', () => {
+    const frameDeltas = [0.0167, 0.014, 0.05, 0.02];
+    const world = new World({ rng: createRng(48), spawnInterval: 300 });
+    const fixedStep = createFixedStepAccumulator(FIXED_SIMULATION_DELTA_TIME);
+    const reported: unknown[] = [];
+    const boundary = createAnimationFaultBoundary((error) => reported.push(error));
+    let elapsed = 0;
+    let frame = 0;
+    let activeCertificateCount = 0;
+    let goreViolation: string | null = null;
+    world.populateInitial();
+
+    while (elapsed < 300 && boundary.fault === null && goreViolation === null) {
+      const frameDelta = frameDeltas[frame % frameDeltas.length];
+      boundary.runFrame(
+        () => {
+          fixedStep.advance(frameDelta, (deltaTime) => {
+            activeCertificateCount += world.vehicles.filter(
+              (vehicle) =>
+                !vehicle.waiting && vehicle.lane === 3 && vehicle.mergePlan.certificate !== null,
+            ).length;
+            world.step(deltaTime);
+            for (const vehicle of world.vehicles) {
+              if (vehicle.waiting || vehicle.lane !== 3) continue;
+              if (
+                vehicle.z <= CONST.GORE_Z_START ||
+                rampBodyIntersectsGore(
+                  sectionTrackX(vehicle.section, vehicle.x),
+                  vehicle.z,
+                  vehicle.width,
+                  vehicle.length,
+                )
+              )
+                goreViolation = `frame=${frame}: lane 3車両${vehicle.spawnOrder}が導流帯へ侵入`;
+            }
+          });
+        },
+        () => {},
+      );
+      elapsed += frameDelta;
+      frame++;
+    }
+
+    expect(boundary.fault).toBeNull();
+    expect(reported).toEqual([]);
+    expect(goreViolation).toBeNull();
+    expect(activeCertificateCount).toBeGreaterThan(0);
+    expect(Math.abs(world.time - elapsed)).toBeLessThan(0.0167);
+  });
+
+  test('固定tickでもactive化後に回廊を壊す真の違反は安全性faultとして停止する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const rear = new Vehicle(world, 'L', 2, 375, 'Sedan', 20);
+    ramp.speed = 24;
+    rear.speed = 20;
+    ramp.waiting = true;
+    world.vehicles.push(ramp, rear);
+    world.admitWaiting(world.captureSnapshot(), FIXED_SIMULATION_DELTA_TIME);
+    rear.speed = 60;
+    const fixedStep = createFixedStepAccumulator(FIXED_SIMULATION_DELTA_TIME);
+    const reported: unknown[] = [];
+    const boundary = createAnimationFaultBoundary((error) => reported.push(error));
+    const zBefore = ramp.z;
+
+    boundary.runFrame(
+      () => fixedStep.advance(FIXED_SIMULATION_DELTA_TIME, (deltaTime) => world.step(deltaTime)),
+      () => {},
+    );
+
+    const faultError = boundary.fault?.error;
+    expect(faultError).toBeInstanceOf(Error);
+    if (!(faultError instanceof Error)) throw new Error('安全性faultがErrorではない');
+    expect(faultError.message).toContain('合流予約回廊が空');
+    expect(reported).toEqual([faultError]);
+    expect(ramp.z).toBe(zBefore);
+  });
+
+  test('HUD・描画例外は安全性faultに分類せず描画継続を試みる', () => {
+    const safetyErrors: unknown[] = [];
+    const presentationErrors: unknown[] = [];
+    const boundary = createAnimationFaultBoundary(
+      (error) => safetyErrors.push(error),
+      (error) => presentationErrors.push(error),
+    );
+    const hudError = new Error('HUD更新失敗');
+    const renderError = new Error('描画失敗');
+    let simulations = 0;
+    let renders = 0;
+
+    boundary.runFrame(
+      () => simulations++,
+      () => renders++,
+      () => {
+        throw hudError;
+      },
+    );
+    boundary.runFrame(
+      () => simulations++,
+      () => {
+        renders++;
+        throw renderError;
+      },
+    );
+    boundary.runFrame(
+      () => simulations++,
+      () => renders++,
+    );
+
+    expect(boundary.fault).toBeNull();
+    expect(safetyErrors).toEqual([]);
+    expect(presentationErrors).toEqual([hudError, renderError]);
+    expect(simulations).toBe(3);
+    expect(renders).toBe(3);
   });
 });
