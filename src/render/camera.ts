@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { CONST, clamp, smooth } from '../core';
 import type { Vehicle, World } from '../core';
 import { isLandscapeViewport } from './camera-layout';
-import { headOnFollowPose } from './follow-camera';
+import { reverseDronePose } from './reverse-drone';
 import { camera, renderer } from './scene';
 
 export interface CameraController {
@@ -50,7 +50,7 @@ export type SpectatorPresetId =
   | 'overhead'
   | 'lookup'
   | 'follow'
-  | 'front-follow'
+  | 'reverse-drone'
   | 'driver'
   | 'ramp';
 
@@ -156,17 +156,14 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     },
   },
   {
-    id: 'front-follow',
-    label: '正面追尾',
-    icon: 'video',
-    // 車の進行方向(-Z)の前方から、迫ってくる車両をなぞる。
-    // 追尾対象は通常の追尾・ドライバー視点と共有して、切替時も自然につながる
-    compute(pose, { world }) {
-      const vehicle = pickFollowVehicle(world);
-      if (!vehicle) return fallbackPose(pose);
-      const headOnPose = headOnFollowPose(vehicle);
-      pose.position.set(headOnPose.position.x, headOnPose.position.y, headOnPose.position.z);
-      pose.target.set(headOnPose.target.x, headOnPose.target.y, headOnPose.target.z);
+    id: 'reverse-drone',
+    label: '逆走ドローン',
+    icon: 'send',
+    // 車両とは逆の +Z へ飛び、車列と正面からすれ違いながら両区間を映す
+    compute(pose, { time }) {
+      const dronePose = reverseDronePose(time, CENTER_X);
+      pose.position.set(dronePose.position.x, dronePose.position.y, dronePose.position.z);
+      pose.target.set(dronePose.target.x, dronePose.target.y, dronePose.target.z);
     },
   },
   {

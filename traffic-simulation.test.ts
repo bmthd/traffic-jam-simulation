@@ -9,7 +9,7 @@
 import { describe, expect, test } from 'vitest';
 import { CONST, createRng, Vehicle, World } from './src/core';
 import { isLandscapeViewport } from './src/render/camera-layout';
-import { headOnFollowPose } from './src/render/follow-camera';
+import { reverseDronePose } from './src/render/reverse-drone';
 import { loopCopies } from './src/render/looping';
 
 /* ---------- ヘルパー: シナリオ実行 ---------- */
@@ -795,13 +795,22 @@ describe('周回道路の描画 (Issue #73)', () => {
 });
 
 /* ============================================================
-   13. 正面追尾カメラ (Issue #77)
+   13. 逆走ドローンカメラ (Issue #77)
    ============================================================ */
-describe('正面追尾カメラ (Issue #77)', () => {
-  test('進行方向(-Z)の前方から車両へ後方を向く構図を作る', () => {
-    expect(headOnFollowPose({ x: 18, z: -30 })).toEqual({
-      position: { x: 21.5, y: 3.3, z: -43 },
-      target: { x: 18, y: 1.25, z: -25.5 },
+describe('逆走ドローンカメラ (Issue #77)', () => {
+  test('時間経過とともに車両と逆の +Z へ進み、移動方向を向く', () => {
+    const start = reverseDronePose(0, 12);
+    const afterTenSeconds = reverseDronePose(10, 12);
+
+    expect(start.position).toEqual({ x: 12, y: 25, z: -400 });
+    expect(afterTenSeconds.position).toEqual({ x: 12, y: 25, z: -160 });
+    expect(afterTenSeconds.target).toEqual({ x: 12, y: 4, z: -112 });
+  });
+
+  test('車両を参照せず道路の周回長を越えると開始地点へ戻る', () => {
+    expect(reverseDronePose(34, 12)).toEqual({
+      position: { x: 12, y: 25, z: -400 },
+      target: { x: 12, y: 4, z: -352 },
     });
   });
 });
