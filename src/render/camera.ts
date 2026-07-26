@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { CONST, clamp, smooth } from '../core';
 import type { Vehicle, World } from '../core';
 import { isLandscapeViewport } from './camera-layout';
-import { reverseDronePose } from './reverse-drone';
+import { flybyPose } from './flyby';
 import { camera, renderer } from './scene';
 
 export interface CameraController {
@@ -50,7 +50,7 @@ export type SpectatorPresetId =
   | 'overhead'
   | 'lookup'
   | 'follow'
-  | 'reverse-drone'
+  | 'flyby'
   | 'driver'
   | 'ramp';
 
@@ -156,14 +156,14 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     },
   },
   {
-    id: 'reverse-drone',
-    label: '逆走ドローン',
+    id: 'flyby',
+    label: 'フライバイ',
     icon: 'send',
-    // 車両とは逆の +Z へ飛び、車列と正面からすれ違いながら両区間を映す
+    // 車両とは逆の +Z へ進み、車列と正面からすれ違いながら両区間を映す
     compute(pose, { time }) {
-      const dronePose = reverseDronePose(time, CENTER_X);
-      pose.position.set(dronePose.position.x, dronePose.position.y, dronePose.position.z);
-      pose.target.set(dronePose.target.x, dronePose.target.y, dronePose.target.z);
+      const flyby = flybyPose(time, CENTER_X);
+      pose.position.set(flyby.position.x, flyby.position.y, flyby.position.z);
+      pose.target.set(flyby.target.x, flyby.target.y, flyby.target.z);
     },
   },
   {

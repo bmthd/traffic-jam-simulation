@@ -9,7 +9,7 @@
 import { describe, expect, test } from 'vitest';
 import { CONST, createRng, Vehicle, World } from './src/core';
 import { isLandscapeViewport } from './src/render/camera-layout';
-import { reverseDronePose } from './src/render/reverse-drone';
+import { flybyPose } from './src/render/flyby';
 import { loopCopies } from './src/render/looping';
 
 /* ---------- ヘルパー: シナリオ実行 ---------- */
@@ -795,12 +795,12 @@ describe('周回道路の描画 (Issue #73)', () => {
 });
 
 /* ============================================================
-   13. 逆走ドローンカメラ (Issue #77)
+   13. フライバイカメラ (Issue #77)
    ============================================================ */
-describe('逆走ドローンカメラ (Issue #77)', () => {
+describe('フライバイカメラ (Issue #77)', () => {
   test('時間経過とともに車両と逆の +Z へ進み、移動方向を向く', () => {
-    const start = reverseDronePose(0, 12);
-    const afterTenSeconds = reverseDronePose(10, 12);
+    const start = flybyPose(0, 12);
+    const afterTenSeconds = flybyPose(10, 12);
 
     expect(start.position).toEqual({ x: 12, y: 25, z: -400 });
     expect(afterTenSeconds.position).toEqual({ x: 12, y: 25, z: -160 });
@@ -808,7 +808,7 @@ describe('逆走ドローンカメラ (Issue #77)', () => {
   });
 
   test('車両を参照せず道路の周回長を越えると開始地点へ戻る', () => {
-    expect(reverseDronePose(34, 12)).toEqual({
+    expect(flybyPose(34, 12)).toEqual({
       position: { x: 12, y: 25, z: -400 },
       target: { x: 12, y: 4, z: -352 },
     });
