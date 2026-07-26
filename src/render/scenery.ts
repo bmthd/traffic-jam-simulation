@@ -20,12 +20,15 @@ const ROAD_HALF = CONST.ROAD_HALF;
     for (const offset of loopCopies(0)) {
       const rail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.3, WRAP_LENGTH), railMaterial);
       rail.position.set(18.2 * side, 0.62, offset);
+      rail.castShadow = true;
       scene.add(rail);
       for (let z = -WRAP_LENGTH / 2 + 4; z < WRAP_LENGTH / 2; z += 12)
         postPositions.push([18.2 * side, 0.4, z + offset]);
     }
   }
-  scene.add(instancedAt(postGeometry, postMaterial, postPositions));
+  const posts = instancedAt(postGeometry, postMaterial, postPositions);
+  posts.castShadow = true;
+  scene.add(posts);
   // 遮音壁: 下段コンクリート + 上段の半透明パネル(高速道路らしさ)
   const wallMaterial = new THREE.MeshLambertMaterial({ color: 0xb4b9bd });
   const panelMaterial = new THREE.MeshLambertMaterial({
@@ -47,10 +50,14 @@ const ROAD_HALF = CONST.ROAD_HALF;
     scene.add(base);
     const panel = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.7, length), panelMaterial);
     panel.position.set(19.2 * side, 2.35, zCenter);
+    // three r128 では半透明の影は不透明になるが、下段の影が途中で切れる違和感を避ける
+    panel.castShadow = true;
     scene.add(panel);
     for (let z = zStart; z <= zEnd; z += 10) wallPostPositions.push([19.2 * side, 1.6, z]);
   }
-  scene.add(instancedAt(wallPostGeometry, wallPostMaterial, wallPostPositions));
+  const wallPosts = instancedAt(wallPostGeometry, wallPostMaterial, wallPostPositions);
+  wallPosts.castShadow = true;
+  scene.add(wallPosts);
 })();
 
 /* ---- 並木・雑木林(InstancedMeshで軽量に大量配置) ---- */
@@ -69,6 +76,7 @@ const ROAD_HALF = CONST.ROAD_HALF;
     new THREE.MeshLambertMaterial({ color: 0xffffff }),
     treeCount,
   );
+  trunks.castShadow = true;
   canopies.castShadow = true;
   const matrix = new THREE.Matrix4(),
     color = new THREE.Color();
@@ -95,6 +103,7 @@ const ROAD_HALF = CONST.ROAD_HALF;
 })();
 
 /* ---- 遠景: 山並み(霧の外に置く書割り) ---- */
+// 影マップ範囲外の書割りで、影がシーン全体を覆うため castShadow は設定しない
 (function buildMountains() {
   const far = new THREE.Mesh(
     new THREE.CylinderGeometry(860, 860, 180, 72, 1, true),
@@ -114,6 +123,7 @@ const ROAD_HALF = CONST.ROAD_HALF;
 })();
 
 /* ---- 雲 ---- */
+// 霧の外に置く書割りで影マップ範囲外のため castShadow は設定しない
 (function buildClouds() {
   for (let i = 0; i < 9; i++) {
     const theta = Math.random() * Math.PI * 2,
