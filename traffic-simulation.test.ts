@@ -8,6 +8,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import {
+  buildMergeDependencyClosure,
   CONST,
   createRng,
   mergeCongestion,
@@ -1918,5 +1919,372 @@ describe('導流帯越境不変条件 (Issue #48)', () => {
   test('加速車線の車体先端が導流帯の始端を越えると導流帯と交差する', () => {
     expect(rampBodyIntersectsGore(-15, 260, 1.8, 4.6)).toBe(true);
     expect(rampBodyIntersectsGore(-15, 261, 1.8, 4.6)).toBe(false);
+  });
+
+  test('lane 2 の到着枠を証明できないランプ需要は入口待ちに留まり、台数とスコアに残る', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const blocker = new Vehicle(world, 'L', 2, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    blocker.speed = 24;
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(blocker, ramp);
+
+    world.admitWaiting();
+
+    expectNoGoreVehicle(world);
+    expect(ramp.waiting).toBe(true);
+    expect(world.computeSection('L').count).toBe(2);
+    expect(world.computeSection('L').score).toBeGreaterThan(0);
+    expect((ramp.mergePlan as { certificate?: unknown }).certificate).toBeNull();
+  });
+
+  test('有効な投影枠ができるとFIFO先頭だけを予約付きで有効化する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const first = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const second = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    first.speed = 24;
+    second.speed = 24;
+    first.waiting = true;
+    second.waiting = true;
+    world.vehicles.push(first, second);
+
+    world.admitWaiting();
+
+    const certificate = (
+      first.mergePlan as {
+        certificate?: { completionZ: number; targetPassTime: number };
+      }
+    ).certificate;
+    expectNoGoreVehicle(world);
+    expect(first.waiting).toBe(false);
+    expect(second.waiting).toBe(true);
+    expect(certificate).not.toBeNull();
+    expect(certificate!.targetPassTime).toBeGreaterThan(world.time);
+    expect(certificate!.completionZ).toBeGreaterThan(
+      CONST.GORE_Z_START + first.length / 2 + CONST.MERGE_BODY_CLEARANCE,
+    );
+  });
+
+  test('同時の入口要求は車両配列の順序ではなく待ち列順で確定する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const first = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const second = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    first.speed = 24;
+    second.speed = 24;
+    first.waiting = true;
+    second.waiting = true;
+    world.vehicles.push(second, first);
+    world.vehicles.reverse();
+
+    world.admitWaiting();
+
+    expect(first.waiting).toBe(false);
+    expect(second.waiting).toBe(true);
+  });
+
+  test('入口で確定した予約は走行開始後も保持する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+
+    world.step(TIME_STEP);
+
+    expectNoGoreVehicle(world);
+    expect(ramp.waiting).toBe(false);
+    expect(ramp.mergePlan.certificate).toBeDefined();
+    expect(ramp.mergePlan.certificate).not.toBeNull();
+  });
+
+  test('rear が許容減速度で投影headwayとTTCを満たせる場合は協調付きで証明する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const rear = new Vehicle(world, 'L', 2, 375, 'Sedan', 20);
+    ramp.speed = 24;
+    rear.speed = 20;
+    ramp.waiting = true;
+    world.vehicles.push(ramp, rear);
+
+    const certificate = ramp.evaluateEntryCertificate(world.captureSnapshot());
+
+    expect(certificate).not.toBeNull();
+    expect(certificate!.cooperation).toEqual({
+      rearOrder: rear.spawnOrder,
+      decel: expect.any(Number),
+    });
+    expect(certificate!.cooperation!.decel).toBeLessThanOrEqual(CONST.MERGE_MAX_COOP_DECEL);
+  });
+
+  test('front role自身の直前車へ追従余裕がない候補には証明書を発行しない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const front = new Vehicle(world, 'L', 2, 310, 'Sedan', 20);
+    const frontAhead = new Vehicle(world, 'L', 2, 300, 'Sedan', 20);
+    ramp.speed = 24;
+    front.speed = 20;
+    frontAhead.speed = 20;
+    ramp.waiting = true;
+    world.vehicles.push(ramp, front, frontAhead);
+
+    const certificate = ramp.evaluateEntryCertificate(world.captureSnapshot());
+
+    expect(certificate).toBeNull();
+  });
+
+  test('予約後にrear速度が回廊を空にすると移動前に不変条件エラーにする', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const rear = new Vehicle(world, 'L', 2, 375, 'Sedan', 20);
+    ramp.speed = 24;
+    rear.speed = 20;
+    ramp.waiting = true;
+    world.vehicles.push(ramp, rear);
+    world.admitWaiting();
+    rear.speed = 60;
+    const zBefore = ramp.z;
+
+    expect(() => world.step(TIME_STEP)).toThrow('合流予約回廊が空');
+    expect(ramp.z).toBe(zBefore);
+  });
+
+  test('証明書の全roleは一つのsnapshotから配列順序に依存しない運動を確定する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const front = new Vehicle(world, 'L', 2, 310, 'Sedan', 20);
+    const rear = new Vehicle(world, 'L', 2, 375, 'Sedan', 20);
+    ramp.speed = 24;
+    front.speed = 20;
+    rear.speed = 20;
+    ramp.waiting = true;
+    world.vehicles.push(ramp, front, rear);
+    world.admitWaiting();
+    const snapshot = world.captureSnapshot();
+
+    const first = world.evaluateTick(snapshot, TIME_STEP);
+    world.vehicles.reverse();
+    const second = world.evaluateTick(snapshot, TIME_STEP);
+    const orderedMotions = (motions: typeof first.motions) =>
+      [...motions].sort((left, right) => left.vehicleOrder - right.vehicleOrder);
+
+    expect(ramp.mergePlan.certificate?.cooperation?.rearOrder).toBe(rear.spawnOrder);
+    expect(first.motions.map((motion) => motion.vehicleOrder).sort((a, b) => a - b)).toEqual(
+      [ramp.spawnOrder, front.spawnOrder, rear.spawnOrder].sort((a, b) => a - b),
+    );
+    expect(orderedMotions(second.motions)).toEqual(orderedMotions(first.motions));
+  });
+
+  test('protected roleは通常の摂動と意思決定を通らず予約運動だけを反映する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const front = new Vehicle(world, 'L', 2, 310, 'Sedan', 20);
+    const rear = new Vehicle(world, 'L', 2, 375, 'Sedan', 20);
+    ramp.speed = 24;
+    front.speed = 20;
+    rear.speed = 20;
+    ramp.waiting = true;
+    world.vehicles.push(ramp, front, rear);
+    world.admitWaiting();
+    front.perturbTimer = 2;
+    const speedBefore = front.speed;
+
+    world.step(TIME_STEP);
+
+    expect(front.reservedMotion).not.toBeNull();
+    expect(front.speed).toBe(speedBefore);
+    expect(front.perturbTimer).toBe(2);
+    expect(front.laneChange.state).toBe('none');
+  });
+
+  test('現在位置が安全でも将来のfront枠が壊れた場合は全roleを移動前に停止する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const front = new Vehicle(world, 'L', 2, 310, 'Sedan', 20);
+    const rear = new Vehicle(world, 'L', 2, 375, 'Sedan', 20);
+    ramp.speed = 24;
+    front.speed = 20;
+    rear.speed = 20;
+    ramp.waiting = true;
+    world.vehicles.push(ramp, front, rear);
+    world.admitWaiting();
+    front.speed = 0;
+    expect(ramp.checkLaneSafetyForChange(2)).toBe('safe');
+    const positions = new Map(
+      world.vehicles.map((vehicle) => [vehicle.spawnOrder, { z: vehicle.z, x: vehicle.x }]),
+    );
+
+    expect(() => world.step(TIME_STEP)).toThrow('合流予約回廊が空');
+    for (const vehicle of world.vehicles)
+      expect({ z: vehicle.z, x: vehicle.x }).toEqual(positions.get(vehicle.spawnOrder));
+    expect(ramp.laneChange.state).toBe('none');
+    expect(world.stats.cancels.L).toBe(0);
+  });
+
+  test('車線変更中に希望速度が変動しても予約運動は連続し導流帯前で完了する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+    world.admitWaiting();
+    let sawLaneChange = false;
+
+    for (let step = 0; step < 120 && ramp.lane === 3; step++) {
+      const previous = { z: ramp.z, x: ramp.x, speed: ramp.speed };
+      ramp.desiredSpeed = step % 2 === 0 ? 8 : 32;
+      world.step(TIME_STEP);
+      expectNoGoreVehicle(world);
+      expect(ramp.waiting).toBe(false);
+      expect(world.vehicles).toContain(ramp);
+      expect(previous.z - ramp.z).toBeGreaterThanOrEqual(0);
+      expect(previous.z - ramp.z).toBeLessThanOrEqual(
+        Math.max(previous.speed, ramp.speed) * TIME_STEP + 1e-9,
+      );
+      expect(Math.abs(ramp.x - previous.x)).toBeLessThanOrEqual(0.3);
+      if (ramp.laneChange.state !== 'none') sawLaneChange = true;
+    }
+
+    expect(sawLaneChange).toBe(true);
+    expect(ramp.lane).toBe(2);
+    expect(ramp.z).toBeGreaterThan(CONST.GORE_Z_START + ramp.length / 2);
+  });
+
+  test('予約枠へ割り込むlane 2車線変更は開始前に拒否する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+    world.admitWaiting();
+    const intruder = new Vehicle(world, 'L', 1, 350, 'Sedan', 20);
+    intruder.speed = 20;
+    world.vehicles.push(intruder);
+    world.rebuildSectionIndex();
+
+    expect(intruder.checkLaneSafetyForChange(2)).toBe('safe');
+    expect(intruder.tryLaneChange(2)).toBe(false);
+    expect(intruder.laneChange.state).toBe('none');
+  });
+
+  test('protected本線roleの次速度はsnapshot上の直前車を貫通しない上限を持つ', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const rear = new Vehicle(world, 'L', 2, 375, 'Sedan', 20);
+    ramp.speed = 24;
+    rear.speed = 20;
+    ramp.waiting = true;
+    world.vehicles.push(ramp, rear);
+    world.admitWaiting();
+    const ahead = new Vehicle(world, 'L', 2, 370.082, 'Sedan', 15);
+    ahead.speed = 15;
+    world.vehicles.push(ahead);
+
+    const transaction = world.evaluateTick(world.captureSnapshot(), TIME_STEP);
+    const rearMotion = transaction.motions.find(
+      (motion) => motion.vehicleOrder === rear.spawnOrder,
+    );
+
+    expect(rearMotion).toBeDefined();
+    expect(rearMotion!.nextSpeed).toBeLessThanOrEqual(19.861);
+  });
+});
+
+describe('前方縦列予約 transaction (Issue #48)', () => {
+  function dependencyWorld(): World {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const front = new Vehicle(world, 'L', 2, 310, 'Sedan', 20);
+    const frontAhead = new Vehicle(world, 'L', 2, 285, 'Sedan', 20);
+    const rear = new Vehicle(world, 'L', 2, 375, 'Sedan', 20);
+    const safeBoundary = new Vehicle(world, 'L', 2, 150, 'Sedan', 20);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    for (const vehicle of [front, frontAhead, rear, safeBoundary]) vehicle.speed = 20;
+    world.vehicles.push(ramp, front, frontAhead, rear, safeBoundary);
+    return world;
+  }
+
+  test('roleの予定走行距離で境界を証明できない前方車だけをclosureへ含める', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const role = new Vehicle(world, 'L', 2, 320, 'Sedan', 20);
+    const dependency = new Vehicle(world, 'L', 2, 300, 'Sedan', 20);
+    const safeBoundary = new Vehicle(world, 'L', 2, 200, 'Sedan', 20);
+    for (const vehicle of [role, dependency, safeBoundary]) vehicle.speed = 20;
+    world.vehicles.push(role, dependency, safeBoundary);
+    const result = buildMergeDependencyClosure(
+      world.captureSnapshot(),
+      'L',
+      [role.spawnOrder],
+      world.time + 2,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      closure: {
+        orders: [role.spawnOrder, dependency.spawnOrder].sort((a, b) => a - b),
+        edges: [{ followerOrder: role.spawnOrder, aheadOrder: dependency.spawnOrder }],
+      },
+    });
+  });
+
+  test('道路端をまたぐ直前車をwrapped距離でdependencyにする', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const role = new Vehicle(world, 'L', 2, -390, 'Sedan', 20);
+    const wrappedAhead = new Vehicle(world, 'L', 2, 390, 'Sedan', 20);
+    const safeBoundary = new Vehicle(world, 'L', 2, 280, 'Sedan', 20);
+    for (const vehicle of [role, wrappedAhead, safeBoundary]) vehicle.speed = 20;
+    world.vehicles.push(role, wrappedAhead, safeBoundary);
+
+    const result = buildMergeDependencyClosure(
+      world.captureSnapshot(),
+      'L',
+      [role.spawnOrder],
+      world.time + 2,
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok)
+      expect(result.closure.edges).toContainEqual({
+        followerOrder: role.spawnOrder,
+        aheadOrder: wrappedAhead.spawnOrder,
+      });
+  });
+
+  test('周回して始点へ戻るclosureはcycleとして証明書候補を拒否する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const first = new Vehicle(world, 'L', 2, 320, 'Sedan', 20);
+    const second = new Vehicle(world, 'L', 2, -80, 'Sedan', 20);
+    first.speed = second.speed = 20;
+    world.vehicles.push(first, second);
+
+    expect(
+      buildMergeDependencyClosure(
+        world.captureSnapshot(),
+        'L',
+        [first.spawnOrder],
+        world.time + 60,
+      ),
+    ).toMatchObject({ ok: false, reason: 'cycle' });
+  });
+
+  test('closure上限を超える候補をlimitとして拒否する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const vehicles = [320, 300, 280].map((z) => {
+      const vehicle = new Vehicle(world, 'L', 2, z, 'Sedan', 20);
+      vehicle.speed = 20;
+      world.vehicles.push(vehicle);
+      return vehicle;
+    });
+
+    expect(
+      buildMergeDependencyClosure(
+        world.captureSnapshot(),
+        'L',
+        [vehicles[0].spawnOrder],
+        world.time + 10,
+        1,
+      ),
+    ).toMatchObject({ ok: false, reason: 'limit' });
   });
 });

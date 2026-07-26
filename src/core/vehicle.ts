@@ -16,6 +16,97 @@ export interface LaneChange {
   holdTime: number;
   checkTimer: number;
 }
+
+/** tick 開始時点の車両状態。合流入場の判定中は変更しない。 */
+export interface VehicleSnapshot {
+  readonly order: number;
+  readonly section: Section;
+  readonly lane: number;
+  readonly z: number;
+  readonly x: number;
+  readonly speed: number;
+  readonly desiredSpeed: number;
+  readonly maxAcceleration: number;
+  readonly length: number;
+  readonly width: number;
+  readonly waiting: boolean;
+  readonly laneChange: Readonly<LaneChange>;
+}
+
+/** 合流入場を評価するための読み取り専用 world 状態。 */
+export interface WorldSnapshot {
+  readonly time: number;
+  readonly vehicles: readonly VehicleSnapshot[];
+  readonly byOrder: ReadonlyMap<number, VehicleSnapshot>;
+  readonly lane2BySection: Readonly<Record<Section, readonly VehicleSnapshot[]>>;
+}
+
+export interface MergeDependencyEdge {
+  readonly followerOrder: number;
+  readonly aheadOrder: number;
+}
+
+export interface MergeDependencyClosure {
+  /** ramp は含めず、本線 member だけを spawnOrder 昇順で保持する。 */
+  readonly orders: readonly number[];
+  /** follower -> ahead。cycle のない DAG だけを証明書へ入れる。 */
+  readonly edges: readonly MergeDependencyEdge[];
+}
+
+export type MergeClosureRejectReason =
+  | 'missing-root'
+  | 'lane-change-in-progress'
+  | 'stationary-member'
+  | 'cycle'
+  | 'limit';
+
+export type MergeClosureResult =
+  | Readonly<{ ok: true; closure: MergeDependencyClosure }>
+  | Readonly<{ ok: false; reason: MergeClosureRejectReason; order: number | null }>;
+
+/** 証明された回廊で許容される速度域。 */
+export interface SpeedEnvelope {
+  readonly min: number;
+  readonly max: number;
+}
+
+/** lane 3 を有効化する前に確定する、合流回廊の証明。 */
+export interface MergeCertificate {
+  readonly rampOrder: number;
+  readonly frontOrder: number | null;
+  readonly rearOrder: number | null;
+  readonly targetPassTime: number;
+  readonly completionZ: number;
+  readonly envelope: SpeedEnvelope;
+  readonly cooperation: Readonly<{ rearOrder: number; decel: number }> | null;
+}
+
+/** snapshot から評価した待機ランプ車の入場候補。 */
+export interface MergeCandidate {
+  readonly certificate: MergeCertificate;
+  readonly queueOrder: number;
+  readonly reservationTime: number;
+}
+
+/** snapshot で確定してから運動へ渡す、合流予約の指示。 */
+export interface MergeDirective {
+  readonly plan: MergePlan;
+  readonly envelope: SpeedEnvelope;
+  readonly startLaneChange: boolean;
+  readonly cooperation: Readonly<{ vehicleOrder: number; decel: number }> | null;
+}
+
+/** 予約 transaction が role 車両へ一括適用する次フレームの運動。 */
+export interface ReservedMotion {
+  readonly vehicleOrder: number;
+  readonly nextSpeed: number;
+  readonly lockLaneChange: boolean;
+}
+
+export interface MergeTransaction {
+  readonly directives: readonly MergeDirective[];
+  readonly motions: readonly ReservedMotion[];
+}
 /** 前方/後方車の探索結果 */
 export interface NeighborInfo {
   vehicle: Vehicle;
@@ -32,6 +123,11 @@ export interface MergePlan {
   targetPassTime: number;
   nextSource: MergeSource | null;
   cooperationDecel?: number;
+  /** 入口待ちから有効化した時点の不変な証明書。 */
+  certificate?: MergeCertificate | null;
+  id?: number;
+  completionZ?: number;
+  envelope?: SpeedEnvelope;
 }
 
 export interface ProjectedMergeSlot {
@@ -128,6 +224,8 @@ export class Vehicle {
   returnBoostCooldown = 0; // 加速復帰を諦めた後の再挑戦クールダウン
   mergeCooperationTarget: number | null = null;
   mergeCooperationDecel = 0;
+  mergeDirective: MergeDirective | null = null;
+  reservedMotion: ReservedMotion | null = null;
 
   constructor(
     world: World,
@@ -168,6 +266,7 @@ export class Vehicle {
       congestion: 0,
       targetPassTime: 0,
       nextSource: null,
+      certificate: null,
     };
     this.laneChangeCooldown = 0;
     this.returnTimer = 0;
@@ -250,6 +349,60 @@ export class Vehicle {
     return lane === this.lane || (this.laneChange.state !== 'none' && lane === this.laneChange.to);
   }
 
+  /** legacy 判断を通さず、予約 transaction の連続運動だけを反映する。 */
+  updateReservedMotion(deltaTime: number): void {
+    const motion = this.reservedMotion;
+    if (!motion) return;
+    this.previousZ = this.z;
+    const previousSpeed = this.speed;
+    this.speed = motion.nextSpeed;
+    this.targetSpeed = motion.nextSpeed;
+    this.lampDeceleration = Math.max(0, (previousSpeed - this.speed) / deltaTime);
+    this.brakeChainSignal = this.lampDeceleration >= 1.5;
+    this.braking = this.lampDeceleration >= 5;
+    this.z -= this.speed * deltaTime;
+    if (this.z < -CONST.ROAD_HALF - 8) this.z += WRAP_LENGTH;
+    if (!motion.lockLaneChange) this.advanceReservedLaneChange(deltaTime);
+    this.updateX();
+  }
+
+  /** 証明済み transaction だけが呼ぶ、再評価も cancel も行わない合流開始。 */
+  startReservedMergeLaneChange(): void {
+    if (this.lane !== 3 || this.laneChange.state !== 'none') return;
+    this.laneChange.state = 'changing';
+    this.laneChange.from = 3;
+    this.laneChange.to = 2;
+    this.laneChange.progress = 0;
+    this.laneChange.holdTime = 0;
+    this.laneChange.checkTimer = 0;
+    this.world.stats.changes[this.section]++;
+  }
+
+  /** transaction が証明した横移動を、mutable な周囲状態を読み直さず進める。 */
+  private advanceReservedLaneChange(deltaTime: number): void {
+    const laneChange = this.laneChange;
+    if (laneChange.state === 'none') return;
+    if (laneChange.from !== 3 || laneChange.to !== 2 || laneChange.state !== 'changing')
+      throw new Error(`予約外の車線変更状態: vehicle=${this.spawnOrder}`);
+    laneChange.progress += deltaTime / CONST.LANE_CHANGE_DURATION;
+    if (laneChange.progress < 1 - 1e-9) return;
+    laneChange.progress = 1;
+    this.lane = 2;
+    laneChange.state = 'none';
+    this.mergePlan = {
+      ...this.mergePlan,
+      state: 'completed',
+      front: null,
+      rear: null,
+      targetPassTime: 0,
+      nextSource: null,
+      cooperationDecel: undefined,
+    };
+    this.mergedFromRamp = this.z >= CONST.MERGE_POINT_Z;
+    this.rampMergePassPending = true;
+    this.laneChangeCooldown = 4.0 + this.world.rng() * 5;
+  }
+
   mergeHeadways(congestion: number): { front: number; rear: number } {
     const ratio = clamp(congestion, 0, 1);
     const interpolate = (free: number): number =>
@@ -257,6 +410,204 @@ export class Vehicle {
     return {
       front: interpolate(CONST.MERGE_FREE_FRONT_HEADWAY),
       rear: interpolate(CONST.MERGE_FREE_REAR_HEADWAY),
+    };
+  }
+
+  /**
+   * 読み取り専用 snapshot から、入口待ちランプ車の入場可能性を証明する。
+   * 直近の前後車だけを wrapped ETA で選ぶため、周回後の遠隔車は枠に混ぜない。
+   */
+  evaluateEntryCertificate(snapshot: WorldSnapshot): MergeCertificate | null {
+    const ramp = snapshot.vehicles.find((vehicle) => vehicle.order === this.spawnOrder);
+    if (!ramp || !ramp.waiting || ramp.lane !== 3) return null;
+
+    const bodySafeCompletionZ = CONST.GORE_Z_START + ramp.length / 2 + CONST.MERGE_BODY_CLEARANCE;
+    // 合流点は導流帯の手前にあり、ここで車線変更を完了できれば車体も安全側に残る。
+    const completionZ = Math.max(CONST.MERGE_POINT_Z, bodySafeCompletionZ);
+    const distance = ramp.z - completionZ;
+    if (distance <= 0) return null;
+
+    const acceleration = Math.max(this.type.acceleration, 0.1);
+    const cruiseSpeed = Math.max(ramp.speed, ramp.desiredSpeed, 1);
+    const accelerationTime = Math.max(0, (cruiseSpeed - ramp.speed) / acceleration);
+    const accelerationDistance =
+      ramp.speed * accelerationTime + 0.5 * acceleration * accelerationTime ** 2;
+    const eta =
+      distance <= accelerationDistance
+        ? (-ramp.speed + Math.sqrt(ramp.speed ** 2 + 2 * acceleration * distance)) / acceleration
+        : accelerationTime + (distance - accelerationDistance) / cruiseSpeed;
+    if (!Number.isFinite(eta) || eta < CONST.LANE_CHANGE_DURATION) return null;
+
+    const envelope: SpeedEnvelope = {
+      min: Math.max(0, ramp.speed - CONST.MERGE_MAX_COOP_DECEL * eta),
+      max: Math.min(ramp.desiredSpeed, ramp.speed + acceleration * eta),
+    };
+    if (envelope.min > envelope.max) return null;
+
+    const occupiesLane2 = (vehicle: VehicleSnapshot): boolean =>
+      vehicle.lane === 2 || (vehicle.laneChange.state !== 'none' && vehicle.laneChange.to === 2);
+    const arrivals = snapshot.vehicles
+      .filter(
+        (vehicle) =>
+          vehicle.order !== ramp.order &&
+          !vehicle.waiting &&
+          vehicle.section === ramp.section &&
+          occupiesLane2(vehicle),
+      )
+      .map((vehicle) => ({
+        vehicle,
+        eta: nextArrivalDistance(vehicle.z, completionZ) / Math.max(vehicle.speed, 1),
+      }))
+      .sort((a, b) => a.eta - b.eta || a.vehicle.order - b.vehicle.order);
+    const rearIndex = arrivals.findIndex((arrival) => arrival.eta > eta);
+    const front = rearIndex < 0 ? arrivals.at(-1) : arrivals[rearIndex - 1];
+    const rear = rearIndex < 0 ? null : arrivals[rearIndex];
+    const protectedOrders = new Set(
+      [front?.vehicle.order, rear?.vehicle.order].filter(
+        (order): order is number => order !== undefined,
+      ),
+    );
+    const hasFollowingMargin = (role: VehicleSnapshot): boolean => {
+      const ahead = snapshot.vehicles
+        .filter(
+          (vehicle) =>
+            vehicle.order !== role.order &&
+            vehicle.order !== ramp.order &&
+            !vehicle.waiting &&
+            vehicle.section === role.section &&
+            occupiesLane2(vehicle),
+        )
+        .map((vehicle) => ({
+          vehicle,
+          distance: (((role.z - vehicle.z) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH,
+        }))
+        .filter(({ distance }) => distance > 0.001)
+        .sort(
+          (left, right) =>
+            left.distance - right.distance || left.vehicle.order - right.vehicle.order,
+        )[0];
+      if (!ahead) return true;
+      const gap = ahead.distance - (role.length + ahead.vehicle.length) / 2;
+      const followingGap = role.length * 1.2 + 2.5 + role.speed * 0.55 * 1.35;
+      const requiredGap = protectedOrders.has(ahead.vehicle.order)
+        ? followingGap
+        : Math.max(followingGap, role.speed * eta + CONST.MERGE_BODY_CLEARANCE);
+      return gap >= requiredGap;
+    };
+    if (
+      (front && !hasFollowingMargin(front.vehicle)) ||
+      (rear && !hasFollowingMargin(rear.vehicle))
+    )
+      return null;
+    const frontGap = front
+      ? (eta - front.eta) * front.vehicle.speed - (front.vehicle.length + ramp.length) / 2
+      : Infinity;
+    const rearGap = rear
+      ? (rear.eta - eta) * rear.vehicle.speed - (rear.vehicle.length + ramp.length) / 2
+      : Infinity;
+    const headways = this.mergeHeadways(0);
+    if (frontGap < headways.front * envelope.max) return null;
+
+    let cooperation: MergeCertificate['cooperation'] = null;
+    if (rear) {
+      const requiredRearGap = headways.rear * rear.vehicle.speed;
+      const gapDecel = (2 * Math.max(0, requiredRearGap - rearGap)) / Math.max(eta ** 2, 0.01);
+      const ttcDecel = Math.max(
+        0,
+        (rear.vehicle.speed - envelope.max - rearGap / 4) / Math.max(eta + eta ** 2 / 8, 0.01),
+      );
+      const decel = Math.max(gapDecel, ttcDecel);
+      const projectedRearGap = rearGap + 0.5 * decel * eta ** 2;
+      const projectedRearSpeed = rear.vehicle.speed - decel * eta;
+      const rearClosingTtc =
+        projectedRearSpeed > envelope.max
+          ? projectedRearGap / (projectedRearSpeed - envelope.max)
+          : Infinity;
+      if (
+        decel > CONST.MERGE_MAX_COOP_DECEL ||
+        projectedRearSpeed < 0 ||
+        projectedRearGap < requiredRearGap ||
+        rearClosingTtc < 4
+      )
+        return null;
+      if (decel > 0) cooperation = { rearOrder: rear.vehicle.order, decel };
+    }
+
+    return {
+      rampOrder: ramp.order,
+      frontOrder: front?.vehicle.order ?? null,
+      rearOrder: rear?.vehicle.order ?? null,
+      targetPassTime: snapshot.time + eta,
+      completionZ,
+      envelope,
+      cooperation,
+    };
+  }
+
+  /** 証明済み予約を snapshot 上で投影し、空でない速度回廊だけを返す。 */
+  projectReservation(
+    snapshot: WorldSnapshot,
+    plan: MergePlan,
+    deltaTime: number,
+  ): MergeDirective | null {
+    const certificate = plan.certificate;
+    const ramp = snapshot.vehicles.find((vehicle) => vehicle.order === this.spawnOrder);
+    if (!certificate || !ramp || ramp.waiting || ramp.lane !== 3) return null;
+    const remaining = certificate.targetPassTime - snapshot.time;
+    const bodySafeCompletionZ = CONST.GORE_Z_START + ramp.length / 2 + CONST.MERGE_BODY_CLEARANCE;
+    if (remaining + 1e-9 < deltaTime || certificate.completionZ < bodySafeCompletionZ) return null;
+    const resolve = (order: number | null): VehicleSnapshot | null =>
+      order === null
+        ? null
+        : (snapshot.vehicles.find((vehicle) => vehicle.order === order) ?? null);
+    const front = resolve(certificate.frontOrder);
+    const rear = resolve(certificate.rearOrder);
+    const cooperator = resolve(certificate.cooperation?.rearOrder ?? null);
+    if (
+      (certificate.frontOrder !== null && !front) ||
+      (certificate.rearOrder !== null && !rear) ||
+      (certificate.cooperation !== null && !cooperator)
+    )
+      return null;
+    const projectedOffset = (vehicle: VehicleSnapshot, decel = 0): number =>
+      wrapDelta(
+        vehicle.z -
+          (vehicle.speed * remaining - 0.5 * decel * remaining ** 2) -
+          certificate.completionZ,
+      );
+    const frontGap = front ? -projectedOffset(front) - (front.length + ramp.length) / 2 : Infinity;
+    const cooperation = certificate.cooperation;
+    const rearDecel = cooperation?.decel ?? 0;
+    const rearGap = rear
+      ? projectedOffset(rear, rearDecel) - (rear.length + ramp.length) / 2
+      : Infinity;
+    const rearSpeed = rear ? rear.speed - rearDecel * remaining : 0;
+    const headways = this.mergeHeadways(0);
+    const rearTtc =
+      rear && rearSpeed > certificate.envelope.max
+        ? rearGap / (rearSpeed - certificate.envelope.max)
+        : Infinity;
+    const envelope: SpeedEnvelope = {
+      min: Math.max(certificate.envelope.min, ramp.speed - CONST.MERGE_MAX_COOP_DECEL * deltaTime),
+      max: Math.min(certificate.envelope.max, ramp.speed + this.type.acceleration * deltaTime),
+    };
+    if (
+      envelope.min > envelope.max ||
+      frontGap < headways.front * envelope.max ||
+      rearGap < headways.rear * rearSpeed ||
+      rearTtc < 4 ||
+      rearSpeed < 0
+    )
+      return null;
+    return {
+      plan: { ...plan, envelope },
+      envelope,
+      startLaneChange:
+        ramp.laneChange.state === 'none' &&
+        ramp.z <= certificate.completionZ + ramp.speed * (CONST.LANE_CHANGE_DURATION + deltaTime),
+      cooperation: cooperation
+        ? { vehicleOrder: cooperation.rearOrder, decel: cooperation.decel }
+        : null,
     };
   }
 
@@ -525,6 +876,7 @@ export class Vehicle {
       targetPassTime: number,
       cooperationDecel?: number,
     ): MergePlan => ({
+      ...this.mergePlan,
       state,
       front: slot?.front ?? null,
       rear: slot?.rear ?? null,
@@ -802,6 +1154,7 @@ export class Vehicle {
 
   tryLaneChange(toLane: number): boolean {
     if (toLane < 0 || toLane > 2) return false;
+    if (this.world.blocksReservedLaneChange(this, toLane)) return false;
     if (this.checkLaneSafetyForChange(toLane) !== 'safe') return false;
     this.laneChange.state = 'changing';
     this.laneChange.from = this.lane;
@@ -1096,6 +1449,12 @@ export class Vehicle {
     // 前方車への追従・緊急ブレーキはこの後の通常ロジックがそのまま制限するため安全は保たれる
     if (this.returnBoostTimer > 0) desire += CONST.RETURN_BOOST_SPEED_DELTA;
     let targetSpeed = this.yieldSlowTimer > 0 ? Math.max(8, desire - 2.5) : desire;
+    if (this.mergeDirective)
+      targetSpeed = clamp(
+        targetSpeed,
+        this.mergeDirective.envelope.min,
+        this.mergeDirective.envelope.max,
+      );
     let mergeArrivalDecel = 0;
     let mergeArrivalLimited = false;
     if (

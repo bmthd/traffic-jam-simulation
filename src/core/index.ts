@@ -23,14 +23,27 @@ export type {
 export { clamp, lerp, smooth, createRng, WRAP_LENGTH, wrapDelta } from './utils';
 export type { Rng } from './utils';
 export { Vehicle, mergeCongestion, nextArrivalDistance, smoothstepRange } from './vehicle';
+export { buildMergeDependencyClosure } from './merge-transaction';
 export type {
   LaneChange,
   LaneChangeState,
+  MergeCandidate,
+  MergeCertificate,
+  MergeClosureRejectReason,
+  MergeClosureResult,
+  MergeDependencyClosure,
+  MergeDependencyEdge,
+  MergeDirective,
+  MergeTransaction,
   MergePlan,
   MergeSource,
   MergeState,
   NeighborInfo,
   ProjectedMergeSlot,
+  SpeedEnvelope,
+  ReservedMotion,
+  VehicleSnapshot,
+  WorldSnapshot,
 } from './vehicle';
 export { World } from './world';
 export type { WorldOptions, SectionStats, SmoothTime } from './world';
