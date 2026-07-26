@@ -8,6 +8,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { CONST, createRng, Vehicle, World } from './src/core';
+import { isLandscapeViewport } from './src/render/camera-layout';
 import { loopCopies } from './src/render/looping';
 
 /* ---------- ヘルパー: シナリオ実行 ---------- */
@@ -789,5 +790,18 @@ describe('リセット時の内部状態初期化 (Issue #54)', () => {
 describe('周回道路の描画 (Issue #73)', () => {
   test('境界の前後1周ぶんに同じ道路設備を配置する', () => {
     expect(loopCopies(0)).toEqual([-816, 0, 816]);
+  });
+});
+
+/* ============================================================
+   13. 俯瞰カメラの端末向き (Issue #76)
+   ============================================================ */
+describe('俯瞰カメラの端末向き (Issue #76)', () => {
+  test.each([
+    [1280, 720, true],
+    [720, 1280, false],
+    [900, 900, true],
+  ])('%ix%i は横向き判定が %s', (width, height, expected) => {
+    expect(isLandscapeViewport(width, height)).toBe(expected);
   });
 });

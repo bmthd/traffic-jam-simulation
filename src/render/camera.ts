@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { CONST, clamp, smooth } from '../core';
 import type { Vehicle, World } from '../core';
+import { isLandscapeViewport } from './camera-layout';
 import { camera, renderer } from './scene';
 
 export interface CameraController {
@@ -111,9 +112,14 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     id: 'overhead',
     label: '俯瞰',
     icon: 'map',
-    // 高所からほぼ真上に見下ろす固定俯瞰。両区間の流れを俯瞰で比較できる
+    // 端末の長辺に道路の進行方向を合わせる。横長(正方形を含む)では横から、
+    // 縦長では従来どおり奥側から見下ろし、両区間の流れを比較しやすくする
     compute(pose) {
-      pose.position.set(CENTER_X, 150, 34);
+      if (isLandscapeViewport(innerWidth, innerHeight)) {
+        pose.position.set(CENTER_X + 52, 150, -6);
+      } else {
+        pose.position.set(CENTER_X, 150, 34);
+      }
       pose.target.set(CENTER_X, 0, -6);
     },
   },
