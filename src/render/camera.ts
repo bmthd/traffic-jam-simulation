@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { CONST, clamp, smooth } from '../core';
 import type { Vehicle, World } from '../core';
 import { isLandscapeViewport } from './camera-layout';
+import { flybyPose } from './flyby';
 import { camera, renderer } from './scene';
 
 export interface CameraController {
@@ -44,7 +45,14 @@ function applyOrbit(): void {
    カメラが車から取り残されず、視点の移動だけが滑らかになる。
    状態管理はこのモジュールに閉じ、app.ts のループから毎フレーム更新する。 */
 
-export type SpectatorPresetId = 'drone' | 'overhead' | 'lookup' | 'follow' | 'driver' | 'ramp';
+export type SpectatorPresetId =
+  | 'drone'
+  | 'overhead'
+  | 'lookup'
+  | 'follow'
+  | 'flyby'
+  | 'driver'
+  | 'ramp';
 
 interface Pose {
   position: THREE.Vector3;
@@ -145,6 +153,17 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
       // 車は -Z 方向へ進むので、後方 = +Z 側。少し横にずらして車体を見せる
       pose.position.set(vehicle.x - 5.5, 4.2, vehicle.z + 13);
       pose.target.set(vehicle.x, 1.3, vehicle.z - 6);
+    },
+  },
+  {
+    id: 'flyby',
+    label: 'フライバイ',
+    icon: 'send',
+    // 車両とは逆の +Z へ進み、車列と正面からすれ違いながら両区間を映す
+    compute(pose, { time }) {
+      const flyby = flybyPose(time, CENTER_X);
+      pose.position.set(flyby.position.x, flyby.position.y, flyby.position.z);
+      pose.target.set(flyby.target.x, flyby.target.y, flyby.target.z);
     },
   },
   {
