@@ -15,21 +15,60 @@ function bringToFront(panel: HTMLElement): void {
   });
 }
 
+const automaticallyCollapsed = new WeakSet<HTMLElement>();
+
+function setCollapsed(panel: HTMLElement, collapsed: boolean): void {
+  panel.classList.toggle('collapsed', collapsed);
+  panel
+    .querySelector<HTMLElement>('.panel-title')!
+    .setAttribute('aria-expanded', String(!collapsed));
+}
+
+function syncAutomaticCollapse(panel: HTMLElement, matches: boolean): void {
+  if (matches) {
+    if (!panel.classList.contains('collapsed')) {
+      setCollapsed(panel, true);
+      automaticallyCollapsed.add(panel);
+    }
+    return;
+  }
+  if (automaticallyCollapsed.has(panel)) {
+    setCollapsed(panel, false);
+    automaticallyCollapsed.delete(panel);
+  }
+}
+
 export function setupPanels(): void {
   for (const id of ['controlPanel', 'infoPanel']) {
     const panel = document.getElementById(id)!;
+    const title = panel.querySelector<HTMLElement>('.panel-title')!;
     stackOrder.push(panel);
     // 中身の操作(スライダー等)でも最前面へ。展開のクリックより先に反応させる
     panel.addEventListener('pointerdown', function () {
       bringToFront(panel);
     });
-    panel.querySelector('.panel-title')!.addEventListener('click', function (e) {
-      if ((e.target as Element).closest('button,input')) return;
-      panel.classList.toggle('collapsed');
+    panel.addEventListener('focusin', function () {
+      bringToFront(panel);
+    });
+    title.addEventListener('click', function () {
+      automaticallyCollapsed.delete(panel);
+      setCollapsed(panel, !panel.classList.contains('collapsed'));
     });
   }
-  // 小さい画面では情報を畳んだ状態から始める(3Dの邪魔をしない)
-  if (matchMedia('(max-width:700px), (max-height:520px)').matches) {
-    document.getElementById('controlPanel')!.classList.add('collapsed');
-  }
+
+  const controlPanel = document.getElementById('controlPanel')!;
+  const infoPanel = document.getElementById('infoPanel')!;
+  const compactControl = matchMedia('(max-width:700px), (max-height:520px)');
+  const compactInfo = matchMedia('(max-height:420px)');
+
+  const syncControlPanel = (): void => syncAutomaticCollapse(controlPanel, compactControl.matches);
+  const syncInfoPanel = (): void => syncAutomaticCollapse(infoPanel, compactInfo.matches);
+
+  // 展開時約265pxの情報パネルに上下12pxずつと、畳んだ操作パネル約52pxを
+  // 足すと約341px必要になる。フォントサイズやDPI差の余裕を見て420pxを境界にする。
+  // 王冠がパネル上端からはみ出すため、overflowではなく折りたたみで表示領域を確保する。
+  syncControlPanel();
+  syncInfoPanel();
+  compactControl.addEventListener('change', syncControlPanel);
+  compactInfo.addEventListener('change', syncInfoPanel);
 }

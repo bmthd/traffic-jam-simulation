@@ -170,18 +170,54 @@ export function setupParams(onApply: () => void): void {
   }
 
   const paramOverlay = document.getElementById('paramOverlay')!;
+  const paramModal = document.getElementById('paramModal')!;
+  let previouslyFocused: HTMLElement | null = null;
   document.getElementById('paramsBtn')!.addEventListener('click', function () {
+    previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     paramOverlay.classList.add('open');
+    paramModal.focus();
   });
   function closeParams(): void {
     paramOverlay.classList.remove('open');
+    if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    previouslyFocused = null;
   }
   document.getElementById('paramClose')!.addEventListener('click', closeParams);
   paramOverlay.addEventListener('click', function (e) {
     if (e.target === paramOverlay) closeParams();
   });
   window.addEventListener('keydown', function (e) {
+    if (!paramOverlay.classList.contains('open')) return;
     if (e.key === 'Escape') closeParams();
+  });
+  paramModal.addEventListener('keydown', function (e) {
+    if (e.key !== 'Tab' || !paramOverlay.classList.contains('open')) return;
+    const focusable = Array.from(
+      paramModal.querySelectorAll<HTMLElement>(
+        'button, input, [href], select, textarea, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter(
+      (element) =>
+        !element.hasAttribute('disabled') && !element.hidden && element.offsetParent !== null,
+    );
+    if (focusable.length === 0) {
+      e.preventDefault();
+      paramModal.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (document.activeElement === paramModal) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    } else if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
   });
   document.getElementById('paramApply')!.addEventListener('click', function () {
     closeParams();

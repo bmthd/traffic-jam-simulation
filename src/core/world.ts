@@ -95,15 +95,20 @@ export class World {
     return 'Sedan';
   }
 
-  // 生成間隔から基準車両数を導出する(「間隔が短い = 交通需要が多い」)。
+  // 生成間隔から片側の基準車両数を導出する(「間隔が短い = 交通需要が多い」)。
   // rulesモード: 都市高速の流入調整(ランプメータリング)と同じく、本線上の
-  // 台数がこの値(片側はこの半分)を超えないよう入口で流入を待たせる。
+  // 台数がこの値を超えないよう入口で流入を待たせる。
   // 待たされた車は入口待ち(waiting)として台数・スコアに計上される。
   // absorbモード: 円周実験(車両は退出しない)なので、この値を上限として
   // 間隔に応じた密度を維持する。
-  targetCount(): number {
+  targetCountPerSection(): number {
     const factor = this.mode === 'absorb' ? CONST.ABSORB_DENSITY_FACTOR : CONST.DEMAND_FACTOR;
-    return clamp(Math.round(factor / this.spawnInterval / 2) * 2, 24, CONST.MAX_VEHICLES);
+    return clamp(Math.round(factor / this.spawnInterval / 2), 12, CONST.MAX_VEHICLES_PER_SECTION);
+  }
+
+  // HUDなど両区間合計を扱う呼び出し元向けの基準台数。
+  targetCount(): number {
+    return this.targetCountPerSection() * 2;
   }
 
   isSpawnClear(section: Section, lane: number, z: number, exclude: Vehicle | null): boolean {
@@ -173,10 +178,17 @@ export class World {
     return count;
   }
 
+  // 入口待ちを含む、その区間の総台数
+  sectionCount(section: Section): number {
+    let count = 0;
+    for (const vehicle of this.vehicles) if (vehicle.section === section) count++;
+    return count;
+  }
+
   // その側の入口が今受け入れ可能か(流入調整の枠内 かつ 入口が物理的に空いている)
   // 空いているレーンを返す。受け入れ不可なら null
   admissibleLane(section: Section, lanes: number[], z: number): number | null {
-    if (this.roadCount(section) >= this.targetCount() / 2) return null; // 流入調整
+    if (this.roadCount(section) >= this.targetCountPerSection()) return null; // 流入調整
     const lane = lanes.find((candidate) => this.isSpawnClear(section, candidate, z, null));
     return lane != null ? lane : null;
   }
@@ -193,8 +205,8 @@ export class World {
   // absorbモード(円周実験): 従来通り、両側同時に置ける時だけミラー配置する。
   spawnPair(): boolean {
     if (this.mode === 'absorb') {
-      if (this.vehicles.length >= Math.min(CONST.MAX_VEHICLES, this.targetCount()) - 1)
-        return false;
+      const limit = Math.min(CONST.MAX_VEHICLES_PER_SECTION, this.targetCountPerSection());
+      if (this.sectionCount('L') >= limit || this.sectionCount('R') >= limit) return false;
       const typeName = this.pickType();
       const spec = TYPES[typeName];
       const speed = spec.minSpeed + this.rng() * (spec.maxSpeed - spec.minSpeed);
@@ -215,7 +227,6 @@ export class World {
     }
     // rulesモード: 需要の大半は上流本線(レーン0〜2の始端)から、残りは
     // 合流ランプ(レーン3)から入る。入口条件は左右で完全に同一にする
-    if (this.vehicles.length >= CONST.MAX_VEHICLES - 1) return false;
     const typeName = this.pickType();
     const spec = TYPES[typeName];
     let speed = spec.minSpeed + this.rng() * (spec.maxSpeed - spec.minSpeed);
@@ -231,6 +242,7 @@ export class World {
     const z = viaRamp ? CONST.RAMP_Z_TOP : CONST.ROAD_HALF + spec.length;
     let added = false;
     for (const section of ['L', 'R'] as const) {
+      if (this.sectionCount(section) >= CONST.MAX_VEHICLES_PER_SECTION) continue;
       if (this.waitingCount(section, viaRamp ? 'ramp' : 'mainline') >= CONST.RAMP_QUEUE_MAX)
         continue;
       // ランプ需要は入口の lane 3 が空いていても、lane 2 の将来枠を証明するまで
@@ -721,7 +733,7 @@ export class World {
     // 基準台数ぶんを最初から本線に配置する(ウォームスタート)。
     // 以降の台数は「同じペースの流入」と「各道路の交通状況に応じた流出」の
     // つり合いで決まり、混んでいる側は捌けずに自然に台数が増えていく
-    const pairs = Math.round(this.targetCount() / 2);
+    const pairs = this.targetCountPerSection();
     for (let i = 0; i < pairs; i++) {
       for (let tries = 0; tries < 50; tries++) {
         const typeName = this.pickType();
