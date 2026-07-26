@@ -487,7 +487,7 @@ describe('車両ペア生成', () => {
     ).toBeLessThanOrEqual(1e-12);
   });
 
-  test('最大車両数280台を超えない', () => {
+  test('最大車両数(片側上限×2区間)を超えない', () => {
     const world = new World({ rng: createRng(8), spawnInterval: 50 });
     world.populateInitial();
     for (let i = 0; i < Math.round(300 / TIME_STEP); i++) world.step(TIME_STEP);
@@ -3248,5 +3248,74 @@ describe('可変描画周期と固定物理tick (Issue #48)', () => {
     expect(presentationErrors).toEqual([hudError, renderError]);
     expect(simulations).toBe(3);
     expect(renders).toBe(3);
+  });
+});
+
+describe('車両数上限の区間独立性 (Issue #72)', () => {
+  /*
+   * 上限をL/R合計で共有すると、片方の混雑がもう片方の流入を止めて対照実験に交絡が生じる。
+   * そのため、同一の片側上限を各区間へ独立に適用する。
+   */
+  function addVehicles(world: World, section: 'L' | 'R', count: number): void {
+    for (let index = 0; index < count; index++) {
+      world.vehicles.push(new Vehicle(world, section, index % 3, index * 20, 'Sedan', 20));
+    }
+  }
+
+  test('片方が上限でも、上限未満の区間には流入できる', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 50 });
+    addVehicles(world, 'L', CONST.MAX_VEHICLES_PER_SECTION);
+    addVehicles(world, 'R', CONST.MAX_VEHICLES_PER_SECTION - 1);
+    const countLBefore = world.vehicles.filter((vehicle) => vehicle.section === 'L').length;
+    const countRBefore = world.vehicles.filter((vehicle) => vehicle.section === 'R').length;
+
+    expect(
+      world.spawnPair(),
+      `L側 ${countLBefore}台が上限でも、R側 ${countRBefore}台に流入できなかった`,
+    ).toBe(true);
+    const countLAfter = world.vehicles.filter((vehicle) => vehicle.section === 'L').length;
+    const countRAfter = world.vehicles.filter((vehicle) => vehicle.section === 'R').length;
+    expect(
+      countLAfter,
+      `上限到達済みのL側が ${countLBefore}台から ${countLAfter}台に増減した`,
+    ).toBe(countLBefore);
+    expect(
+      countRAfter,
+      `空きのあるR側が ${countRBefore}台から ${countRAfter}台になり、1台流入しなかった`,
+    ).toBe(countRBefore + 1);
+  });
+
+  test('高需要でも各区間の台数が片側上限を超えない', () => {
+    const world = new World({ rng: createRng(72), spawnInterval: 50 });
+    world.populateInitial();
+    for (let index = 0; index < Math.round(60 / TIME_STEP); index++) world.step(TIME_STEP);
+
+    for (const section of ['L', 'R'] as const) {
+      const count = world.vehicles.filter((vehicle) => vehicle.section === section).length;
+      expect(
+        count,
+        `${section}側 ${count}台 > 片側上限 ${CONST.MAX_VEHICLES_PER_SECTION}台`,
+      ).toBeLessThanOrEqual(CONST.MAX_VEHICLES_PER_SECTION);
+    }
+  });
+
+  test('片側上限は道路形状から求めた物理収容台数以上で、総上限はその2倍である', () => {
+    const averageLength = 4.6 * 0.46 + 5.4 * 0.25 + 9.2 * 0.11 + 4.2 * 0.18;
+    const stoppedFrontToFrontDistance = averageLength * 1.2 + 2.5 + averageLength;
+    const mainlineCapacity = Math.floor((WRAP_LENGTH * 3) / stoppedFrontToFrontDistance);
+    const rampCapacity = Math.floor(
+      (CONST.RAMP_Z_TOP - CONST.GORE_Z_START) / stoppedFrontToFrontDistance,
+    );
+    const waitingCapacity = CONST.RAMP_QUEUE_MAX * 2;
+    const physicalCapacity = mainlineCapacity + rampCapacity + waitingCapacity;
+
+    expect(
+      CONST.MAX_VEHICLES_PER_SECTION,
+      `片側上限 ${CONST.MAX_VEHICLES_PER_SECTION}台 < 物理収容台数 ${physicalCapacity}台`,
+    ).toBeGreaterThanOrEqual(physicalCapacity);
+    expect(
+      CONST.MAX_VEHICLES,
+      `総上限 ${CONST.MAX_VEHICLES}台 !== 片側上限 ${CONST.MAX_VEHICLES_PER_SECTION}台の2倍`,
+    ).toBe(CONST.MAX_VEHICLES_PER_SECTION * 2);
   });
 });
