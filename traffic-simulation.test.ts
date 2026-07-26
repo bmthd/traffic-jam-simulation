@@ -8,6 +8,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { CONST, createRng, Vehicle, World } from './src/core';
+import { isLandscapeViewport } from './src/render/camera-layout';
 import { headOnFollowPose } from './src/render/follow-camera';
 import { loopCopies } from './src/render/looping';
 
@@ -802,5 +803,18 @@ describe('正面追尾カメラ (Issue #77)', () => {
       position: { x: 21.5, y: 3.3, z: -43 },
       target: { x: 18, y: 1.25, z: -25.5 },
     });
+  });
+});
+
+/* ============================================================
+   13. 俯瞰カメラの端末向き (Issue #76)
+   ============================================================ */
+describe('俯瞰カメラの端末向き (Issue #76)', () => {
+  test.each([
+    [1280, 720, true],
+    [720, 1280, false],
+    [900, 900, true],
+  ])('%ix%i は横向き判定が %s', (width, height, expected) => {
+    expect(isLandscapeViewport(width, height)).toBe(expected);
   });
 });

@@ -180,6 +180,11 @@ canvas {
   border: 2px solid #05613b;
   box-shadow: 0 0 0 2px #fff;
 }
+.app-icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
 .row {
   font-size: 12.5px;
   margin: 7px 0;
