@@ -579,7 +579,7 @@ export class Vehicle {
           // 復帰先が塞がっている: まず「加速して並走車の前に出て戻る」を試み、
           // 見込みがなければ従来どおり少し減速して並走車の後ろに入る
           if (this.returnBoostCooldown > 0 || !this.tryStartReturnBoost(ahead)) {
-            if (this.section === 'L' && this.hasDeadlockAlongside(1)) this.yieldSlowTimer = 1.0;
+            if (this.hasDeadlockAlongside(1)) this.yieldSlowTimer = 1.0;
           }
         }
       }

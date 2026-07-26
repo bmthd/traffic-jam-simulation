@@ -20,8 +20,12 @@
       <i data-lucide="sun"></i>
     </button>
 
-    <!-- 観賞モード切替（右上・丸ボタン。押すたびに視点が循環する） -->
-    <button id="spectatorBtn" title="観賞モードを開始" aria-label="観賞モードを開始">
+    <!-- カメラモード切替（右上・丸ボタン。押すたびに視点が循環する） -->
+    <button
+      id="spectatorBtn"
+      title="カメラ: オートモード(押して切替)"
+      aria-label="カメラ: オートモード(押して切替)"
+    >
       <i data-lucide="clapperboard"></i>
     </button>
     <div id="spectatorLabel"></div>
@@ -35,7 +39,8 @@
       </div>
       <div class="panel-body">
         <div class="row">
-          総車両数: <span class="num" id="vehicleCount">0</span> / <span class="num">200</span>
+          総車両数: <span class="num" id="vehicleCount">0</span> /
+          <span class="num" id="maxVehicleCount"></span>
         </div>
         <div class="row">
           車両ペア生成間隔: <span class="num" id="intervalLabel">800</span> ms

@@ -74,3 +74,14 @@ src/
 **ルール**: `src/core/` は DOM / THREE に依存させない。
 テスト (`traffic-simulation.test.ts`) は Vitest がコアを直接 import して実行する。
 シミュレーションの挙動を変えるときは core、見た目は render / ui だけを触ればよい。
+
+## ライセンス
+
+本リポジトリのコードは [MIT License](./LICENSE) で提供する。
+
+ただし、サードパーティの依存およびアセットはそれぞれ独自のライセンスに従う。
+再配布や再利用の際は個別に確認すること。
+
+- [three.js](https://github.com/mrdoob/three.js): MIT License
+- [lucide](https://github.com/lucide-icons/lucide): ISC License
+  (Feather 由来の部分は MIT License)

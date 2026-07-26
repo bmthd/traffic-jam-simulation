@@ -121,18 +121,24 @@ const ROAD_HALF = CONST.ROAD_HALF;
     const centerX = Math.cos(theta) * radius,
       centerZ = Math.sin(theta) * radius,
       centerY = 150 + Math.random() * 110;
+    let width = 0,
+      aspect = 0;
     for (let k = 0; k < 3; k++) {
-      // ひと塊を3枚のスプライトでもこもこに
-      const sprite = new THREE.Sprite(cloudMaterial);
-      const width = 90 + Math.random() * 120;
-      sprite.scale.set(width, width * (0.28 + Math.random() * 0.14), 1);
-      sprite.position.set(
-        centerX + (Math.random() - 0.5) * 70,
-        centerY + (Math.random() - 0.5) * 18,
-        centerZ + (Math.random() - 0.5) * 70,
-      );
-      sprite.renderOrder = -14;
-      scene.add(sprite);
+      // 後続の星・車両外観の乱数列を変えないよう、旧3枚構成と同じ順序・回数で消費する。
+      const widthRandom = Math.random(),
+        aspectRandom = Math.random();
+      Math.random(); // 房ごとのXずれ
+      Math.random(); // 房ごとのYずれ
+      Math.random(); // 房ごとのZずれ
+      if (k === 0) {
+        width = 130 + widthRandom * 130;
+        aspect = 0.32 + aspectRandom * 0.08;
+      }
     }
+    const sprite = new THREE.Sprite(cloudMaterial);
+    sprite.scale.set(width, width * aspect, 1);
+    sprite.position.set(centerX, centerY, centerZ);
+    sprite.renderOrder = -14;
+    scene.add(sprite);
   }
 })();
