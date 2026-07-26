@@ -476,14 +476,7 @@ export class World {
       const { certificate } = candidate;
       vehicle.waiting = false;
       vehicle.x = CONST.LANE_X[vehicle.section][3];
-      vehicle.speed = this.safeSpawnSpeed(
-        vehicle.section,
-        3,
-        vehicle.z,
-        vehicle.length,
-        Math.min(vehicle.desiredSpeed, certificate.envelope.max),
-        vehicle,
-      );
+      vehicle.speed = snapshot.byOrder.get(vehicle.spawnOrder)!.speed;
       vehicle.mergePlan = {
         ...vehicle.mergePlan,
         id: this.nextMergePlanId++,
@@ -680,7 +673,7 @@ export class World {
 
   // 入口待ちの車を、受け入れ可能になり次第(各側1台/ステップ)流入させる。
   // ランプ待ちはランプへ、本線待ちは空いている本線レーンへ入る。
-  // 待ち行列からの発進なので、初速は控えめ + 前方に対して安全な速度に丸める
+  // 本線は控えめな安全速度、ランプはcertificateを証明したsnapshot速度で発進する。
   admitWaiting(snapshot: WorldSnapshot = this.captureSnapshot(), deltaTime = 1 / 20): void {
     const rampHeads: Vehicle[] = [];
     const mainlineHeads: Vehicle[] = [];
