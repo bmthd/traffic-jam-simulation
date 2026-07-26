@@ -439,7 +439,6 @@ export class World {
   }
 
   step(deltaTime: number): void {
-    this.time += deltaTime;
     this.spawnAccumulator += deltaTime * 1000;
     // rulesモードの流入間隔は、終端で流出する分(EXIT_RATIO)とつり合う需要に換算する。
     // 「間隔が短い = 交通需要が多い」の意味は従来通り(密度は間隔に反比例)
@@ -480,6 +479,9 @@ export class World {
     this.rebuildSectionIndex();
     this.prepareMergeCoordination(deltaTime);
     for (const vehicle of this.vehicles) if (!vehicle.waiting) vehicle.update(deltaTime);
+    // 合流評価と速度更新は移動前の位置と同じ時刻スナップショットで行い、
+    // 全車両を次フレームの位置へ進めた後にシミュレーション時刻を更新する
+    this.time += deltaTime;
     this.recordMergePasses();
     // rulesモード: 出口まで走り切った車は流出する(捌けた分だけ出る)
     if (this.mode !== 'absorb') this.collectExited();

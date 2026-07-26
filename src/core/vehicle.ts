@@ -1116,9 +1116,14 @@ export class Vehicle {
           ? reservedSlot.frontGap / this.mergeHeadways(this.mergePlan.congestion).front
           : Infinity;
         const arrivalSpeed = Math.max(1, Math.min(mergeSpeed, frontSpeedLimit));
-        // 固定予約の到着速度へ残り時間で合わせる必要減速度だけを使い、上限を越えない
+        const timeToCommitDeadline = Math.max(
+          (this.z - this.latestMergeCommitZ()) / Math.max(this.speed, 1) - deltaTime,
+          deltaTime,
+        );
+        // commit は移動前に評価するため1 step手前を期限とし、予約時刻との早い方までに
+        // 到着速度へ合わせる。必要減速度は既存上限を越えない
         mergeArrivalDecel = clamp(
-          (this.speed - arrivalSpeed) / time,
+          (this.speed - arrivalSpeed) / Math.min(time, timeToCommitDeadline),
           0,
           CONST.MERGE_MAX_COOP_DECEL,
         );

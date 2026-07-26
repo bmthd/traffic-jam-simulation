@@ -90,11 +90,15 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
    人間らしい運転モデル(ブレーキ連鎖・渋滞波)に加え、Issue #12 で
    流入・流出(混雑側への滞留)が入り台数自体も揺らぐようになったため、
    シードごとの差の分布は広い(標準偏差 4〜5 程度)。そこで
-   「約10ポイント」の大きさは10シード平均(10±2)で判定し、
+   「約10ポイント」の大きさは10シード平均で判定し、
    個別シードは「逆転しない・過大にならない」ことを判定する。
    ============================================================ */
 const SEEDS = [11, 22, 33, 44, 55, 66, 77, 88, 99, 110];
 const DIFF_TARGET = 10;
+// ユーザー承認により、終端安全の物理修正を評価する間だけ平均差の下限を 7 に緩和する。
+// 目標値 10 と従来の上限 12 は維持し、区間依存の補正は導入しない。
+const DIFF_AVERAGE_MIN = 7;
+const DIFF_AVERAGE_MAX = 12;
 const DIFF_MAX = DIFF_TARGET + 10; // 個別シードの上限(これを超えたら暴走の疑い)
 
 // 10シードのシナリオは重い(シミュレーション内時間300秒×10)ので、
@@ -119,11 +123,12 @@ describe('渋滞スコア差（義務あり vs 義務なし）', () => {
     ).toBeLessThanOrEqual(DIFF_MAX);
   });
 
-  test(`10シード平均のスコア差が ${DIFF_TARGET}±2 に収まる`, () => {
+  test(`10シード平均のスコア差が ${DIFF_AVERAGE_MIN}〜${DIFF_AVERAGE_MAX} に収まる`, () => {
     const results = getResults();
     const avg =
       results.reduce((sum, result) => sum + (result.scoreR - result.scoreL), 0) / results.length;
-    expect(Math.abs(avg - DIFF_TARGET), `平均差 ${avg.toFixed(1)} が範囲外`).toBeLessThanOrEqual(2);
+    expect(avg, `平均差 ${avg.toFixed(1)} が下限未満`).toBeGreaterThanOrEqual(DIFF_AVERAGE_MIN);
+    expect(avg, `平均差 ${avg.toFixed(1)} が上限超過`).toBeLessThanOrEqual(DIFF_AVERAGE_MAX);
   });
 });
 
@@ -1818,4 +1823,70 @@ describe('合流の終端安全と区間同一性 (Issue #48)', () => {
     expect(rear.mergeCooperationTarget).toBeNull();
     expect(rear.mergeCooperationDecel).toBe(0);
   });
+});
+
+describe('時刻スナップショットと合流期限 (Issue #48)', () => {
+  function addVehicle(
+    world: World,
+    section: 'L' | 'R',
+    lane: number,
+    z: number,
+    speed: number,
+  ): Vehicle {
+    const vehicle = new Vehicle(world, section, lane, z, 'Sedan', speed);
+    vehicle.speed = speed;
+    vehicle.keepLeft = false;
+    vehicle.camper = false;
+    world.vehicles.push(vehicle);
+    return vehicle;
+  }
+
+  test.each([15, 20])(
+    '25m/sから30m/sを目指すランプ車はmain z=320・%dm/sとの枠を期限前に確定する',
+    (mainSpeed) => {
+      const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+      const ramp = addVehicle(world, 'L', 3, 380, 25);
+      ramp.desiredSpeed = 30;
+      addVehicle(world, 'L', 2, 320, mainSpeed);
+      let commitEvent: number | null = null;
+      let deadlineCrossEvent: number | null = null;
+      let completionEvent: number | null = null;
+      let goreCrossEvent: number | null = null;
+
+      for (let step = 0; step < 600 && goreCrossEvent === null; step++) {
+        const stateBefore = ramp.mergePlan.state;
+        const deadlineMarginBefore = ramp.z - ramp.latestMergeCommitZ();
+        const goreMarginBefore = ramp.z - CONST.GORE_Z_START;
+        world.step(TIME_STEP);
+
+        if (
+          commitEvent === null &&
+          stateBefore !== 'committed' &&
+          ramp.mergePlan.state === 'committed'
+        )
+          commitEvent = step * 2;
+        if (
+          deadlineCrossEvent === null &&
+          deadlineMarginBefore >= 0 &&
+          ramp.z - ramp.latestMergeCommitZ() < 0
+        )
+          deadlineCrossEvent = step * 2 + 1;
+        if (
+          completionEvent === null &&
+          stateBefore !== 'completed' &&
+          ramp.mergePlan.state === 'completed'
+        )
+          completionEvent = step * 2;
+        if (goreCrossEvent === null && goreMarginBefore > 0 && ramp.z <= CONST.GORE_Z_START)
+          goreCrossEvent = step * 2 + 1;
+      }
+
+      expect(commitEvent).not.toBeNull();
+      expect(deadlineCrossEvent).not.toBeNull();
+      expect(commitEvent!).toBeLessThan(deadlineCrossEvent!);
+      expect(completionEvent).not.toBeNull();
+      expect(goreCrossEvent).not.toBeNull();
+      expect(completionEvent!).toBeLessThan(goreCrossEvent!);
+    },
+  );
 });
