@@ -27,6 +27,7 @@ import {
   Vehicle,
   World,
   WRAP_LENGTH,
+  wrapDelta,
 } from './src/core';
 import { isLandscapeViewport } from './src/render/camera-layout';
 import { flybyPose } from './src/render/flyby';
@@ -3317,5 +3318,96 @@ describe('車両数上限の区間独立性 (Issue #72)', () => {
       CONST.MAX_VEHICLES,
       `総上限 ${CONST.MAX_VEHICLES}台 !== 片側上限 ${CONST.MAX_VEHICLES_PER_SECTION}台の2倍`,
     ).toBe(CONST.MAX_VEHICLES_PER_SECTION * 2);
+  });
+});
+
+/* ============================================================
+   車線変更安全確認の周回考慮 (Issue #50)
+   checkLaneSafetyForChange だけが素の z 比較で前後関係と距離を判定しており、
+   道路の継ぎ目 (z = ±ROAD_HALF 付近) をまたぐ相手を見落としていた。
+   同ファイルの他の探索関数 (findAlongside など) と揃えて wrapDelta による
+   周回路上の符号付き最短距離で判定する。区間非依存の修正である。
+   ============================================================ */
+describe('車線変更安全確認の周回考慮 (Issue #50)', () => {
+  // 継ぎ目をまたいで真横に並ぶ 2 台。素の z 差は 806m だがリング上は 10m しかない。
+  function setupSeamPair(section: 'L' | 'R') {
+    const world = new World({ rng: createRng(50), spawnInterval: 1e9 });
+    const mover = new Vehicle(world, section, 0, -405, 'Sedan', 25);
+    mover.speed = 25;
+    const blocker = new Vehicle(world, section, 1, 401, 'Sedan', 25);
+    blocker.speed = 25;
+    world.vehicles.push(mover, blocker);
+    world.rebuildSectionIndex();
+    return { world, mover, blocker };
+  }
+
+  test('継ぎ目をまたいだ真横の車を検知して車線変更を許可しない', () => {
+    const { mover, blocker } = setupSeamPair('L');
+    // 前提: 素の z 差は 806m、リング上の最短距離は 10m
+    expect(Math.abs(blocker.z - mover.z)).toBeCloseTo(806, 5);
+    expect(Math.abs(wrapDelta(blocker.z - mover.z))).toBeCloseTo(10, 5);
+    // findAlongside は正しく真横と認識している
+    expect(mover.findAlongside(1), 'findAlongside が継ぎ目越しの並走車を見落とした').toBe(blocker);
+    // checkLaneSafetyForChange も同じ相手を危険と判定しなければならない
+    expect(mover.checkLaneSafetyForChange(1), '継ぎ目をまたぐ並走車を無視して safe を返した').toBe(
+      'danger',
+    );
+  });
+
+  test('継ぎ目をまたぐ状況では車線変更が成立しない', () => {
+    const { mover } = setupSeamPair('L');
+    expect(mover.tryLaneChange(1), '危険なのに車線変更が成立した').toBe(false);
+    expect(mover.laneChange.state).toBe('none');
+  });
+
+  test('継ぎ目をまたぐ後方車も同様に検知する', () => {
+    // 相手を後方 (z が大きい側) に置いたケース。
+    const world = new World({ rng: createRng(50), spawnInterval: 1e9 });
+    const mover = new Vehicle(world, 'L', 0, 401, 'Sedan', 25);
+    mover.speed = 25;
+    const chaser = new Vehicle(world, 'L', 1, -405, 'SportsCar', 34);
+    chaser.speed = 34;
+    world.vehicles.push(mover, chaser);
+    world.rebuildSectionIndex();
+    // -405 はリング上では 401 の 10m 後方
+    expect(wrapDelta(chaser.z - mover.z)).toBeCloseTo(10, 5);
+    expect(
+      mover.checkLaneSafetyForChange(1),
+      '継ぎ目をまたぐ高速の後続車を無視して safe を返した',
+    ).toBe('danger');
+  });
+
+  test('リング全体を平行移動しても安全判定は変わらない (継ぎ目に特異点がない)', () => {
+    // 同一の相対配置をリング上の様々な絶対位置へ回して判定を比較する。
+    // 周回を正しく扱えていれば、判定は配置場所に依らず一定になる。
+    const wrapZ = (z: number) => {
+      const span = CONST.ROAD_HALF + 8;
+      return ((((z + span) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH) - span;
+    };
+    function verdictAtOffset(offset: number): 'safe' | 'hold' | 'danger' {
+      const world = new World({ rng: createRng(50), spawnInterval: 1e9 });
+      const mover = new Vehicle(world, 'L', 0, wrapZ(offset), 'Sedan', 25);
+      mover.speed = 25;
+      const blocker = new Vehicle(world, 'L', 1, wrapZ(offset + 10), 'Sedan', 25);
+      blocker.speed = 25;
+      world.vehicles.push(mover, blocker);
+      world.rebuildSectionIndex();
+      return mover.checkLaneSafetyForChange(1);
+    }
+
+    const baseline = verdictAtOffset(0);
+    expect(baseline).toBe('danger');
+    for (let offset = 0; offset < WRAP_LENGTH; offset += 17) {
+      expect(
+        verdictAtOffset(offset),
+        `オフセット ${offset}m で判定が ${baseline} から変化した = 継ぎ目で挙動が変わっている`,
+      ).toBe(baseline);
+    }
+  });
+
+  test('L/R で判定が一致する (区間依存の分岐が入っていない)', () => {
+    const left = setupSeamPair('L');
+    const right = setupSeamPair('R');
+    expect(right.mover.checkLaneSafetyForChange(1)).toBe(left.mover.checkLaneSafetyForChange(1));
   });
 });

@@ -1129,11 +1129,13 @@ export class Vehicle {
     const vehicles = this.world.sectionVehicles[this.section];
     for (const other of vehicles) {
       if (other === this || !other.occupies(toLane)) continue;
-      const deltaZ = Math.abs(other.z - this.z);
-      if (deltaZ > 90) continue;
-      if (other.z <= this.z) {
+      // 周回路なので符号付き最短距離で前後を判定する(継ぎ目をまたぐ相手も拾う)。
+      // deltaZ <= 0 なら相手は前方(z が小さい側)、> 0 なら後方。
+      const deltaZ = wrapDelta(other.z - this.z);
+      if (Math.abs(deltaZ) > 90) continue;
+      if (deltaZ <= 0) {
         // 変更先の前方車
-        const gap = this.z - other.z - (this.length + other.length) / 2;
+        const gap = -deltaZ - (this.length + other.length) / 2;
         if (gap < 1.5) return 'danger';
         const requiredGap = (4 + this.speed * 0.45) * relax;
         if (gap < requiredGap) {
@@ -1143,7 +1145,7 @@ export class Vehicle {
         }
       } else {
         // 変更先の後方車
-        const gap = other.z - this.z - (this.length + other.length) / 2;
+        const gap = deltaZ - (this.length + other.length) / 2;
         if (gap < 1.5) return 'danger';
         const relativeSpeed = other.speed - this.speed;
         const requiredGap = (4 + Math.max(0, relativeSpeed) * 2.2 + other.speed * 0.22) * relax;
