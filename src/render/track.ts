@@ -73,8 +73,6 @@ for (const section of SECTIONS) {
     roadMaterial,
     loopCopies(0).map((z): [number, number, number] => [sectionX(section, -7), -0.06, z]),
   );
-  // 周回前後の複製をまとめているが、r128のカリングはインスタンス行列を見ず原点基準の球で判定するため、全周に及ぶ実体が丸ごと消えないよう無効化する。
-  road.frustumCulled = false;
   road.receiveShadow = true;
   scene.add(road);
 
@@ -89,7 +87,6 @@ for (const section of SECTIONS) {
     frontageRoadMaterial,
     loopCopies(0).map((z): [number, number, number] => [sectionX(section, -15), -0.055, z]),
   );
-  frontageRoad.frustumCulled = false;
   frontageRoad.receiveShadow = true;
   scene.add(frontageRoad);
 }
@@ -112,7 +109,6 @@ function solidLines(
     whiteLineMaterial,
     positions,
   );
-  lines.frustumCulled = false;
   scene.add(lines);
 }
 // 車線境界の破線は全車線ぶんを1つのInstancedMeshに(draw call削減)
@@ -164,7 +160,6 @@ dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, 
         stripMaterial,
         positions,
       );
-      strip.frustumCulled = false;
       scene.add(strip);
     }
 
@@ -184,7 +179,6 @@ dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, 
       }
     }
     const tapers = instancedWith(taperGeometry, stripMaterial, taperMatrices);
-    tapers.frustumCulled = false;
     scene.add(tapers);
 
     // 周回境界を展開してから戻すことで、境界をまたいでも正確な9m間隔を保つ。
@@ -205,7 +199,6 @@ dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, 
   }
 
   const poles = instancedAt(poleGeometry, poleMaterial, polePositions);
-  poles.frustumCulled = false;
   scene.add(poles);
 })();
 
