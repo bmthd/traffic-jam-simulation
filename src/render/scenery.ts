@@ -78,6 +78,9 @@ const ROAD_HALF = CONST.ROAD_HALF;
   );
   trunks.castShadow = true;
   canopies.castShadow = true;
+  // 道路全長に散らすためヘルパー(instancing.ts)と同じ理由で視錐台カリングを切る (Issue #89)
+  trunks.frustumCulled = false;
+  canopies.frustumCulled = false;
   const matrix = new THREE.Matrix4(),
     color = new THREE.Color();
   for (let i = 0; i < treeCount; i++) {
