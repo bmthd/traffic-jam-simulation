@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>追いつかれた車両の義務と渋滞の関係｜6車線比較 渋滞シミュレーション</title>
+    <meta
+      name="description"
+      content="「追いつかれた車両の義務」と渋滞の関係を、ルールの有無だけを変えた2本の道路で比較する3Dシミュレーションの仕組みと見方を解説します。"
+    />
+    <link rel="canonical" href="https://traffic-jam.bmth.dev/about.html" />
+
+    <meta property="og:type" content="article" />
+    <meta property="og:url" content="https://traffic-jam.bmth.dev/about.html" />
+    <meta
+      property="og:title"
+      content="追いつかれた車両の義務と渋滞の関係｜6車線比較 渋滞シミュレーション"
+    />
+    <meta
+      property="og:description"
+      content="ルールの有無だけを変えた2本の道路を並べ、渋滞のできかたの違いを観察する3Dシミュレーションを解説します。"
+    />
+    <meta property="og:image" content="https://traffic-jam.bmth.dev/ogp.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="義務ありのL区間と義務なしのR区間が並走する渋滞シミュレーションの画面"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="追いつかれた車両の義務と渋滞の関係｜6車線比較 渋滞シミュレーション"
+    />
+    <meta
+      name="twitter:description"
+      content="ルールの有無だけを変えた2本の道路を並べ、渋滞のできかたの違いを観察する3Dシミュレーションを解説します。"
+    />
+    <meta name="twitter:image" content="https://traffic-jam.bmth.dev/ogp.png" />
+    <meta
+      name="twitter:image:alt"
+      content="義務ありのL区間と義務なしのR区間が並走する渋滞シミュレーションの画面"
+    />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Article",
+        "headline": "追いつかれた車両の義務と渋滞の関係",
+        "description": "「追いつかれた車両の義務」と渋滞の関係を、ルールの有無だけを変えた2本の道路で比較する3Dシミュレーションの解説。",
+        "inLanguage": "ja",
+        "author": {
+          "@type": "Person",
+          "name": "bmthd"
+        },
+        "publisher": {
+          "@type": "Person",
+          "name": "bmthd"
+        },
+        "mainEntityOfPage": {
+          "@type": "WebPage",
+          "@id": "https://traffic-jam.bmth.dev/about.html"
+        }
+      }
+    </script>
+
+    <style>
+      :root {
+        color-scheme: light dark;
+        --background: #f5f7f4;
+        --surface: #ffffff;
+        --text: #202720;
+        --muted: #596459;
+        --accent: #236b46;
+        --accent-hover: #174d31;
+        --border: #d9e0d8;
+        --note: #edf4ee;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--background);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif;
+        font-size: 17px;
+        line-height: 1.9;
+      }
+
+      main {
+        width: min(720px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 56px 0 72px;
+      }
+
+      article {
+        padding: clamp(28px, 6vw, 56px);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+      }
+
+      h1,
+      h2 {
+        line-height: 1.45;
+        letter-spacing: 0.02em;
+      }
+
+      h1 {
+        margin: 1.2rem 0 1.5rem;
+        font-size: clamp(1.9rem, 6vw, 2.7rem);
+      }
+
+      h2 {
+        margin: 3.2rem 0 1rem;
+        padding-bottom: 0.35rem;
+        border-bottom: 2px solid var(--border);
+        font-size: clamp(1.35rem, 4vw, 1.7rem);
+      }
+
+      p,
+      ul {
+        margin: 1rem 0;
+      }
+
+      ul {
+        padding-left: 1.4rem;
+      }
+
+      li + li {
+        margin-top: 0.45rem;
+      }
+
+      a {
+        color: var(--accent);
+        text-underline-offset: 0.2em;
+      }
+
+      a:hover {
+        color: var(--accent-hover);
+      }
+
+      .simulation-link {
+        display: inline-block;
+        padding: 0.65rem 1rem;
+        color: #ffffff;
+        font-weight: 700;
+        text-decoration: none;
+        background: var(--accent);
+        border-radius: 8px;
+      }
+
+      .simulation-link:hover {
+        color: #ffffff;
+        background: var(--accent-hover);
+      }
+
+      .lead {
+        color: var(--muted);
+        font-size: 1.08rem;
+      }
+
+      .note {
+        padding: 1rem 1.2rem;
+        background: var(--note);
+        border-left: 4px solid var(--accent);
+        border-radius: 4px;
+      }
+
+      footer {
+        margin-top: 3rem;
+        padding-top: 2rem;
+        text-align: center;
+        border-top: 1px solid var(--border);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --background: #111612;
+          --surface: #19201b;
+          --text: #e4ebe5;
+          --muted: #b3beb5;
+          --accent: #73c995;
+          --accent-hover: #9bdeb5;
+          --border: #38433a;
+          --note: #202d24;
+        }
+
+        .simulation-link,
+        .simulation-link:hover {
+          color: #102217;
+        }
+      }
+
+      @media (max-width: 520px) {
+        main {
+          width: min(100% - 24px, 720px);
+          padding: 24px 0 36px;
+        }
+
+        article {
+          padding: 24px 20px 32px;
+          border-radius: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <article>
+        <a class="simulation-link" href="./index.html">シミュレーションを開く</a>
+
+        <h1>追いつかれた車両の義務と渋滞の関係</h1>
+        <p class="lead">
+          このサイトは、「追いつかれた車両の義務」がある道路とない道路を同時に走らせ、渋滞のできかたにどのような差が生まれるかを観察する3Dシミュレーションです。
+        </p>
+
+        <h2>このサイトは何か</h2>
+        <p>
+          画面には、3車線の道路が2本並んでいます。L区間では後ろから速い車に追いつかれた車両が道を譲り、R区間ではその義務がないものとして車両が走ります。2本の道路を同時に眺めることで、ルール1つの有無が交通の流れに与える影響を比べられます。
+        </p>
+        <p>
+          車両の動きはThree.jsで立体的に描画されます。渋滞の数値だけでなく、車間の詰まりがどこで始まり、後方へどう広がるかも目で追えます。
+        </p>
+
+        <h2>「追いつかれた車両の義務」とは何か</h2>
+        <p>
+          道路交通法第27条には、後方からより速い車に追いつかれた車両についての規定があります。追越しが終わるまで速度を上げず、道路の状況に応じて進路を譲る義務がある、という趣旨です。
+        </p>
+        <p class="note">
+          ここでの説明はシミュレーションの前提を理解するための要約であり、個別の交通状況に対する法的助言ではありません。
+        </p>
+
+        <h2>なぜ譲らないと渋滞が起きるのか</h2>
+        <p>
+          追い越し車線を比較的遅い車が走り続けると、後ろから来た速い車は減速します。その後ろの車も車間を保つために減速し、小さな速度低下が車列の後方へ次々に伝わります。
+        </p>
+        <p>
+          交通量が多いと、この減速の波は簡単には消えません。事故や工事がなくても、車間の詰まりが連鎖して自然渋滞になることがあります。このシミュレーションでは、その過程と、道を譲る行動によって流れがどう変わるかを観察できます。
+        </p>
+
+        <h2>このシミュレーションの実験設計</h2>
+        <p>
+          L区間は「義務あり」、R区間は「義務なし」です。両区間で違うのは、後方から速い車に追いつかれたときに道を譲るというルールだけです。加速度、車間、合流、交通量をはじめとする物理パラメータは、すべて両区間で共通にしています。
+        </p>
+        <p>
+          これは、調べたい条件だけを変える対照実験です。両区間の渋滞に差が出た場合、その差をルールの効果として比較しやすくなります。「パラメータ調整室」で変更した値も両区間へ同じように適用されるため、条件を変えながら公平に比べられます。
+        </p>
+
+        <h2>渋滞スコアの読み方</h2>
+        <p>
+          渋滞スコアは0〜100で表示され、値が大きいほど混雑していることを表します。各区間の車両台数と平均速度もあわせて見ると、車が増えたために混んでいるのか、同じ程度の台数でも流れが遅くなっているのかを読み取りやすくなります。
+        </p>
+        <p>
+          「優勢だった時間」は、シミュレーション開始からどちらの区間がよりスムーズだったかを累積して示します。一時点のスコアだけでなく、時間を通じた傾向を確認するための指標です。
+        </p>
+
+        <h2>操作方法</h2>
+        <ul>
+          <li>パソコンではドラッグで視点を回転し、ホイールでズームします。</li>
+          <li>スマートフォンではスワイプで視点を回転し、ピンチでズームします。</li>
+          <li>カメラボタンで視点モードを切り替えられます。</li>
+          <li>ナイトモードボタンで昼と夜の表示を切り替えられます。</li>
+          <li>車両ペア生成間隔を変えると、両区間へ流入する交通量を調整できます。</li>
+          <li>リセットボタンで車両と集計結果を初期状態に戻せます。</li>
+          <li>パラメータ調整室では、車間や速度など両区間共通の条件を変更できます。</li>
+        </ul>
+
+        <h2>使用技術とソースコード</h2>
+        <p>
+          このサイトはThree.js、TypeScript、Vite+で作られています。ソースコードは
+          <a href="https://github.com/bmthd/traffic-jam-simulation">GitHub</a>
+          で公開しており、MITライセンスのもとで利用できます。
+        </p>
+
+        <h2>シミュレーションについての免責</h2>
+        <p>
+          このシミュレーションは、現実の交通を理解しやすくするために単純化したモデルです。実際の道路には天候、道路形状、車種、運転者の判断など多くの要因があるため、表示される結果は現実の交通量や運転行動を正確に予測するものではありません。
+        </p>
+
+        <footer>
+          <a class="simulation-link" href="./index.html">シミュレーションを開く</a>
+        </footer>
+      </article>
+    </main>
+  </body>
+</html>
