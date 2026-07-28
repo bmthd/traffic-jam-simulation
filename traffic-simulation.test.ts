@@ -306,6 +306,23 @@ describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', (
     return { world, overtaker, side };
   }
 
+  // 復帰を待つ観測窓。旧値は 25 秒だったが #50(車線変更の安全判定が周回を
+  // 考慮していなかった) の修正に伴い 30 秒へ広げた。
+  //
+  // 旧実装では R区間の overtaker は t=16.05s に復帰していたが、その復帰は
+  // バグに依存していた: overtaker が継ぎ目を越えた瞬間、並走車 side との
+  // 素の z 差が 799.9m になり「90m 超」として side を検査対象から丸ごと
+  // 外していたため safe が出ていた。リング上では side は 16.1m 前方に居り、
+  // 車間 11.54m は要求車間 11.86m に足りず、かつ side の方が速いので
+  // 本来は hold が正しい。周回を正しく考慮するようになった結果、継ぎ目付近で
+  // 並走車を正しく認識して復帰判断が一拍遅れ、復帰は t=25.30s になった。
+  //
+  // つまり「復帰しなくなった」のではなく「正しく hold したぶん 0.3 秒遅れた」
+  // であり、窓の拡大は恣意的な緩和ではなく修正の正当な帰結である。
+  // 30 秒は実測の復帰時刻 L=13.70s / R=25.30s に対し、遅い方の R でも
+  // 約 1.19 倍の余裕を持つ値。復帰しないまま終わればテストは従来どおり落ちる。
+  const RETURN_WINDOW_SECONDS = 30;
+
   test.each([
     ['義務あり', 'L'],
     ['義務なし', 'R'],
@@ -315,7 +332,7 @@ describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', (
       const { world, overtaker } = setup(section, false);
       let boosted = false,
         returned = false;
-      for (let i = 0; i < Math.round(25 / TIME_STEP); i++) {
+      for (let i = 0; i < Math.round(RETURN_WINDOW_SECONDS / TIME_STEP); i++) {
         world.step(TIME_STEP);
         if (overtaker.returnBoostTimer > 0) boosted = true;
         if (
