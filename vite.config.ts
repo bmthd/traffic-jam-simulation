@@ -1,3 +1,5 @@
+// @ts-expect-error Vite設定はNode.js上で実行されるが、ブラウザ用の型設定にはNode型を含めない
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite-plus';
 
 export default defineConfig({
@@ -7,6 +9,13 @@ export default defineConfig({
   build: {
     // バンドルの大半は three.js 本体(CDN配信時の three.min.js と同等)
     chunkSizeWarningLimit: 600,
+    // シミュレーション本体と静的な解説記事を、それぞれ独立したHTMLとして出力する
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('index.html', import.meta.url)),
+        about: fileURLToPath(new URL('about.html', import.meta.url)),
+      },
+    },
   },
   lint: {
     ignorePatterns: ['dist/**'],
