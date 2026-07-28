@@ -3411,3 +3411,134 @@ describe('車線変更安全確認の周回考慮 (Issue #50)', () => {
     expect(right.mover.checkLaneSafetyForChange(1)).toBe(left.mover.checkLaneSafetyForChange(1));
   });
 });
+
+/* ============================================================
+   前方車探索の並べ替え耐性 (Issue #52)
+   sectionVehicles は step 冒頭の rebuildSectionIndex() で一度だけ z 昇順に
+   並べ替えられるが、その後の update ループで各車が移動する。とりわけ周回した
+   車は z が +WRAP_LENGTH されるため、step の途中で配列の z 昇順は必ず崩れる。
+   添字順に走査して最初の一台を返す実装では、より近い車を飛ばして遠い車を
+   返したり、前方車そのものを見失ったりしていた。
+   リング上の一方向距離が最小の一台を選び直す、区間非依存の修正である。
+   ============================================================ */
+describe('前方車探索の並べ替え耐性 (Issue #52)', () => {
+  // 参照実装。配列の並び順に一切依存せず、リング上で最も近い同一車線の
+  // 前方車(ahead=true) / 後方車(ahead=false) をブルートフォースで求める。
+  function referenceNeighbor(self: Vehicle, lane: number, ahead: boolean) {
+    let best: Vehicle | null = null;
+    let bestDistance = Infinity;
+    for (const other of self.world.sectionVehicles[self.section]) {
+      if (other === self || !other.occupies(lane)) continue;
+      const raw = ahead ? self.z - other.z : other.z - self.z;
+      const distance = ((raw % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH || WRAP_LENGTH;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = other;
+      }
+    }
+    return best === null
+      ? null
+      : { vehicle: best, gap: bestDistance - (self.length + best.length) / 2 };
+  }
+
+  // Issue 記載の再現ケース。step 冒頭では W が V の 4.90m 前方だが、同一 step 内で
+  // W.update() が走って周回すると z が +WRAP_LENGTH され、配列の z 昇順が崩れる。
+  function setupWrappedLeader(section: 'L' | 'R') {
+    const world = new World({ rng: createRng(52), spawnInterval: 1e9 });
+    const leader = new Vehicle(world, section, 1, -407.5, 'Sedan', 25);
+    leader.speed = 25;
+    const follower = new Vehicle(world, section, 1, -398, 'Sedan', 25);
+    follower.speed = 25;
+    world.vehicles.push(leader, follower);
+    world.rebuildSectionIndex();
+    // 並べ替え直後は素直な前後関係になっている
+    expect(follower.findAhead(1)?.vehicle, '並べ替え直後に前方車を取り違えた').toBe(leader);
+    expect(follower.findAhead(1)!.gap).toBeCloseTo(4.9, 5);
+    // step の途中で W だけが周回した状態を作る(並べ替えはやり直さない)
+    leader.z = 407.26;
+    return { world, leader, follower };
+  }
+
+  test('step 途中で周回した前方車を見失わない', () => {
+    const { leader, follower } = setupWrappedLeader('L');
+    const ahead = follower.findAhead(1);
+    expect(ahead, '周回した前方車を見失って null を返した').not.toBeNull();
+    expect(ahead!.vehicle).toBe(leader);
+    // リング上の真の車間: -398 - 407.26 を周回長で畳むと 10.74m、車体分を引いて 6.14m
+    expect(ahead!.gap, 'リング上の車間が正しく計算されていない').toBeCloseTo(6.14, 2);
+  });
+
+  test('周回した車から見た後方車も正しく返す', () => {
+    const { leader, follower } = setupWrappedLeader('L');
+    const behind = leader.findBehind(1);
+    expect(behind, '周回後に後続車を見失った').not.toBeNull();
+    expect(behind!.vehicle).toBe(follower);
+    expect(behind!.gap).toBeCloseTo(6.14, 2);
+  });
+
+  test('L/R で同一の結果になる (区間依存の分岐が入っていない)', () => {
+    const left = setupWrappedLeader('L');
+    const right = setupWrappedLeader('R');
+    expect(right.follower.findAhead(1)!.gap).toBeCloseTo(left.follower.findAhead(1)!.gap, 9);
+    expect(right.leader.findBehind(1)!.gap).toBeCloseTo(left.leader.findBehind(1)!.gap, 9);
+  });
+
+  test('前方車は必ず最近接になる (遠い車を先に返さない)', () => {
+    const world = new World({ rng: createRng(522), spawnInterval: 1e9 });
+    const self = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const near = new Vehicle(world, 'L', 1, -20, 'Sedan', 25);
+    const far = new Vehicle(world, 'L', 1, -300, 'Sedan', 25);
+    for (const vehicle of [self, near, far]) vehicle.speed = 25;
+    world.vehicles.push(self, near, far);
+    world.rebuildSectionIndex();
+    const before = self.findAhead(1)!;
+    expect(before.vehicle, '近い方を飛ばして遠い前方車を返した').toBe(near);
+    expect(before.gap).toBeCloseTo(15.4, 5);
+    // 周回長ちょうどを足してもリング上の位置は一切変わらない。変わるのは配列の
+    // z 昇順だけである。添字順に走査する実装はここで near を飛ばして far を返し、
+    // 車間を 15.4m から 295.4m へ 280m も過大に報告していた。
+    near.z += WRAP_LENGTH;
+    const after = self.findAhead(1)!;
+    expect(after.vehicle, '並び順が崩れた途端に近い前方車を飛ばして far を返した').toBe(near);
+    expect(after.gap, 'リング上の位置は変わっていないのに車間が変化した').toBeCloseTo(15.4, 5);
+    // 一方 far は、リング上では自分の 516m 後方にいる最近接の後続車である
+    expect(self.findBehind(1)!.vehicle).toBe(far);
+  });
+
+  test('配列の z 昇順が崩れてもブルートフォースと完全に一致する', () => {
+    const random = createRng(520);
+    const world = new World({ rng: createRng(521), spawnInterval: 1e9 });
+    for (let i = 0; i < 40; i++) {
+      const vehicle = new Vehicle(
+        world,
+        i % 2 === 0 ? 'L' : 'R',
+        Math.floor(random() * 3),
+        random() * WRAP_LENGTH - CONST.ROAD_HALF,
+        'Sedan',
+        25,
+      );
+      vehicle.speed = 25;
+      world.vehicles.push(vehicle);
+    }
+    world.rebuildSectionIndex();
+    // 並べ替えた後に位置を動かして z 昇順を崩す(周回した車も混ざる)
+    for (const vehicle of world.vehicles) vehicle.z += random() * WRAP_LENGTH;
+    for (const vehicle of world.vehicles) {
+      for (const lane of [0, 1, 2]) {
+        const expectedAhead = referenceNeighbor(vehicle, lane, true);
+        const actualAhead = vehicle.findAhead(lane);
+        expect(actualAhead?.vehicle ?? null, `lane=${lane} の前方車が最近接でない`).toBe(
+          expectedAhead?.vehicle ?? null,
+        );
+        if (expectedAhead) expect(actualAhead!.gap).toBeCloseTo(expectedAhead.gap, 9);
+
+        const expectedBehind = referenceNeighbor(vehicle, lane, false);
+        const actualBehind = vehicle.findBehind(lane);
+        expect(actualBehind?.vehicle ?? null, `lane=${lane} の後方車が最近接でない`).toBe(
+          expectedBehind?.vehicle ?? null,
+        );
+        if (expectedBehind) expect(actualBehind!.gap).toBeCloseTo(expectedBehind.gap, 9);
+      }
+    }
+  });
+});
