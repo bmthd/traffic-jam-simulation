@@ -780,6 +780,14 @@ export class World {
     this.rebuildSectionIndex();
   }
 
+  /**
+   * 区間ごとの走行中車両リストを作り直す。step 冒頭に一度だけ呼ぶ。
+   *
+   * z 昇順に並べるが、この並び順は「step 冒頭の縦列を見たい」用途
+   * (貫通チェックなど) のためのものである。update ループの途中では各車が
+   * 移動して順序が崩れるため、前後車の探索がこの並び順に依存してはならない
+   * (Issue #52)。探索は Vehicle#findNeighbor がリング上の距離で行う。
+   */
   rebuildSectionIndex(): void {
     const vehiclesL: Vehicle[] = [],
       vehiclesR: Vehicle[] = [];
@@ -787,8 +795,6 @@ export class World {
       if (!vehicle.waiting) (vehicle.section === 'L' ? vehiclesL : vehiclesR).push(vehicle);
     vehiclesL.sort((a, b) => a.z - b.z);
     vehiclesR.sort((a, b) => a.z - b.z);
-    for (let i = 0; i < vehiclesL.length; i++) vehiclesL[i].sectionIndex = i;
-    for (let i = 0; i < vehiclesR.length; i++) vehiclesR[i].sectionIndex = i;
     this.sectionVehicles.L = vehiclesL;
     this.sectionVehicles.R = vehiclesR;
   }

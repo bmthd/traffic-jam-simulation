@@ -201,7 +201,6 @@ export class Vehicle {
   exited: boolean;
   waitTimer: number;
   perturbTimer: number;
-  sectionIndex: number;
   color: number;
   isTaxi: boolean;
   absorber: boolean;
@@ -288,7 +287,6 @@ export class Vehicle {
     this.exited = false; // 出口まで走り切って流出した(Worldが回収する)
     this.waitTimer = 0;
     this.perturbTimer = 0; // よそ見ブレーキの残り時間(absorbモードでWorldが設定)
-    this.sectionIndex = 0;
     this.color = this.type.colors[Math.floor(random() * this.type.colors.length)];
     this.isTaxi = typeName === 'Sedan' && random() < 0.08;
     if (this.isTaxi) this.color = 0xf5f0dc;
@@ -1080,45 +1078,41 @@ export class Vehicle {
     return true;
   }
 
-  // 前方車探索（z昇順インデックスを利用。ahead = z が小さい側。周回路として探索）
-  findAhead(lane: number): NeighborInfo | null {
+  /**
+   * 周回路上で最も近い同一車線の隣接車を返す。ahead = true で前方(z が小さい側)。
+   *
+   * sectionVehicles は step 冒頭の rebuildSectionIndex() で z 昇順に並べ替えられるが、
+   * その後の update ループで各車が移動するため、step の途中では並び順が崩れている
+   * (特に周回した車は z が +WRAP_LENGTH され、配列の末尾にあるべき位置へ飛ぶ)。
+   * そのため添字順の走査で「最初に見つかった一台」を返すことはできず、
+   * リング上の一方向距離が最小の一台を選び直す (Issue #52)。
+   */
+  private findNeighbor(lane: number, ahead: boolean): NeighborInfo | null {
     const vehicles = this.world.sectionVehicles[this.section];
-    for (let i = this.sectionIndex - 1; i >= 0; i--) {
-      const other = vehicles[i];
+    let best: Vehicle | null = null;
+    let bestDistance = Infinity;
+    for (const other of vehicles) {
       if (other === this || !other.occupies(lane)) continue;
-      if (other.z >= this.z) continue;
-      return { vehicle: other, gap: this.z - other.z - (this.length + other.length) / 2 };
+      const raw = ahead ? this.z - other.z : other.z - this.z;
+      // リング上の一方向距離 (0, WRAP_LENGTH]。
+      // 距離 0(完全に同じ z)は従来と同じく「一周先」として扱う。
+      const distance = ((raw % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH || WRAP_LENGTH;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = other;
+      }
     }
-    // 周回: 自分より手前に誰もいなければ、最も奥(z最大)の同一車線車が前方
-    for (let i = vehicles.length - 1; i > this.sectionIndex; i--) {
-      const other = vehicles[i];
-      if (other === this || !other.occupies(lane)) continue;
-      return {
-        vehicle: other,
-        gap: this.z - other.z + WRAP_LENGTH - (this.length + other.length) / 2,
-      };
-    }
-    return null;
+    if (best === null) return null;
+    return { vehicle: best, gap: bestDistance - (this.length + best.length) / 2 };
+  }
+
+  // 前方車探索（ahead = 進行方向側 = z が小さい側。周回路として探索）
+  findAhead(lane: number): NeighborInfo | null {
+    return this.findNeighbor(lane, true);
   }
 
   findBehind(lane: number): NeighborInfo | null {
-    const vehicles = this.world.sectionVehicles[this.section];
-    for (let i = this.sectionIndex + 1; i < vehicles.length; i++) {
-      const other = vehicles[i];
-      if (other === this || !other.occupies(lane)) continue;
-      if (other.z < this.z) continue;
-      return { vehicle: other, gap: other.z - this.z - (this.length + other.length) / 2 };
-    }
-    // 周回: 自分より奥に誰もいなければ、最も手前(z最小)の車が後続
-    for (let i = 0; i < this.sectionIndex; i++) {
-      const other = vehicles[i];
-      if (other === this || !other.occupies(lane)) continue;
-      return {
-        vehicle: other,
-        gap: other.z - this.z + WRAP_LENGTH - (this.length + other.length) / 2,
-      };
-    }
-    return null;
+    return this.findNeighbor(lane, false);
   }
 
   // 車線変更先の安全確認: 'safe' | 'hold' | 'danger'
@@ -1129,11 +1123,13 @@ export class Vehicle {
     const vehicles = this.world.sectionVehicles[this.section];
     for (const other of vehicles) {
       if (other === this || !other.occupies(toLane)) continue;
-      const deltaZ = Math.abs(other.z - this.z);
-      if (deltaZ > 90) continue;
-      if (other.z <= this.z) {
+      // 周回路なので符号付き最短距離で前後を判定する(継ぎ目をまたぐ相手も拾う)。
+      // deltaZ <= 0 なら相手は前方(z が小さい側)、> 0 なら後方。
+      const deltaZ = wrapDelta(other.z - this.z);
+      if (Math.abs(deltaZ) > 90) continue;
+      if (deltaZ <= 0) {
         // 変更先の前方車
-        const gap = this.z - other.z - (this.length + other.length) / 2;
+        const gap = -deltaZ - (this.length + other.length) / 2;
         if (gap < 1.5) return 'danger';
         const requiredGap = (4 + this.speed * 0.45) * relax;
         if (gap < requiredGap) {
@@ -1143,7 +1139,7 @@ export class Vehicle {
         }
       } else {
         // 変更先の後方車
-        const gap = other.z - this.z - (this.length + other.length) / 2;
+        const gap = deltaZ - (this.length + other.length) / 2;
         if (gap < 1.5) return 'danger';
         const relativeSpeed = other.speed - this.speed;
         const requiredGap = (4 + Math.max(0, relativeSpeed) * 2.2 + other.speed * 0.22) * relax;
