@@ -47,7 +47,84 @@ interface ScenarioResult {
   countR: number;
   minGap: number;
   minGapDetail: string;
+  /** 検査した「同一車線の前後ペア」の延べ数(検出力そのものの回帰ガード用) */
+  checkedPairs: number;
+  /** 車間が負 = 実際に車体が重なっていたペアの延べ数 */
+  overlaps: number;
   world: World;
+}
+
+/* ---------- ヘルパー: 貫通(同一車線内の重なり)検査 (Issue #53) ---------- */
+interface PenetrationPair {
+  section: 'L' | 'R';
+  lane: number;
+  ahead: Vehicle;
+  behind: Vehicle;
+  /** 後続から前方車までの周回路上の前方距離 (m) */
+  distance: number;
+  /** 車体間の車間 (m)。負なら重なっている */
+  gap: number;
+}
+interface PenetrationResult {
+  pairs: number;
+  overlaps: number;
+  minGap: number;
+  /** 最小車間を記録したペア。ペアが1つも無ければ null */
+  worst: PenetrationPair | null;
+}
+
+/**
+ * ある瞬間のワールドについて、同一車線の「真の前後ペア」を漏れなく検査する (Issue #53)。
+ *
+ * 旧実装は「区間全体を z 昇順に並べた配列の隣接 index」だけを見ていた。そのため
+ *   (1) 同一車線の前後ペアの間に他車線の車が1台でも挟まるとそのペアは永久に漏れる
+ *   (2) 周回の継ぎ目ペア(配列の端と端)を比較しない
+ *   (3) 距離が Math.abs(z 差) で周回非対応
+ * という3つの穴があり、実測では真の前後ペアの約1割しか比較できていなかった。
+ *
+ * ここでは車線ごとにグルーピングしてから z 昇順に並べ、リング上の隣接ペアを
+ * 全件見る。計算量は車線ごとのソートで O(N log N) に収まる。
+ */
+function checkPenetration(world: World): PenetrationResult {
+  let pairs = 0,
+    overlaps = 0,
+    minGap = Infinity;
+  let worst: PenetrationPair | null = null;
+  for (const section of ['L', 'R'] as const) {
+    const byLane = new Map<number, Vehicle[]>();
+    for (const vehicle of world.sectionVehicles[section]) {
+      // 車線変更中の車は occupies() が示すとおり2車線にまたがっており、
+      // 「どちらの車線に居るか」が定まらない。重なりの定義が曖昧になるため除外する
+      // (この除外は旧実装と同じ。除外を外すと車線変更のたびに偽陽性が出る)
+      if (vehicle.laneChange.state !== 'none') continue;
+      const group = byLane.get(vehicle.lane);
+      if (group) group.push(vehicle);
+      else byLane.set(vehicle.lane, [vehicle]);
+    }
+    for (const [lane, group] of byLane) {
+      if (group.length < 2) continue;
+      group.sort((a, b) => a.z - b.z); // 前方 = z が小さい側
+      for (let k = 0; k < group.length; k++) {
+        // k=0 は周回の継ぎ目ペア: z 最小(最前方)の車の前方は、一周回った先の
+        // z 最大の車。貫通が起きやすい継ぎ目こそ盲点にしてはならない
+        const behind = group[k],
+          ahead = group[(k + group.length - 1) % group.length];
+        // 前方距離は [0, WRAP_LENGTH) で測る。Vehicle.findAhead が周回時に
+        // `this.z - other.z + WRAP_LENGTH` としているのと同じ尺度。
+        // 符号付き最短の wrapDelta を使うと、周回しない加速車線(lane 3)の
+        // 継ぎ目ペアのように半周を超える距離が負へ折り返り誤検出になる
+        const distance = (((behind.z - ahead.z) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+        const gap = distance - (ahead.length + behind.length) / 2;
+        pairs++;
+        if (gap < 0) overlaps++;
+        if (gap < minGap) {
+          minGap = gap;
+          worst = { section, lane, ahead, behind, distance, gap };
+        }
+      }
+    }
+  }
+  return { pairs, overlaps, minGap, worst };
 }
 
 function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
@@ -60,40 +137,37 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
     sumCountL = 0,
     sumCountR = 0,
     samples = 0,
-    minGap = Infinity;
+    minGap = Infinity,
+    checkedPairs = 0,
+    overlaps = 0;
   let minGapDetail = '';
   const steps = Math.round(seconds / TIME_STEP);
   for (let i = 0; i < steps; i++) {
     world.step(TIME_STEP);
     const elapsed = i * TIME_STEP;
     if (i % 10 === 0) {
-      // 貫通チェック（同一車線・車線変更中でない車両同士）
-      for (const section of ['L', 'R'] as const) {
-        const vehicles = world.sectionVehicles[section];
-        for (let k = 1; k < vehicles.length; k++) {
-          const ahead = vehicles[k - 1],
-            behind = vehicles[k];
-          if (ahead.laneChange.state !== 'none' || behind.laneChange.state !== 'none') continue;
-          if (ahead.lane !== behind.lane) continue;
-          const gap = Math.abs(behind.z - ahead.z) - (ahead.length + behind.length) / 2;
-          if (gap < minGap) {
-            minGap = gap;
-            const activeClosures = world.vehicles
-              .filter((vehicle) => vehicle.mergePlan.certificate)
-              .map((vehicle) => ({
-                ramp: vehicle.spawnOrder,
-                lane: vehicle.lane,
-                state: vehicle.mergePlan.state,
-                targetPassTime: vehicle.mergePlan.certificate!.targetPassTime,
-                orders: vehicle.mergePlan.certificate!.closure.orders,
-                edges: vehicle.mergePlan.certificate!.closure.edges,
-              }));
-            minGapDetail =
-              `seed=${seed},time=${world.time},section=${section},` +
-              `ahead=${ahead.spawnOrder}@${ahead.z},behind=${behind.spawnOrder}@${behind.z},` +
-              `speed=${ahead.speed}/${behind.speed},closures=${JSON.stringify(activeClosures)}`;
-          }
-        }
+      // 貫通チェック(同一車線・車線変更中でない車両同士を、リング全周にわたり漏れなく)
+      const penetration = checkPenetration(world);
+      checkedPairs += penetration.pairs;
+      overlaps += penetration.overlaps;
+      if (penetration.worst && penetration.minGap < minGap) {
+        minGap = penetration.minGap;
+        const { section, lane, ahead, behind, distance } = penetration.worst;
+        const activeClosures = world.vehicles
+          .filter((vehicle) => vehicle.mergePlan.certificate)
+          .map((vehicle) => ({
+            ramp: vehicle.spawnOrder,
+            lane: vehicle.lane,
+            state: vehicle.mergePlan.state,
+            targetPassTime: vehicle.mergePlan.certificate!.targetPassTime,
+            orders: vehicle.mergePlan.certificate!.closure.orders,
+            edges: vehicle.mergePlan.certificate!.closure.edges,
+          }));
+        minGapDetail =
+          `seed=${seed},time=${world.time},section=${section},lane=${lane},` +
+          `ahead=${ahead.spawnOrder}@${ahead.z},behind=${behind.spawnOrder}@${behind.z},` +
+          `distance=${distance},speed=${ahead.speed}/${behind.speed},` +
+          `closures=${JSON.stringify(activeClosures)}`;
       }
       if (elapsed >= measureFrom) {
         const statsL = world.computeSection('L'),
@@ -113,6 +187,8 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
     countR: sumCountR / samples,
     minGap,
     minGapDetail,
+    checkedPairs,
+    overlaps,
     world,
   };
 }
@@ -338,14 +414,23 @@ describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', (
    4. 安全性: 車両の貫通防止
    ============================================================ */
 describe('衝突回避・貫通防止', () => {
-  test('長時間運転しても同一車線内で車両が重ならない (許容 -1.0m)', () => {
-    let worstGap = Infinity;
-    for (const result of getResults()) worstGap = Math.min(worstGap, result.minGap);
+  test('長時間運転しても同一車線内で車両が重ならない', () => {
+    let worstGap = Infinity,
+      overlaps = 0;
+    for (const result of getResults()) {
+      worstGap = Math.min(worstGap, result.minGap);
+      overlaps += result.overlaps;
+    }
     const result = getResults().find((entry) => entry.minGap === worstGap)!;
+    // 車間 0m = 前後の車体が触れる境界。これを下回ったら車体が重なっている
+    // = 貫通であり、シミュレーションとして成立しない。
+    // 旧しきい値の -1.0m は「1m めり込んでも合格」で、貫通防止という
+    // テストの目的に対して意味を成していなかった (Issue #53)。
     expect(
-      worstGap,
-      `車間が ${worstGap.toFixed(2)}m まで縮まり貫通が発生: ${result.minGapDetail}`,
-    ).toBeGreaterThan(-1.0);
+      overlaps,
+      `同一車線で車体が重なったペアが ${overlaps} 件` +
+        ` (最小車間 ${worstGap.toFixed(2)}m): ${result.minGapDetail}`,
+    ).toBe(0);
   });
 });
 
@@ -3317,5 +3402,90 @@ describe('車両数上限の区間独立性 (Issue #72)', () => {
       CONST.MAX_VEHICLES,
       `総上限 ${CONST.MAX_VEHICLES}台 !== 片側上限 ${CONST.MAX_VEHICLES_PER_SECTION}台の2倍`,
     ).toBe(CONST.MAX_VEHICLES_PER_SECTION * 2);
+  });
+});
+
+/* ============================================================
+   29. 貫通検査のカバレッジ (Issue #53)
+   貫通(同一車線内の重なり)検査そのものの検出力を検証する。
+   旧実装は「区間全体の z 昇順配列の隣接 index」だけを見ていたため、
+   同一車線の真の前後ペアのうち約1割しか比較できていなかった。
+   ここでは checkPenetration が
+     (a) 他車線の車が間に挟まっても同一車線ペアを見る
+     (b) 周回の継ぎ目ペアを見る
+     (c) 距離をラップ対応で測る
+   を満たすことを、意図的に作った配置で確認する。
+   ============================================================ */
+describe('貫通検査のカバレッジ (Issue #53)', () => {
+  function makeWorld(): World {
+    return new World({ rng: createRng(53), spawnInterval: 1e9 });
+  }
+
+  test('同一車線ペアの間に他車線の車が挟まっても検査される', () => {
+    const world = makeWorld();
+    // z 昇順に並べると lane1 → lane0 → lane1 となり、隣接 index だけを見る
+    // 旧方式では lane1 同士の重なりが永久に検査対象から漏れる配置
+    const ahead = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const between = new Vehicle(world, 'L', 0, 1.5, 'Sedan', 25);
+    const behind = new Vehicle(world, 'L', 1, 3, 'Sedan', 25);
+    world.vehicles.push(ahead, between, behind);
+    world.rebuildSectionIndex();
+
+    const result = checkPenetration(world);
+    expect(result.overlaps, '他車線に挟まれた同一車線ペアの重なりを見逃した').toBe(1);
+    // 車間 = 3m(車頭間) - 4.6m(Sedan 2台の半長の和)
+    expect(result.minGap).toBeCloseTo(3 - 4.6, 6);
+  });
+
+  test('周回の継ぎ目ペア(z 最小 → z 最大)も検査される', () => {
+    const world = makeWorld();
+    // リング上では 2m しか離れていないが、z の差は 814m ある配置。
+    // 継ぎ目ペアを比較しない、あるいは Math.abs(z 差) で測ると見逃す
+    const behind = new Vehicle(world, 'L', 1, -407, 'Sedan', 25);
+    const ahead = new Vehicle(world, 'L', 1, 407, 'Sedan', 25);
+    world.vehicles.push(behind, ahead);
+    world.rebuildSectionIndex();
+
+    const result = checkPenetration(world);
+    expect(result.pairs, '継ぎ目ペアが検査されていない').toBe(2);
+    expect(result.overlaps, '継ぎ目をまたぐ重なりを見逃した').toBe(1);
+    expect(result.minGap).toBeCloseTo(WRAP_LENGTH - 814 - 4.6, 6);
+  });
+
+  test('周回しない加速車線(lane 3)の継ぎ目ペアを重なりと誤検出しない', () => {
+    const world = makeWorld();
+    // 加速車線は本線と違い周回しない。ラップ距離を符号付き最短(wrapDelta)で
+    // 測ると半周を超える継ぎ目ペアが負に折り返り、存在しない貫通を報告する
+    const ahead = new Vehicle(world, 'L', 3, CONST.RAMP_Z_END, 'Sedan', 25);
+    const behind = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 25);
+    world.vehicles.push(ahead, behind);
+    world.rebuildSectionIndex();
+
+    const result = checkPenetration(world);
+    expect(result.overlaps, '周回しない車線で存在しない重なりを誤検出した').toBe(0);
+    expect(result.minGap).toBeCloseTo(CONST.RAMP_Z_TOP - CONST.RAMP_Z_END - 4.6, 6);
+  });
+
+  test('車線変更中の車は対象外(どちらの車線に居るか定まらないため)', () => {
+    const world = makeWorld();
+    const ahead = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const behind = new Vehicle(world, 'L', 1, 3, 'Sedan', 25);
+    behind.laneChange.state = 'changing';
+    behind.laneChange.from = 2;
+    behind.laneChange.to = 1;
+    world.vehicles.push(ahead, behind);
+    world.rebuildSectionIndex();
+
+    expect(checkPenetration(world).pairs).toBe(0);
+  });
+
+  test('シナリオ実行中にリング全周の同一車線ペアを十分な数だけ検査している', () => {
+    // 検出力そのものの回帰ガード。実測(10シード×300秒、10ステップおき)では
+    // 約 77.5 万ペアを検査しており、旧方式の約 7.8 万ペア(真のペアの約 10%)から
+    // 一桁増えた。将来この数が旧方式の水準まで落ちたら検査の穴が再発している
+    const pairs = getResults().reduce((sum, result) => sum + result.checkedPairs, 0);
+    expect(pairs, `検査した同一車線ペアが ${pairs} 件しかない(検出力の後退)`).toBeGreaterThan(
+      500_000,
+    );
   });
 });
