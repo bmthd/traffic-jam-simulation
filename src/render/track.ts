@@ -51,18 +51,23 @@ const MERGE_OPEN_END_Z = RAMP_GEOMETRY.entryZ + 14; // 上流端(加速車線の
 const SEPARATOR_TAPER_LENGTH = 12;
 const SEPARATOR_FULL_END_Z = MERGE_OPEN_START_Z - SEPARATOR_TAPER_LENGTH;
 const SEPARATOR_FULL_START_Z = MERGE_OPEN_END_Z + SEPARATOR_TAPER_LENGTH;
-// 分離帯の中心X・幅。本線の左端(-13)と側道の走行部の間に置き、区間テーマカラーで塗る
-const SEPARATOR_X = -14.1;
+// 側道(=加速車線)の舗装帯。外側の端(-16.8)はR区間では区間の仕切りの基礎に接するため
+// これ以上外へは広げられない。代わりに内側を本線の外側線(-13)まで伸ばし、あわせて
+// 分離帯を本線寄りに移して側道の走行部を広げた (Issue #87)
+const FRONTAGE_WIDTH = 3.8;
+const FRONTAGE_CENTER_X = -14.9;
+// 分離帯の中心X・幅。本線の外側線(-13)のすぐ外に置き、区間テーマカラーで塗る
+const SEPARATOR_X = -13.4;
 const SEPARATOR_WIDTH = 0.7;
 const SEPARATOR_POLE_SPACING = 9;
 // 路肩の見上げ視点を遮らないよう、ポールは帯の外側寄りに立てる。
-const SEPARATOR_POLE_X = -14.4;
+const SEPARATOR_POLE_X = -13.7;
 // 分離帯の上面に高さ0.8mのポールの底面を揃える。
 const SEPARATOR_POLE_CENTER_Y = 0.411;
 
 /* ---- 道路(アスファルト質感 + 区間ごとの色味) ---- */
 const roadGeometry = new THREE.BoxGeometry(13.2, 0.12, WRAP_LENGTH);
-const frontageRoadGeometry = new THREE.BoxGeometry(3.6, 0.12, WRAP_LENGTH);
+const frontageRoadGeometry = new THREE.BoxGeometry(FRONTAGE_WIDTH, 0.12, WRAP_LENGTH);
 for (const section of SECTIONS) {
   const roadMaterial = new THREE.MeshLambertMaterial({
     color: SECTION_THEME[section].road,
@@ -85,7 +90,11 @@ for (const section of SECTIONS) {
   const frontageRoad = instancedAt(
     frontageRoadGeometry,
     frontageRoadMaterial,
-    loopCopies(0).map((z): [number, number, number] => [sectionX(section, -15), -0.055, z]),
+    loopCopies(0).map((z): [number, number, number] => [
+      sectionX(section, FRONTAGE_CENTER_X),
+      -0.055,
+      z,
+    ]),
   );
   frontageRoad.receiveShadow = true;
   scene.add(frontageRoad);

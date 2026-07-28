@@ -142,8 +142,8 @@ export function makeAsphaltTexture(drawRuts = true, repeatX = 1): THREE.CanvasTe
   return texture;
 }
 export const asphaltTexture = makeAsphaltTexture();
-// 側道用。幅が本線の3.6/13.2なので、骨材の粒を横に引き伸ばさず本線と同じ縮尺にするためrepeat.xも合わせる。
-export const frontageAsphaltTexture = makeAsphaltTexture(false, 3.6 / 13.2);
+// 側道用。幅が本線の3.8/13.2なので、骨材の粒を横に引き伸ばさず本線と同じ縮尺にするためrepeat.xも合わせる。
+export const frontageAsphaltTexture = makeAsphaltTexture(false, 3.8 / 13.2);
 
 /* ---- 遠景の山並み(白で描き、themeがcolorで昼夜の色を乗せる) ---- */
 // relief: 稜線の起伏の大きさ / baseY: 稜線の基準高さ(キャンバス座標・小さいほど高い)
