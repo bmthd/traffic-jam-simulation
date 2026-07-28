@@ -1,0 +1,5 @@
+# 単一ページのサイトなので、全クローラに全体を開放する
+User-agent: *
+Allow: /
+
+Sitemap: https://traffic-jam.bmth.dev/sitemap.xml

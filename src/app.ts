@@ -13,6 +13,7 @@ import { updateCamera, setupCameraControls } from './render/camera';
 import { icon, renderIcons } from './ui/icons';
 import { showMessage } from './ui/notify';
 import { elements, updateHUD } from './ui/hud';
+import { setupAbout } from './ui/about';
 import { setupPanels } from './ui/panels';
 import { setupParams } from './ui/params';
 import { setupNightToggle } from './ui/night-toggle';
@@ -46,6 +47,7 @@ export function start(): void {
   document.getElementById('resetBtn')!.addEventListener('click', resetWorld);
 
   setupPanels();
+  setupAbout();
   setupParams(resetWorld);
   setupNightToggle();
   setupCameraControls();

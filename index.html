@@ -6,12 +6,19 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
-    <title>6車線比較 渋滞シミュレーション</title>
+    <title>「追いつかれた車両の義務」で渋滞は本当に減るのか？｜渋滞シミュレーション</title>
     <meta
       name="description"
       content="「追いつかれた車両の義務」がある道路とない道路を並べて走らせ、ルール1つの有無が渋滞のできかたに与える差を観察できる3D渋滞シミュレーション。"
     />
     <link rel="icon" type="image/svg+xml" href="/traffic-jam.svg" />
+    <!-- 正規 URL。クエリ付きや www 有無で参照されても評価を 1 本に集約する -->
+    <link rel="canonical" href="https://traffic-jam.bmth.dev/" />
+    <meta name="author" content="bmthd" />
+    <!-- ブラウザ UI の色。昼夜切替は画面内のボタンで行うが、初期表示に合わせて
+         OS のカラースキームごとに body の背景色と同じ値を渡す -->
+    <meta name="theme-color" content="#cfe2ee" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#070b16" media="(prefers-color-scheme: dark)" />
 
     <!-- OGP / Twitter Card（SNS 共有時のカード表示用）。
          og:url と og:image はクローラが解決できるよう絶対 URL で指定する -->
@@ -43,6 +50,33 @@
       name="twitter:image:alt"
       content="義務ありのL区間と義務なしのR区間が並走する渋滞シミュレーションの画面"
     />
+
+    <!-- 構造化データ。検索エンジンに「無料で遊べる交通シミュレーションの
+         ウェブアプリ」であることと、その主題を機械可読な形で伝える -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "6車線比較 渋滞シミュレーション",
+        "alternateName": "「追いつかれた車両の義務」で渋滞は本当に減るのか？",
+        "url": "https://traffic-jam.bmth.dev/",
+        "description": "「追いつかれた車両の義務」がある道路とない道路を並べて走らせ、ルール1つの有無が渋滞のできかたに与える差を観察できる3D渋滞シミュレーション。",
+        "inLanguage": "ja",
+        "applicationCategory": "EducationalApplication",
+        "operatingSystem": "All",
+        "browserRequirements": "WebGL に対応したウェブブラウザ",
+        "isAccessibleForFree": true,
+        "screenshot": "https://traffic-jam.bmth.dev/ogp.png",
+        "license": "https://opensource.org/licenses/MIT",
+        "about": "追いつかれた車両の義務と交通渋滞の関係",
+        "keywords": "追いつかれた車両の義務, 交通渋滞, 交通シミュレーション, 追い越し車線, Three.js",
+        "author": {
+          "@type": "Person",
+          "name": "bmthd",
+          "url": "https://github.com/bmthd"
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="container"></div>
@@ -59,6 +93,15 @@
       aria-label="カメラ: オートモード(押して切替)"
     >
       <i data-lucide="clapperboard"></i>
+    </button>
+    <!-- サイト説明を開くボタン（右上・丸ボタン。パネルを畳んだ狭い画面でも押せる） -->
+    <button
+      id="aboutBtn"
+      aria-haspopup="dialog"
+      title="このサイトについて"
+      aria-label="このサイトについて"
+    >
+      <i data-lucide="info"></i>
     </button>
     <div id="spectatorLabel"></div>
 
@@ -78,6 +121,10 @@
           ></span>
         </button>
         <div id="controlPanelBody" class="panel-body">
+          <!-- 初見の訪問者に「何を見ている画面なのか」をひとことで伝える -->
+          <p class="intro">
+            同じ条件の道路を2本並べ、<b>「追いつかれた車両の義務」</b>の有無だけで渋滞のできかたがどう変わるかを見る実験です。
+          </p>
           <div class="row">
             総車両数: <span class="num" id="vehicleCount">0</span> /
             <span class="num" id="maxVehicleCount"></span>
@@ -176,8 +223,80 @@
       </div>
     </div>
 
+    <!-- このサイトについて（サイトの説明本文）。
+         検索エンジンのクローラと、初めて訪れた人の双方に「これが何なのか」を伝える。
+         JS で後から差し込むとクローラに読まれないため、静的な HTML として置く -->
+    <div id="aboutOverlay" class="modal-overlay">
+      <div
+        id="aboutModal"
+        class="sign"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="aboutTitle"
+        tabindex="-1"
+      >
+        <div class="panel-title">
+          <span class="route-badge">説</span>このサイトについて
+          <button id="aboutClose" class="modal-close" aria-label="閉じる">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <article class="about-body">
+          <h1 id="aboutTitle">「追いつかれた車両の義務」で渋滞は本当に減るのか？</h1>
+          <p class="about-lead">
+            同じ条件の高速道路を2本並べて走らせ、<b>「追いつかれた車両の義務」というルール1つの有無</b>だけで渋滞のできかたがどう変わるかを観察する、ブラウザで動く3D交通シミュレーションです。インストール不要で、無料で自由に触れます。
+          </p>
+
+          <h2>何と何を比べているのか</h2>
+          <p>
+            画面には2本の道路が並んでいます。<b>緑の標識の区間（義務あり）</b>では、後ろから速い車に追いつかれたドライバーが追い越し車線を空けて走行車線へ戻ります。<b>オレンジの標識の区間（義務なし）</b>では、譲らないドライバーが混ざり、追い越し車線に留まり続ける車も現れます。
+          </p>
+          <p>
+            車の性能、車間の取り方、加速・減速のくせ、合流のしかた、交通量といった条件は<b>両区間で共通</b>です。違いはこのルール1つだけなので、生まれた差はそのルールに由来すると考えられます。「パラメータ調整室」で値を変えても、変更は必ず両区間へ同じように適用されます。
+          </p>
+          <p>
+            どちらの走り方が正しいかを示すためのものではありません。ルールの有無で結果が変わるのか、変わるとしたらどのくらいなのかを、自分の目で確かめるための対照実験です。
+          </p>
+
+          <h2>「追いつかれた車両の義務」とは</h2>
+          <p>
+            「追いつかれた車両の義務」は、日本の道路交通法第27条が定めるルールの通称です。後ろから来た車に追いつかれ、その車より速く走ることができないときに、速度を上げないことと、進路を譲ることを求めるものです。
+          </p>
+          <p>
+            このシミュレーションは条文を厳密に再現したものではなく、「速い車に追いつかれたら追い越し車線を空ける」という運転行動としてモデル化したものです。実際の交通ルールの解説や法的な助言を目的とするものではありません。
+          </p>
+
+          <h2>渋滞スコアの見かた</h2>
+          <p>
+            画面下の「渋滞スコア比較」には、区間ごとの車両数・平均速度と、0〜100の<b>渋滞スコア</b>が並びます。スコアは平均速度の落ち込みと区間内の混み具合（台数）から計算し、値が大きいほど詰まっている状態を表します。「優勢だった時間」は、開始からどちらの区間がスムーズだった時間が長いかの累計です。
+          </p>
+
+          <h2>操作方法</h2>
+          <ul>
+            <li>
+              ドラッグ（スマートフォンではスワイプ）で視点を回し、ホイール（ピンチ）で拡大・縮小します。
+            </li>
+            <li>右上のボタンで昼夜の切り替えと、カメラ視点の切り替えができます。</li>
+            <li>
+              「パラメータ調整室」で交通量やドライバーのくせを変えられます。値は両区間へ共通に適用されます。
+            </li>
+            <li>「リセット」で最初からやり直せます。</li>
+          </ul>
+
+          <h2>制作について</h2>
+          <p>
+            Three.js と TypeScript で作った個人制作の実験です。ソースコードは
+            <a href="https://github.com/bmthd/traffic-jam-simulation" target="_blank" rel="noopener"
+              >GitHub</a
+            >
+            で MIT ライセンスのもとに公開しています。
+          </p>
+        </article>
+      </div>
+    </div>
+
     <!-- パラメータ調整室 -->
-    <div id="paramOverlay">
+    <div id="paramOverlay" class="modal-overlay">
       <div
         id="paramModal"
         class="sign"
@@ -188,7 +307,9 @@
       >
         <div id="paramModalTitle" class="panel-title">
           <span class="route-badge">調</span>パラメータ調整室
-          <button id="paramClose" aria-label="閉じる"><i data-lucide="x"></i></button>
+          <button id="paramClose" class="modal-close" aria-label="閉じる">
+            <i data-lucide="x"></i>
+          </button>
         </div>
         <div class="fair-note">
           <i data-lucide="scale"></i><b>公平性について</b>:
