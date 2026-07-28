@@ -98,6 +98,19 @@ canvas {
   color: #965c03;
   border-color: #965c03;
 }
+/* パネル配置レイヤー。
+   広い画面では各パネルの fixed 配置をそのまま使うため、レイヤー自体は
+   レイアウトに関与せず、クリックも透過させる(3Dビューの操作を邪魔しない)。
+   高さが足りない画面でだけ横並びのフレックスに切り替えてパネルの重なりを防ぐ */
+#panelLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+#panelLayer > * {
+  pointer-events: auto;
+}
 .panel {
   position: fixed;
   z-index: 10;
@@ -883,6 +896,56 @@ body.night #nightBtn {
   }
   .row {
     margin: 4px 0;
+  }
+}
+
+/* ---- 横持ちスマホなど「低い横長画面」のパネル配置 (Issue #51) ----
+   縦に余裕がない画面では、左上のコントロールパネルと下部の比較パネルが
+   空間的に重なってしまう。重なると
+   ・下になった側のボタン(リセット/パラメータ調整室)が押せず、
+     同じ座標にある相手のタイトル行が反応して誤操作になる
+   ・逆順に重なると比較パネルの義務あり側が完全に隠れ、
+     このアプリの主目的である L/R 比較が読めなくなる
+   z-index を入れ替えてもどちらかが隠れる点は変わらないため、
+   パネルを横並びにして「そもそも重ならない」配置にする。 */
+@media (max-height: 620px) and (min-width: 480px) {
+  #panelLayer {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px;
+  }
+  /* fixed をやめてフレックス項目にする。position は王冠(.crown)の
+     位置基準として必要なので relative を残す */
+  #panelLayer > .panel {
+    position: relative;
+    inset: auto;
+    transform: none;
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+    min-height: 0;
+  }
+  /* 幅は通常時の指定をそのまま使う(狭い画面では max-width:700px の指定が効く)。
+     ただし比較パネルの取り分がなくならないよう画面幅の 45% で頭打ちにする */
+  #controlPanel {
+    flex: 0 0 auto;
+    max-width: 45vw;
+    overflow: visible;
+  }
+  #infoPanel {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+    /* 操作パネルは上、比較パネルは下という元の並びの印象を保つ */
+    align-self: flex-end;
+  }
+  /* 画面が極端に低いときはタイトル行を残したまま中身だけスクロールさせる。
+     王冠は #infoPanel 基準の絶対配置なのでスクロール領域に切られない */
+  .panel-body {
+    overflow: auto;
+    min-height: 0;
+    overscroll-behavior: contain;
   }
 }
 

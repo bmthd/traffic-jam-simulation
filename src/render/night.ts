@@ -104,14 +104,22 @@ nightDome.material.opacity = 0;
   nightGroup.add(halo);
 })();
 
-// 街灯(2区間の中央から両側へアームを伸ばすダブルアーム式・ナトリウム灯)。
-// #28 で2本の道路は同じ向きの平行配置になったため、その中心線(左右対称の軸)に
-// 沿って1列だけ立て、両区間の内側を左右対称に照らす
-const MEDIAN_X = (sectionX('L', -7) + sectionX('R', -7)) / 2; // 2区間の中心線
+// 街灯(区間の仕切りの上から両側へアームを伸ばすダブルアーム式・ナトリウム灯)。
+// #28 で2本の道路は同じ向きの平行配置になったため、その境目に1列だけ立て、
+// 両区間を左右対称に照らす。
+// 柱の位置は「両区間の車線中心の中点(x=1.6)」ではなく、区間の仕切り(ガードレール
+// 基礎 x=-0.4〜0.4)の中心。中点はR区間の側道の舗装帯(x=0.4〜4.2)の中に入って
+// しまい、柱が車道の中に立ってしまうため (Issue #87)
+const LAMP_ROW_X = 0; // 区間の仕切り(ガードレール基礎)の中心 = 左右対称の軸
+// 灯具の張り出し。L側は追い越し車線の中心(x=-3)、R側はその鏡像(x=+3)で側道の上に載る
+const LAMP_HEAD_OFFSET_X = 3;
+// 路面の光だまりの中心。灯具より少し外側に置き、両区間の舗装帯を等しく照らす
+const LAMP_GLOW_OFFSET_X = 3.6;
 (function buildStreetLamps() {
   const poleMaterial = new THREE.MeshLambertMaterial({ color: 0x6f7780 });
   const poleGeometry = new THREE.BoxGeometry(0.2, 7.2, 0.2);
-  const armGeometry = new THREE.BoxGeometry(5.4, 0.16, 0.16);
+  // アームは両側の灯具(±3)を渡せる長さにする
+  const armGeometry = new THREE.BoxGeometry(6.2, 0.16, 0.16);
   const headGeometry = new THREE.BoxGeometry(0.9, 0.22, 0.42);
   const glowGeometry = new THREE.PlaneGeometry(13, 13);
   const polePositions: [number, number, number][] = [];
@@ -120,18 +128,20 @@ const MEDIAN_X = (sectionX('L', -7) + sectionX('R', -7)) / 2; // 2区間の中�
   const glowMatrices: THREE.Matrix4[] = [];
   const glowRotation = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
   for (let z = -ROAD_HALF + 14; z < ROAD_HALF; z += 42) {
-    polePositions.push([MEDIAN_X, 3.6, z]);
-    armPositions.push([MEDIAN_X, 7.1, z]);
+    polePositions.push([LAMP_ROW_X, 3.6, z]);
+    armPositions.push([LAMP_ROW_X, 7.1, z]);
     for (const side of [-1, 1]) {
-      headPositions.push([MEDIAN_X + side * 2.6, 7.0, z]);
+      headPositions.push([LAMP_ROW_X + side * LAMP_HEAD_OFFSET_X, 7.0, z]);
       // 電球のにじみ(夜のみ): 灯具が光源として「光って見える」ように
       // 発光表現が影を落とすと不自然なため castShadow は設定しない
       const bulb = new THREE.Sprite(bulbMaterial);
       bulb.scale.set(2.6, 2.6, 1);
-      bulb.position.set(MEDIAN_X + side * 2.6, 6.92, z);
+      bulb.position.set(LAMP_ROW_X + side * LAMP_HEAD_OFFSET_X, 6.92, z);
       nightGroup.add(bulb);
       // 路面の光だまり(夜のみ)
-      glowMatrices.push(glowRotation.clone().setPosition(MEDIAN_X + side * 3.2, 0.03, z));
+      glowMatrices.push(
+        glowRotation.clone().setPosition(LAMP_ROW_X + side * LAMP_GLOW_OFFSET_X, 0.03, z),
+      );
     }
   }
   const poles = instancedAt(poleGeometry, poleMaterial, polePositions);

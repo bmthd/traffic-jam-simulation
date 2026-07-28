@@ -7,7 +7,42 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
     <title>6車線比較 渋滞シミュレーション</title>
+    <meta
+      name="description"
+      content="「追いつかれた車両の義務」がある道路とない道路を並べて走らせ、ルール1つの有無が渋滞のできかたに与える差を観察できる3D渋滞シミュレーション。"
+    />
     <link rel="icon" type="image/svg+xml" href="/traffic-jam.svg" />
+
+    <!-- OGP / Twitter Card（SNS 共有時のカード表示用）。
+         og:url と og:image はクローラが解決できるよう絶対 URL で指定する -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="6車線比較 渋滞シミュレーション" />
+    <meta property="og:locale" content="ja_JP" />
+    <meta property="og:url" content="https://traffic-jam.bmth.dev/" />
+    <meta property="og:title" content="「追いつかれた車両の義務」で渋滞は本当に減るのか？" />
+    <meta
+      property="og:description"
+      content="「追いつかれた車両の義務」がある道路とない道路を並べて走らせ、ルール1つの有無が渋滞のできかたに与える差を観察できる3D渋滞シミュレーション。"
+    />
+    <meta property="og:image" content="https://traffic-jam.bmth.dev/ogp.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="義務ありのL区間と義務なしのR区間が並走する渋滞シミュレーションの画面"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="「追いつかれた車両の義務」で渋滞は本当に減るのか？" />
+    <meta
+      name="twitter:description"
+      content="「追いつかれた車両の義務」がある道路とない道路を並べて走らせ、ルール1つの有無が渋滞のできかたに与える差を観察できる3D渋滞シミュレーション。"
+    />
+    <meta name="twitter:image" content="https://traffic-jam.bmth.dev/ogp.png" />
+    <meta
+      name="twitter:image:alt"
+      content="義務ありのL区間と義務なしのR区間が並走する渋滞シミュレーションの画面"
+    />
   </head>
   <body>
     <div id="container"></div>
@@ -27,106 +62,115 @@
     </button>
     <div id="spectatorLabel"></div>
 
-    <!-- コントロールパネル（左上） -->
-    <div id="controlPanel" class="sign panel">
-      <button
-        type="button"
-        class="panel-title"
-        aria-expanded="true"
-        aria-controls="controlPanelBody"
-      >
-        <img class="app-icon" src="/traffic-jam.svg" alt="" />渋滞シミュレーション<span class="chev"
-          ><i data-lucide="chevron-down"></i
-        ></span>
-      </button>
-      <div id="controlPanelBody" class="panel-body">
-        <div class="row">
-          総車両数: <span class="num" id="vehicleCount">0</span> /
-          <span class="num" id="maxVehicleCount"></span>
-        </div>
-        <div class="row">
-          車両ペア生成間隔: <span class="num" id="intervalLabel">800</span> ms
-          <input type="range" id="intervalSlider" min="100" max="3000" step="50" value="800" />
-        </div>
-        <button id="resetBtn"><i data-lucide="rotate-ccw"></i>リセット</button>
-        <button id="paramsBtn" aria-haspopup="dialog">
-          <i data-lucide="sliders-horizontal"></i>パラメータ調整室
+    <!-- パネル配置レイヤー（コントロールパネルと情報パネルの位置関係をまとめて決める） -->
+    <div id="panelLayer">
+      <!-- コントロールパネル（左上） -->
+      <div id="controlPanel" class="sign panel">
+        <button
+          type="button"
+          class="panel-title"
+          aria-expanded="true"
+          aria-controls="controlPanelBody"
+        >
+          <img class="app-icon" src="/traffic-jam.svg" alt="" />渋滞シミュレーション<span
+            class="chev"
+            ><i data-lucide="chevron-down"></i
+          ></span>
         </button>
-        <div class="hint">
-          <i data-lucide="mouse"></i>ドラッグ: 視点回転 ／ ホイール: ズーム<br /><i
-            data-lucide="smartphone"
-          ></i
-          >スワイプ: 回転 ／ ピンチ: ズーム
+        <div id="controlPanelBody" class="panel-body">
+          <div class="row">
+            総車両数: <span class="num" id="vehicleCount">0</span> /
+            <span class="num" id="maxVehicleCount"></span>
+          </div>
+          <div class="row">
+            車両ペア生成間隔: <span class="num" id="intervalLabel">800</span> ms
+            <input type="range" id="intervalSlider" min="100" max="3000" step="50" value="800" />
+          </div>
+          <button id="resetBtn"><i data-lucide="rotate-ccw"></i>リセット</button>
+          <button id="paramsBtn" aria-haspopup="dialog">
+            <i data-lucide="sliders-horizontal"></i>パラメータ調整室
+          </button>
+          <div class="hint">
+            <i data-lucide="mouse"></i>ドラッグ: 視点回転 ／ ホイール: ズーム<br /><i
+              data-lucide="smartphone"
+            ></i
+            >スワイプ: 回転 ／ ピンチ: ズーム
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- 下部: 2区間の比較パネル(1枚) -->
-    <div id="infoPanel" class="sign panel" style="position: fixed">
-      <button type="button" class="panel-title" aria-expanded="true" aria-controls="infoPanelBody">
-        <span class="route-badge">比</span>渋滞スコア比較
-        <span class="mini-pair"
-          ><span class="mL" id="miniLeft">0.0</span><span class="sep">vs</span
-          ><span class="mR" id="miniRight">0.0</span></span
+      <!-- 下部: 2区間の比較パネル(1枚) -->
+      <div id="infoPanel" class="sign panel">
+        <button
+          type="button"
+          class="panel-title"
+          aria-expanded="true"
+          aria-controls="infoPanelBody"
         >
-        <span class="chev"><i data-lucide="chevron-down"></i></span>
-      </button>
-      <div id="infoPanelBody" class="panel-body">
-        <div class="compare">
-          <div class="side left">
-            <div class="crown" id="crownLeft"><i data-lucide="crown"></i>こちらがスムーズ</div>
-            <div class="side-head">
-              <span class="route-badge">義</span
-              ><i data-lucide="circle" class="dot dot-green"></i>義務あり
-            </div>
-            <div class="row">
-              車両数: <span class="num" id="countLeft">0</span> 台 ／ 平均
-              <span class="num" id="avgLeft">0</span> km/h
-            </div>
-            <div class="row" style="margin-bottom: 0">
-              渋滞スコア
-              <div class="score-line">
-                <span class="score-big" id="scoreLeft">0.0</span
-                ><span class="score-unit">/ 100</span>
+          <span class="route-badge">比</span>渋滞スコア比較
+          <span class="mini-pair"
+            ><span class="mL" id="miniLeft">0.0</span><span class="sep">vs</span
+            ><span class="mR" id="miniRight">0.0</span></span
+          >
+          <span class="chev"><i data-lucide="chevron-down"></i></span>
+        </button>
+        <div id="infoPanelBody" class="panel-body">
+          <div class="compare">
+            <div class="side left">
+              <div class="crown" id="crownLeft"><i data-lucide="crown"></i>こちらがスムーズ</div>
+              <div class="side-head">
+                <span class="route-badge">義</span
+                ><i data-lucide="circle" class="dot dot-green"></i>義務あり
               </div>
-              <div class="bar"><div id="barLeft"></div></div>
-              <div class="status" id="statusLeft"><i data-lucide="gauge"></i>スイスイ</div>
-            </div>
-            <div class="note">※ 速い車が来たら走行車線へ譲り、追い越し後はすぐ戻る</div>
-          </div>
-          <div class="seam"></div>
-          <div class="side right">
-            <div class="crown" id="crownRight"><i data-lucide="crown"></i>こちらがスムーズ</div>
-            <div class="side-head">
-              <span class="route-badge">自</span
-              ><i data-lucide="circle" class="dot dot-amber"></i>義務なし
-            </div>
-            <div class="row">
-              車両数: <span class="num" id="countRight">0</span> 台 ／ 平均
-              <span class="num" id="avgRight">0</span> km/h
-            </div>
-            <div class="row" style="margin-bottom: 0">
-              渋滞スコア
-              <div class="score-line">
-                <span class="score-big" id="scoreRight">0.0</span
-                ><span class="score-unit">/ 100</span>
+              <div class="row">
+                車両数: <span class="num" id="countLeft">0</span> 台 ／ 平均
+                <span class="num" id="avgLeft">0</span> km/h
               </div>
-              <div class="bar"><div id="barRight"></div></div>
-              <div class="status" id="statusRight"><i data-lucide="gauge"></i>スイスイ</div>
+              <div class="row" style="margin-bottom: 0">
+                渋滞スコア
+                <div class="score-line">
+                  <span class="score-big" id="scoreLeft">0.0</span
+                  ><span class="score-unit">/ 100</span>
+                </div>
+                <div class="bar"><div id="barLeft"></div></div>
+                <div class="status" id="statusLeft"><i data-lucide="gauge"></i>スイスイ</div>
+              </div>
+              <div class="note">※ 速い車が来たら走行車線へ譲り、追い越し後はすぐ戻る</div>
             </div>
-            <div class="note">※ 譲る義務がなく、追い越し車線に長居するマイペース派も混在</div>
+            <div class="seam"></div>
+            <div class="side right">
+              <div class="crown" id="crownRight"><i data-lucide="crown"></i>こちらがスムーズ</div>
+              <div class="side-head">
+                <span class="route-badge">自</span
+                ><i data-lucide="circle" class="dot dot-amber"></i>義務なし
+              </div>
+              <div class="row">
+                車両数: <span class="num" id="countRight">0</span> 台 ／ 平均
+                <span class="num" id="avgRight">0</span> km/h
+              </div>
+              <div class="row" style="margin-bottom: 0">
+                渋滞スコア
+                <div class="score-line">
+                  <span class="score-big" id="scoreRight">0.0</span
+                  ><span class="score-unit">/ 100</span>
+                </div>
+                <div class="bar"><div id="barRight"></div></div>
+                <div class="status" id="statusRight"><i data-lucide="gauge"></i>スイスイ</div>
+              </div>
+              <div class="note">※ 譲る義務がなく、追い越し車線に長居するマイペース派も混在</div>
+            </div>
           </div>
-        </div>
-        <!-- 開始からの累積: どちらが優勢だった時間が長いか(1本のバーを割合で分割) -->
-        <div class="smooth-time">
-          <div class="smooth-time-head">
-            <i data-lucide="timer"></i>優勢だった時間(開始から)
-            <span class="smooth-lead" id="smoothLead">互角</span>
-          </div>
-          <div class="smooth-time-bars">
-            <span class="smooth-side">義 <span class="num" id="smoothTimeLeft">0:00</span></span>
-            <div class="smooth-bar"><div id="smoothBarLeft"></div></div>
-            <span class="smooth-side"><span class="num" id="smoothTimeRight">0:00</span> 自</span>
+          <!-- 開始からの累積: どちらが優勢だった時間が長いか(1本のバーを割合で分割) -->
+          <div class="smooth-time">
+            <div class="smooth-time-head">
+              <i data-lucide="timer"></i>優勢だった時間(開始から)
+              <span class="smooth-lead" id="smoothLead">互角</span>
+            </div>
+            <div class="smooth-time-bars">
+              <span class="smooth-side">義 <span class="num" id="smoothTimeLeft">0:00</span></span>
+              <div class="smooth-bar"><div id="smoothBarLeft"></div></div>
+              <span class="smooth-side"><span class="num" id="smoothTimeRight">0:00</span> 自</span>
+            </div>
           </div>
         </div>
       </div>
