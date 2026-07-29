@@ -140,7 +140,26 @@
           <span class="chev"><i data-lucide="chevron-down"></i></span>
         </button>
         <div id="infoPanelBody" class="panel-body">
-          <div id="warmupNotice">差がつくまで1〜2分お待ちください</div>
+          <div class="warmup">
+            <div class="warmup-head">
+              <span id="warmupStatus">計測中</span>
+              <span class="num" id="warmupElapsed">0秒 / 約90秒</span>
+            </div>
+            <div
+              class="warmup-bar"
+              id="warmupProgress"
+              role="progressbar"
+              aria-label="平衡到達までの経過時間"
+              aria-valuemin="0"
+              aria-valuemax="90"
+              aria-valuenow="0"
+            >
+              <div id="warmupProgressFill"></div>
+            </div>
+            <div id="warmupNotice">
+              <i data-lucide="hourglass"></i>差がつくまで1〜2分お待ちください
+            </div>
+          </div>
           <div class="compare">
             <div class="side left">
               <div class="crown" id="crownLeft"><i data-lucide="crown"></i>こちらがスムーズ</div>
