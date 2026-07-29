@@ -3,6 +3,9 @@ import { CONST } from '../core';
 import type { World } from '../core';
 import { icon, renderIcons } from './icons';
 
+const EQUILIBRIUM_SECONDS = 90;
+const NOTICE_SECONDS = 30;
+
 function byId<T extends HTMLElement = HTMLElement>(id: string): T {
   return document.getElementById(id) as T;
 }
@@ -30,6 +33,11 @@ export const elements = {
   smoothTimeRight: byId('smoothTimeRight'),
   smoothBarLeft: byId('smoothBarLeft'),
   smoothLead: byId('smoothLead'),
+  warmupStatus: byId('warmupStatus'),
+  warmupElapsed: byId('warmupElapsed'),
+  warmupProgress: byId('warmupProgress'),
+  warmupProgressFill: byId('warmupProgressFill'),
+  warmupNotice: byId('warmupNotice'),
 };
 
 elements.maxCount.textContent = String(CONST.MAX_VEHICLES);
@@ -86,7 +94,22 @@ function updateSmoothTime(world: World): void {
     : '互角';
 }
 
+function updateWarmup(elapsedTime: number): void {
+  const elapsedSeconds = Math.floor(elapsedTime);
+  const progressSeconds = Math.min(elapsedTime, EQUILIBRIUM_SECONDS);
+  const stable = elapsedTime >= EQUILIBRIUM_SECONDS;
+
+  elements.warmupElapsed.textContent = `${elapsedSeconds}秒 / 約${EQUILIBRIUM_SECONDS}秒`;
+  elements.warmupProgressFill.style.width =
+    `${(progressSeconds / EQUILIBRIUM_SECONDS) * 100}%`;
+  elements.warmupProgress.setAttribute('aria-valuenow', String(Math.floor(progressSeconds)));
+  elements.warmupStatus.textContent = stable ? '安定' : '計測中';
+  elements.warmupStatus.classList.toggle('stable', stable);
+  elements.warmupNotice.classList.toggle('hidden', elapsedTime >= NOTICE_SECONDS);
+}
+
 export function updateHUD(world: World): void {
+  updateWarmup(world.time);
   elements.count.textContent = String(world.vehicles.length);
   const left = world.computeSection('L'),
     right = world.computeSection('R');
