@@ -52,9 +52,13 @@ const MERGE_OPEN_END_Z = RAMP_GEOMETRY.entryZ + 14; // 上流端(加速車線の
 // 分離帯を本線寄りに移して側道の走行部を広げた (Issue #87)
 const FRONTAGE_WIDTH = 3.8;
 const FRONTAGE_CENTER_X = -14.9;
-// 導流帯の斜線。標示令の斜線幅(45cm)に合わせ、進行方向に対して45度傾ける。
+// 導流帯の斜線。標示令の斜線幅(45cm)・間隔(1m)に合わせ、進行方向に対して45度傾ける。
+// 傾ける向きは「下流側の端ほど本線に近い」= 斜線が本線側を指す向き。
+// 実物(標示令106「路上障害物の接近(片側に避ける場合)」の図、および分流部の導流帯の写真)は
+// いずれも斜線の下流端が“開いている車線”側を向いており、車を空いている側へ誘導して見える。
 const ZEBRA_STRIPE_WIDTH = 0.45;
-const ZEBRA_ANGLE = -Math.PI / 4;
+const ZEBRA_STRIPE_GAP = 1;
+const ZEBRA_ANGLE = Math.PI / 4;
 
 /* ---- 道路(アスファルト質感 + 区間ごとの色味) ---- */
 const roadGeometry = new THREE.BoxGeometry(13.2, 0.12, WRAP_LENGTH);
@@ -152,26 +156,43 @@ for (const section of SECTIONS) {
   for (let z = gore.startZ + 6; z < zTop - 6; z += 9)
     dashPositions.push([sectionX(section, gore.mainX), 0.012, z]);
   scene.add(instancedAt(dashGeometry, whiteLineMaterial, dashPositions));
-  // 終端の導流帯(先細りのゼブラ)。三角形の辺を補間して配置する。
-  // 斜線は進行方向(-Z)に対して45度で、下流側の端ほど本線から離れる向きに倒す
-  // (隣接する車線の交通から遠ざかる向き = 実物の導流帯と同じ)。
+  // 終端の導流帯(先細りのゼブラ)。
+  // 斜線は「下流(z小)へ進むほど本線(x大)へ寄る」直線群 x + z = k で、
+  // ドライバーからは本線へ寄れという誘導に見える。
+  // 各斜線は導流帯の三角形 A(outerX,startZ) - B(mainX,startZ) - C(mainX,endZ) との
+  // 交線を厳密に解いて長さと位置を決め、帯からはみ出さないようにする。
   const zebraGeometry = new THREE.BoxGeometry(1, 0.02, ZEBRA_STRIPE_WIDTH);
   const zebraMatrices: THREE.Matrix4[] = [];
-  const zebraCount = 4;
-  for (let i = 0; i < zebraCount; i++) {
-    const progress = (i + 0.5) / zebraCount;
-    const z = gore.startZ + (gore.endZ - gore.startZ) * progress;
-    const outerX = gore.outerX + (gore.mainX - gore.outerX) * progress;
-    const width = gore.mainX - outerX;
-    // 斜線の太さぶんだけ内側に詰め、回転後もX方向の張り出しが帯幅に収まるようにする
-    const spanX = Math.max(width - ZEBRA_STRIPE_WIDTH * Math.SQRT1_2, ZEBRA_STRIPE_WIDTH);
+  const kAtA = gore.outerX + gore.startZ; // 斜辺の上流端
+  const kAtB = gore.mainX + gore.startZ; // 三角形内で k が最大の頂点
+  const kAtC = gore.mainX + gore.endZ; // 先端(k が最小)
+  // 斜線に垂直な間隔が (幅 + 隙間) になる k のきざみ
+  const kStep = (ZEBRA_STRIPE_WIDTH + ZEBRA_STRIPE_GAP) * Math.SQRT2;
+  // 斜辺 A→C を k で辿るための係数(k は A から C へ向かって単調減少する)
+  const kSpanAC = kAtA - kAtC;
+  for (let k = kAtC + kStep; k < kAtB; k += kStep) {
+    // 本線側の端は必ず外側線 x = mainX の上に乗る
+    const innerZ = k - gore.mainX;
+    // 外側の端は、上流端(z = startZ)か斜辺のいずれか
+    const outer =
+      k >= kAtA
+        ? { x: k - gore.startZ, z: gore.startZ }
+        : (() => {
+            const t = (kAtA - k) / kSpanAC;
+            return {
+              x: gore.outerX + (gore.mainX - gore.outerX) * t,
+              z: gore.startZ + (gore.endZ - gore.startZ) * t,
+            };
+          })();
+    const length = Math.hypot(gore.mainX - outer.x, innerZ - outer.z);
+    if (length < ZEBRA_STRIPE_WIDTH) continue; // 先端の潰れた斜線は描かない
     zebraMatrices.push(
       // 回転を先に適用するため makeRotationY(...).multiply(scale) の順で合成する
       // (逆順だと非一様スケールで斜線がせん断され、角度が寝てしまう)
       new THREE.Matrix4()
         .makeRotationY(ZEBRA_ANGLE)
-        .multiply(new THREE.Matrix4().makeScale(spanX / Math.SQRT1_2, 1, 1))
-        .setPosition(sectionX(section, outerX + width / 2), 0.012, z),
+        .multiply(new THREE.Matrix4().makeScale(length, 1, 1))
+        .setPosition(sectionX(section, (gore.mainX + outer.x) / 2), 0.012, (innerZ + outer.z) / 2),
     );
   }
   scene.add(instancedWith(zebraGeometry, whiteLineMaterial, zebraMatrices));
