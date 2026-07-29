@@ -100,8 +100,7 @@ function updateWarmup(elapsedTime: number): void {
   const stable = elapsedTime >= EQUILIBRIUM_SECONDS;
 
   elements.warmupElapsed.textContent = `${elapsedSeconds}秒 / 約${EQUILIBRIUM_SECONDS}秒`;
-  elements.warmupProgressFill.style.width =
-    `${(progressSeconds / EQUILIBRIUM_SECONDS) * 100}%`;
+  elements.warmupProgressFill.style.width = `${(progressSeconds / EQUILIBRIUM_SECONDS) * 100}%`;
   elements.warmupProgress.setAttribute('aria-valuenow', String(Math.floor(progressSeconds)));
   elements.warmupStatus.textContent = stable ? '安定' : '計測中';
   elements.warmupStatus.classList.toggle('stable', stable);
