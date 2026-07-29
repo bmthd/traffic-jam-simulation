@@ -4,7 +4,7 @@ import { CONST, RAMP_GEOMETRY, WRAP_LENGTH } from '../core';
 import type { Section } from '../core';
 import { scene } from './scene';
 import { asphaltTexture, delineatorMaterial, frontageAsphaltTexture } from './materials';
-import { instancedAt } from './instancing';
+import { instancedAt, instancedWith } from './instancing';
 import { loopCopies } from './looping';
 
 /* ---- 区間テーマカラー(どの角度から見ても区別できるように) ---- */
@@ -52,21 +52,18 @@ const MERGE_OPEN_END_Z = RAMP_GEOMETRY.entryZ + 14; // 上流端(加速車線の
 // 分離帯を本線寄りに移して側道の走行部を広げた (Issue #87)
 const FRONTAGE_WIDTH = 3.8;
 const FRONTAGE_CENTER_X = -14.9;
-// 加速車線の誘導矢印。実物の合流部と同じく、路面を横切る斜線ではなく
-// 進行方向へ長く伸びた矢印を並べ、先端だけを本線側へ振って「本線へ寄れ」と示す。
-// 路面を塞ぐ向きの標示は「合流できない」ように見えてしまうため使わない (Issue #98)。
-const ARROW_LENGTH = 8; // 進行方向の全長 (m)
-const ARROW_SHAFT_WIDTH = 0.5; // 軸の幅 (m)
-const ARROW_HEAD_LENGTH = 2.6; // 矢じりの長さ (m)
-const ARROW_HEAD_WIDTH = 1.6; // 矢じりの幅 (m)
-const ARROW_TILT = Math.PI / 13; // 進行方向に対する振り角(約14度)。浅く振って本線側を指す
-const ARROW_CENTER_X = -15; // 加速車線の中央
-const ARROW_SPACING = 40; // 加速車線に沿って一定間隔で置く (m)
 // 加速車線の外側線。舗装の外端(-16.8)のすぐ内側に引き、路側帯との境界を示す。
 // これが無いと加速車線と路側帯の区別がつかず、路肩を走れるように見えてしまう。
 const FRONTAGE_EDGE_LINE_X = -16.45;
 // 区間テーマカラーの帯は外側線のさらに外、舗装の外端に沿って全長に走らせる。
 const SECTION_STRIP_X = -16.72;
+// 路側帯のゼブラ(斜めの白線)。合流開放区間の外では側道は加速車線ではなく
+// ただの路側帯なので、斜線で埋めて「ここへは入れない」と視覚的に示す。
+// 合流開放区間はハッチを切って空けておく(塞ぐと合流できないように見えるため)。
+const HATCH_INNER_X = -13.1; // 本線側の端(本線の外側線 -13 のすぐ外)
+const HATCH_OUTER_X = -16.4; // 路側帯側の端(外側線 -16.45 のすぐ内)
+const HATCH_STRIPE_WIDTH = 0.45; // 斜線の幅 (m)
+const HATCH_SPACING = 4; // 斜線の間隔 (m)
 
 /* ---- 道路(アスファルト質感 + 区間ごとの色味) ---- */
 const roadGeometry = new THREE.BoxGeometry(13.2, 0.12, WRAP_LENGTH);
@@ -156,27 +153,31 @@ for (const section of SECTIONS) {
 }
 dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, x))));
 
-/* ---- 誘導矢印の形 ----
-   軸 + 矢じりの平面形を +Y(=平面に倒すと前方 -Z)向きに作り、路面へ寝かせてから
-   Y 軸まわりに ARROW_TILT だけ回して先端を本線側へ振る。 */
-const mergeArrowGeometry = (() => {
-  const half = ARROW_LENGTH / 2;
-  const shaft = ARROW_SHAFT_WIDTH / 2;
-  const head = ARROW_HEAD_WIDTH / 2;
-  const headBaseY = half - ARROW_HEAD_LENGTH;
-  const shape = new THREE.Shape();
-  shape.moveTo(-shaft, -half);
-  shape.lineTo(shaft, -half);
-  shape.lineTo(shaft, headBaseY);
-  shape.lineTo(head, headBaseY);
-  shape.lineTo(0, half);
-  shape.lineTo(-head, headBaseY);
-  shape.lineTo(-shaft, headBaseY);
-  shape.closePath();
-  const geometry = new THREE.ExtrudeGeometry(shape, { depth: 0.02, bevelEnabled: false });
-  geometry.rotateX(-Math.PI / 2); // 平面の +Y を前方(-Z)へ、押し出し方向を上へ
-  geometry.rotateY(-ARROW_TILT); // 前方を保ったまま先端を本線側(+X)へ振る
-  return geometry;
+/* ---- 路側帯のゼブラ(斜めの白線) ----
+   合流開放区間の外では側道は加速車線ではなく路側帯なので、斜線で埋めて
+   「侵入不可」を視覚的に示す。合流開放区間だけは空けて合流を妨げない。
+   斜線は45度に倒し、帯の内外どちらへもはみ出さない長さに切る。 */
+(function buildShoulderHatch() {
+  const bandWidth = HATCH_INNER_X - HATCH_OUTER_X;
+  const centerX = (HATCH_INNER_X + HATCH_OUTER_X) / 2;
+  // 45度に倒したとき、X方向の張り出しがちょうど帯幅に収まる長さ
+  const length = bandWidth * Math.SQRT2 - HATCH_STRIPE_WIDTH;
+  const geometry = new THREE.BoxGeometry(length, 0.02, HATCH_STRIPE_WIDTH);
+  const matrices: THREE.Matrix4[] = [];
+  for (const section of SECTIONS) {
+    for (let z = -WRAP_LENGTH / 2; z < WRAP_LENGTH / 2; z += HATCH_SPACING) {
+      // 合流開放区間(=加速車線として使える区間)には斜線を置かない
+      if (z > MERGE_OPEN_START_Z && z < MERGE_OPEN_END_Z) continue;
+      for (const offset of loopCopies(0))
+        matrices.push(
+          // 回転を先に適用する(逆順だと非一様スケールで斜線がせん断される)
+          new THREE.Matrix4()
+            .makeRotationY(Math.PI / 4)
+            .setPosition(sectionX(section, centerX), 0.012, z + offset),
+        );
+    }
+  }
+  scene.add(instancedWith(geometry, whiteLineMaterial, matrices));
 })();
 
 /* ---- 合流部マーキング ---- */
@@ -189,12 +190,6 @@ for (const section of SECTIONS) {
   for (let z = gore.startZ + 6; z < zTop - 6; z += 9)
     dashPositions.push([sectionX(section, gore.mainX), 0.012, z]);
   scene.add(instancedAt(dashGeometry, whiteLineMaterial, dashPositions));
-  // 加速車線の誘導矢印。進行方向(-Z)に長く伸ばし、先端を本線側(+X)へ浅く振る。
-  // 加速車線の全長(ランプ入口 → 導流帯の始点)に ARROW_SPACING 間隔で配る。
-  const arrowPositions: [number, number, number][] = [];
-  for (let z = gore.startZ + ARROW_SPACING / 2; z < RAMP_GEOMETRY.entryZ; z += ARROW_SPACING)
-    arrowPositions.push([sectionX(section, ARROW_CENTER_X), 0.012, z]);
-  scene.add(instancedAt(mergeArrowGeometry, whiteLineMaterial, arrowPositions));
 }
 
 /* ---- 区間の仕切り（ガードレール付き） ----
