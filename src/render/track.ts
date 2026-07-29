@@ -57,13 +57,6 @@ const FRONTAGE_CENTER_X = -14.9;
 const FRONTAGE_EDGE_LINE_X = -16.45;
 // 区間テーマカラーの帯は外側線のさらに外、舗装の外端に沿って全長に走らせる。
 const SECTION_STRIP_X = -16.72;
-// 路側帯のゼブラ(斜めの白線)。合流開放区間の外では側道は加速車線ではなく
-// ただの路側帯なので、斜線で埋めて「ここへは入れない」と視覚的に示す。
-// 合流開放区間はハッチを切って空けておく(塞ぐと合流できないように見えるため)。
-const HATCH_INNER_X = -13.1; // 本線側の端(本線の外側線 -13 のすぐ外)
-const HATCH_OUTER_X = -16.4; // 路側帯側の端(外側線 -16.45 のすぐ内)
-const HATCH_STRIPE_WIDTH = 0.45; // 斜線の幅 (m)
-const HATCH_SPACING = 4; // 斜線の間隔 (m)
 
 /* ---- 道路(アスファルト質感 + 区間ごとの色味) ---- */
 const roadGeometry = new THREE.BoxGeometry(13.2, 0.12, WRAP_LENGTH);
@@ -153,30 +146,25 @@ for (const section of SECTIONS) {
 }
 dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, x))));
 
-/* ---- 路側帯のゼブラ(斜めの白線) ----
-   合流開放区間の外では側道は加速車線ではなく路側帯なので、斜線で埋めて
-   「侵入不可」を視覚的に示す。合流開放区間だけは空けて合流を妨げない。
-   斜線は45度に倒し、帯の内外どちらへもはみ出さない長さに切る。 */
-(function buildShoulderHatch() {
-  const bandWidth = HATCH_INNER_X - HATCH_OUTER_X;
-  const centerX = (HATCH_INNER_X + HATCH_OUTER_X) / 2;
-  // 45度に倒したとき、X方向の張り出しがちょうど帯幅に収まる長さ
-  const length = bandWidth * Math.SQRT2 - HATCH_STRIPE_WIDTH;
-  const geometry = new THREE.BoxGeometry(length, 0.02, HATCH_STRIPE_WIDTH);
-  const matrices: THREE.Matrix4[] = [];
-  for (const section of SECTIONS) {
-    for (let z = -WRAP_LENGTH / 2; z < WRAP_LENGTH / 2; z += HATCH_SPACING) {
-      // 合流開放区間(=加速車線として使える区間)には斜線を置かない
-      if (z > MERGE_OPEN_START_Z && z < MERGE_OPEN_END_Z) continue;
-      for (const offset of loopCopies(0))
-        matrices.push(
-          // 回転を先に適用する(逆順だと非一様スケールで斜線がせん断される)
-          new THREE.Matrix4()
-            .makeRotationY(Math.PI / 4)
-            .setPosition(sectionX(section, centerX), 0.012, z + offset),
-        );
-    }
-  }
+/* ---- 合流レーンのテーパー(斜めの白線) ----
+   加速車線の終わりで外側の縁が本線の外側線へ寄っていく斜めの実線。
+   この1本が「ここまでが合流レーン」という形を描く。路側帯には何も引かない。 */
+(function buildMergeTaperLine() {
+  const { gore } = RAMP_GEOMETRY;
+  const dx = gore.mainX - gore.outerX; // 本線側へ寄る量
+  const dz = gore.endZ - gore.startZ; // 進行方向(-Z)への長さ
+  const length = Math.hypot(dx, dz);
+  const angle = Math.atan2(-dz, dx); // +X 方向の棒をテーパーの向きへ倒す角
+  const geometry = new THREE.BoxGeometry(length, 0.02, 0.16);
+  const matrices = SECTIONS.map((section) =>
+    new THREE.Matrix4()
+      .makeRotationY(angle)
+      .setPosition(
+        sectionX(section, (gore.outerX + gore.mainX) / 2),
+        0.012,
+        (gore.startZ + gore.endZ) / 2,
+      ),
+  );
   scene.add(instancedWith(geometry, whiteLineMaterial, matrices));
 })();
 
