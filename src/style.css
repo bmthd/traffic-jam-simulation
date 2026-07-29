@@ -141,6 +141,54 @@ canvas {
   color: #05613b;
   border-color: #05613b;
 }
+.warmup {
+  margin-bottom: 9px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.28);
+}
+.warmup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+}
+#warmupStatus {
+  padding: 1px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 999px;
+  background: rgba(255, 213, 74, 0.22);
+  font-weight: 800;
+}
+#warmupStatus.stable {
+  background: rgba(124, 252, 154, 0.24);
+}
+.warmup-bar {
+  height: 7px;
+  margin-top: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+}
+.warmup-bar > div {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: #fff;
+  transition: width 0.25s linear;
+}
+#warmupNotice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  font-weight: 800;
+}
+#warmupNotice.hidden {
+  display: none;
+}
 .compare {
   display: grid;
   grid-template-columns: 1fr 1px 1fr;
