@@ -61,7 +61,12 @@ const ARROW_HEAD_LENGTH = 2.6; // 矢じりの長さ (m)
 const ARROW_HEAD_WIDTH = 1.6; // 矢じりの幅 (m)
 const ARROW_TILT = Math.PI / 13; // 進行方向に対する振り角(約14度)。浅く振って本線側を指す
 const ARROW_CENTER_X = -15; // 加速車線の中央
-const ARROW_Z_POSITIONS = [264, 282, 300]; // 導流帯の手前に上流から3本
+const ARROW_SPACING = 40; // 加速車線に沿って一定間隔で置く (m)
+// 加速車線の外側線。舗装の外端(-16.8)のすぐ内側に引き、路側帯との境界を示す。
+// これが無いと加速車線と路側帯の区別がつかず、路肩を走れるように見えてしまう。
+const FRONTAGE_EDGE_LINE_X = -16.45;
+// 区間テーマカラーの帯は外側線のさらに外、舗装の外端に沿って全長に走らせる。
+const SECTION_STRIP_X = -16.72;
 
 /* ---- 道路(アスファルト質感 + 区間ごとの色味) ---- */
 const roadGeometry = new THREE.BoxGeometry(13.2, 0.12, WRAP_LENGTH);
@@ -133,6 +138,8 @@ solidLines(SECTIONS.map((section) => sectionX(section, -1)));
 const mainOuterEdgeXs = SECTIONS.map((section) => sectionX(section, -13));
 solidLines(mainOuterEdgeXs, -WRAP_LENGTH / 2, MERGE_OPEN_START_Z);
 solidLines(mainOuterEdgeXs, MERGE_OPEN_END_Z, WRAP_LENGTH / 2);
+// 加速車線と路側帯の境界(外側線)は全長にわたって実線
+solidLines(SECTIONS.map((section) => sectionX(section, FRONTAGE_EDGE_LINE_X)));
 for (const section of SECTIONS) {
   const stripMaterial = new THREE.MeshBasicMaterial({ color: SECTION_THEME[section].strip });
   scene.add(
@@ -140,7 +147,7 @@ for (const section of SECTIONS) {
       new THREE.BoxGeometry(0.16, 0.02, WRAP_LENGTH),
       stripMaterial,
       loopCopies(0).map((z): [number, number, number] => [
-        sectionX(section, RAMP_GEOMETRY.gore.outerX),
+        sectionX(section, SECTION_STRIP_X),
         0.012,
         z,
       ]),
@@ -183,17 +190,11 @@ for (const section of SECTIONS) {
     dashPositions.push([sectionX(section, gore.mainX), 0.012, z]);
   scene.add(instancedAt(dashGeometry, whiteLineMaterial, dashPositions));
   // 加速車線の誘導矢印。進行方向(-Z)に長く伸ばし、先端を本線側(+X)へ浅く振る。
-  scene.add(
-    instancedAt(
-      mergeArrowGeometry,
-      whiteLineMaterial,
-      ARROW_Z_POSITIONS.map((z): [number, number, number] => [
-        sectionX(section, ARROW_CENTER_X),
-        0.012,
-        z,
-      ]),
-    ),
-  );
+  // 加速車線の全長(ランプ入口 → 導流帯の始点)に ARROW_SPACING 間隔で配る。
+  const arrowPositions: [number, number, number][] = [];
+  for (let z = gore.startZ + ARROW_SPACING / 2; z < RAMP_GEOMETRY.entryZ; z += ARROW_SPACING)
+    arrowPositions.push([sectionX(section, ARROW_CENTER_X), 0.012, z]);
+  scene.add(instancedAt(mergeArrowGeometry, whiteLineMaterial, arrowPositions));
 }
 
 /* ---- 区間の仕切り（ガードレール付き） ----
