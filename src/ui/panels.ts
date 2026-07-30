@@ -64,9 +64,8 @@ export function setupPanels(): void {
   const syncControlPanel = (): void => syncAutomaticCollapse(controlPanel, compactControl.matches);
   const syncInfoPanel = (): void => syncAutomaticCollapse(infoPanel, compactInfo.matches);
 
-  // 展開時約265pxの情報パネルに上下12pxずつと、畳んだ操作パネル約52pxを
-  // 足すと約341px必要になる。フォントサイズやDPI差の余裕を見て420pxを境界にする。
-  // 王冠がパネル上端からはみ出すため、overflowではなく折りたたみで表示領域を確保する。
+  // 展開時約230pxの情報パネルに上下12pxずつと、畳んだ操作パネル約52pxを
+  // 足すと約306px必要になる。フォントサイズやDPI差の余裕を見て420pxを境界にする。
   syncControlPanel();
   syncInfoPanel();
   compactControl.addEventListener('change', syncControlPanel);
