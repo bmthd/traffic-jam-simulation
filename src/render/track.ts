@@ -47,23 +47,16 @@ export function sectionX(section: Section, xInSectionFrame: number): number {
    そのまま加速車線になる。「合流開放区間」= 分離帯を置かない = 加速車線として本線に開く区間 */
 const MERGE_OPEN_START_Z = RAMP_GEOMETRY.gore.endZ; // 下流端(導流帯の終わり = 合流完了地点)
 const MERGE_OPEN_END_Z = RAMP_GEOMETRY.entryZ + 14; // 上流端(加速車線の始まり)
-// 側道が加速車線へ自然につながるよう、開放区間の前後12mで分離帯を先細りさせる。
-const SEPARATOR_TAPER_LENGTH = 12;
-const SEPARATOR_FULL_END_Z = MERGE_OPEN_START_Z - SEPARATOR_TAPER_LENGTH;
-const SEPARATOR_FULL_START_Z = MERGE_OPEN_END_Z + SEPARATOR_TAPER_LENGTH;
 // 側道(=加速車線)の舗装帯。外側の端(-16.8)はR区間では区間の仕切りの基礎に接するため
 // これ以上外へは広げられない。代わりに内側を本線の外側線(-13)まで伸ばし、あわせて
 // 分離帯を本線寄りに移して側道の走行部を広げた (Issue #87)
 const FRONTAGE_WIDTH = 3.8;
 const FRONTAGE_CENTER_X = -14.9;
-// 分離帯の中心X・幅。本線の外側線(-13)のすぐ外に置き、区間テーマカラーで塗る
-const SEPARATOR_X = -13.4;
-const SEPARATOR_WIDTH = 0.7;
-const SEPARATOR_POLE_SPACING = 9;
-// 路肩の見上げ視点を遮らないよう、ポールは帯の外側寄りに立てる。
-const SEPARATOR_POLE_X = -13.7;
-// 分離帯の上面に高さ0.8mのポールの底面を揃える。
-const SEPARATOR_POLE_CENTER_Y = 0.411;
+// 加速車線の外側線。舗装の外端(-16.8)のすぐ内側に引き、路側帯との境界を示す。
+// これが無いと加速車線と路側帯の区別がつかず、路肩を走れるように見えてしまう。
+const FRONTAGE_EDGE_LINE_X = -16.45;
+// 区間テーマカラーの帯は外側線のさらに外、舗装の外端に沿って全長に走らせる。
+const SECTION_STRIP_X = -16.72;
 
 /* ---- 道路(アスファルト質感 + 区間ごとの色味) ---- */
 const roadGeometry = new THREE.BoxGeometry(13.2, 0.12, WRAP_LENGTH);
@@ -135,80 +128,44 @@ solidLines(SECTIONS.map((section) => sectionX(section, -1)));
 const mainOuterEdgeXs = SECTIONS.map((section) => sectionX(section, -13));
 solidLines(mainOuterEdgeXs, -WRAP_LENGTH / 2, MERGE_OPEN_START_Z);
 solidLines(mainOuterEdgeXs, MERGE_OPEN_END_Z, WRAP_LENGTH / 2);
-solidLines(
-  SECTIONS.map((section) => sectionX(section, RAMP_GEOMETRY.gore.outerX)),
-  -WRAP_LENGTH / 2,
-  WRAP_LENGTH / 2,
-  0.012,
-);
+// 加速車線と路側帯の境界(外側線)は全長にわたって実線
+solidLines(SECTIONS.map((section) => sectionX(section, FRONTAGE_EDGE_LINE_X)));
+for (const section of SECTIONS) {
+  const stripMaterial = new THREE.MeshBasicMaterial({ color: SECTION_THEME[section].strip });
+  scene.add(
+    instancedAt(
+      new THREE.BoxGeometry(0.16, 0.02, WRAP_LENGTH),
+      stripMaterial,
+      loopCopies(0).map((z): [number, number, number] => [
+        sectionX(section, SECTION_STRIP_X),
+        0.012,
+        z,
+      ]),
+    ),
+  );
+}
 dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, x))));
 
-/* ---- 本線と側道の分離帯(合流区間以外) ---- */
-(function buildFrontageRoadSeparators() {
-  const taperGeometry = new THREE.BoxGeometry(1, 0.006, SEPARATOR_TAPER_LENGTH / 6);
-  const poleGeometry = new THREE.BoxGeometry(0.1, 0.8, 0.1);
-  const poleMaterial = new THREE.MeshLambertMaterial({ color: 0xe9edf0 });
-  const polePositions: [number, number, number][] = [];
-
-  for (const section of SECTIONS) {
-    const stripMaterial = new THREE.MeshBasicMaterial({ color: SECTION_THEME[section].strip });
-    // 周回境界をまたいで等幅部分が連続するよう、基準周回内を2区間に分ける。
-    for (const [startZ, endZ] of [
-      [-WRAP_LENGTH / 2, SEPARATOR_FULL_END_Z],
-      [SEPARATOR_FULL_START_Z, WRAP_LENGTH / 2],
-    ] as const) {
-      const length = endZ - startZ;
-      const centerZ = (startZ + endZ) / 2;
-      const positions = loopCopies(centerZ).map((z): [number, number, number] => [
-        sectionX(section, SEPARATOR_X),
-        0.008,
-        z,
-      ]);
-      const strip = instancedAt(
-        new THREE.BoxGeometry(SEPARATOR_WIDTH, 0.006, length),
-        stripMaterial,
-        positions,
-      );
-      scene.add(strip);
-    }
-
-    const taperMatrices: THREE.Matrix4[] = [];
-    for (const offset of loopCopies(0)) {
-      for (let i = 0; i < 6; i++) {
-        const progress = (i + 0.5) / 6;
-        const width = SEPARATOR_WIDTH * progress;
-        const upstreamZ = MERGE_OPEN_END_Z + progress * SEPARATOR_TAPER_LENGTH + offset;
-        const downstreamZ = MERGE_OPEN_START_Z - progress * SEPARATOR_TAPER_LENGTH + offset;
-        for (const z of [upstreamZ, downstreamZ])
-          taperMatrices.push(
-            new THREE.Matrix4()
-              .makeScale(width, 1, 1)
-              .setPosition(sectionX(section, SEPARATOR_X), 0.008, z),
-          );
-      }
-    }
-    const tapers = instancedWith(taperGeometry, stripMaterial, taperMatrices);
-    scene.add(tapers);
-
-    // 周回境界を展開してから戻すことで、境界をまたいでも正確な9m間隔を保つ。
-    const unwrappedFullEndZ = SEPARATOR_FULL_END_Z + WRAP_LENGTH;
-    for (
-      let unwrappedZ = SEPARATOR_FULL_START_Z + SEPARATOR_POLE_SPACING / 2;
-      unwrappedZ < unwrappedFullEndZ;
-      unwrappedZ += SEPARATOR_POLE_SPACING
-    ) {
-      const z = unwrappedZ - WRAP_LENGTH;
-      for (const offset of loopCopies(0))
-        polePositions.push([
-          sectionX(section, SEPARATOR_POLE_X),
-          SEPARATOR_POLE_CENTER_Y,
-          z + offset,
-        ]);
-    }
-  }
-
-  const poles = instancedAt(poleGeometry, poleMaterial, polePositions);
-  scene.add(poles);
+/* ---- 合流レーンのテーパー(斜めの白線) ----
+   加速車線の終わりで外側の縁が本線の外側線へ寄っていく斜めの実線。
+   この1本が「ここまでが合流レーン」という形を描く。路側帯には何も引かない。 */
+(function buildMergeTaperLine() {
+  const { gore } = RAMP_GEOMETRY;
+  const dx = gore.mainX - gore.outerX; // 本線側へ寄る量
+  const dz = gore.endZ - gore.startZ; // 進行方向(-Z)への長さ
+  const length = Math.hypot(dx, dz);
+  const angle = Math.atan2(-dz, dx); // +X 方向の棒をテーパーの向きへ倒す角
+  const geometry = new THREE.BoxGeometry(length, 0.02, 0.16);
+  const matrices = SECTIONS.map((section) =>
+    new THREE.Matrix4()
+      .makeRotationY(angle)
+      .setPosition(
+        sectionX(section, (gore.outerX + gore.mainX) / 2),
+        0.012,
+        (gore.startZ + gore.endZ) / 2,
+      ),
+  );
+  scene.add(instancedWith(geometry, whiteLineMaterial, matrices));
 })();
 
 /* ---- 合流部マーキング ---- */
@@ -221,22 +178,6 @@ for (const section of SECTIONS) {
   for (let z = gore.startZ + 6; z < zTop - 6; z += 9)
     dashPositions.push([sectionX(section, gore.mainX), 0.012, z]);
   scene.add(instancedAt(dashGeometry, whiteLineMaterial, dashPositions));
-  // 終端の導流帯(先細りのゼブラ)。三角形の辺を補間して配置する。
-  const zebraGeometry = new THREE.BoxGeometry(1, 0.02, 1.3);
-  const zebraMatrices: THREE.Matrix4[] = [];
-  const zebraCount = 5;
-  for (let i = 0; i < zebraCount; i++) {
-    const progress = (i + 0.5) / zebraCount;
-    const z = gore.startZ + (gore.endZ - gore.startZ) * progress;
-    const outerX = gore.outerX + (gore.mainX - gore.outerX) * progress;
-    const width = gore.mainX - outerX;
-    zebraMatrices.push(
-      new THREE.Matrix4()
-        .makeScale(width, 1, 1)
-        .setPosition(sectionX(section, outerX + width / 2), 0.012, z),
-    );
-  }
-  scene.add(instancedWith(zebraGeometry, whiteLineMaterial, zebraMatrices));
 }
 
 /* ---- 区間の仕切り（ガードレール付き） ----
@@ -362,16 +303,21 @@ function makeSignTexture(title: string, subtitle: string, background: string): T
 function buildGantry(section: Section, z: number): void {
   const theme = SECTION_THEME[section];
   const centerX = sectionX(section, -7);
+  const outerPostX = sectionX(section, -17.4);
+  const innerPostX = sectionX(section, -0.1);
   const group = new THREE.Group();
   const steel = new THREE.MeshLambertMaterial({ color: 0x99a1aa });
-  for (const postX of [centerX - 6.9, centerX + 6.9]) {
+  for (const postX of [outerPostX, innerPostX]) {
     const post = new THREE.Mesh(new THREE.BoxGeometry(0.35, 6.6, 0.35), steel);
     post.position.set(postX, 3.3, z);
     post.castShadow = true;
     group.add(post);
   }
-  const beam = new THREE.Mesh(new THREE.BoxGeometry(14.5, 0.4, 0.4), steel);
-  beam.position.set(centerX, 6.4, z);
+  const beam = new THREE.Mesh(
+    new THREE.BoxGeometry(innerPostX - outerPostX + 0.7, 0.4, 0.4),
+    steel,
+  );
+  beam.position.set((outerPostX + innerPostX) / 2, 6.4, z);
   beam.castShadow = true;
   group.add(beam);
   const texture = makeSignTexture(theme.title, theme.subtitle, theme.signBackground);

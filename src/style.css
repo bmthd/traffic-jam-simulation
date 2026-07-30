@@ -67,7 +67,7 @@ body {
   position: fixed;
   inset: 0;
 }
-canvas {
+#container > canvas {
   display: block;
   touch-action: none;
 }
