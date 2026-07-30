@@ -121,7 +121,8 @@
         </div>
       </div>
 
-      <!-- 下部: 2区間の比較パネル(1枚) -->
+      <!-- 下部: 勝敗パネル(1枚)。主役は「どっちが勝ってるか」で、
+           車両数・平均速度・渋滞スコアは参考情報として小さく添える(Issue #113) -->
       <div id="infoPanel" class="sign panel">
         <button
           type="button"
@@ -129,71 +130,76 @@
           aria-expanded="true"
           aria-controls="infoPanelBody"
         >
-          <span class="route-badge">比</span>渋滞スコア比較
-          <span class="mini-pair"
-            ><span class="mL" id="miniLeft">0.0</span><span class="sep">vs</span
-            ><span class="mR" id="miniRight">0.0</span></span
-          >
+          <span class="route-badge">勝</span>どっちが勝ってるか
+          <span class="mini-lead" id="miniLead">互角</span>
           <span class="chev"><i data-lucide="chevron-down"></i></span>
         </button>
         <div id="infoPanelBody" class="panel-body">
-          <div class="compare">
-            <div class="side left">
-              <div class="crown" id="crownLeft"><i data-lucide="crown"></i>こちらがスムーズ</div>
-              <div class="side-head">
-                <span class="route-badge">義</span
-                ><i data-lucide="circle" class="dot dot-green"></i>義務あり
+          <!-- 主役: 開始からの累積で、スムーズだった時間が長いのはどちらか -->
+          <div class="verdict" id="verdict">
+            <div class="verdict-main" id="verdictMain">互角</div>
+            <div class="verdict-sub" id="verdictSub">スムーズだった時間はほぼ互角</div>
+            <div class="smooth-time-bars">
+              <span class="smooth-side"
+                >義務あり <span class="num" id="smoothTimeLeft">0:00</span></span
+              >
+              <div class="smooth-bar"><div id="smoothBarLeft"></div></div>
+              <span class="smooth-side"
+                ><span class="num" id="smoothTimeRight">0:00</span> 義務なし</span
+              >
+            </div>
+          </div>
+
+          <!-- 参考情報: 今この瞬間の各区間の状態 -->
+          <div class="refstats">
+            <div class="refside">
+              <div class="refside-head">
+                <i data-lucide="circle" class="dot dot-green"></i>義務あり
+                <span class="now-crown" id="crownLeft"><i data-lucide="crown"></i>今スムーズ</span>
               </div>
-              <div class="row">
-                車両数: <span class="num" id="countLeft">0</span> 台 ／ 平均
+              <div class="bar"><div id="barLeft"></div></div>
+              <div class="refrow">
+                スコア <span class="num" id="scoreLeft">0.0</span><span class="refunit">/100</span>
+                <span class="refstatus" id="statusLeft"><i data-lucide="gauge"></i>スイスイ</span>
+              </div>
+              <div class="refrow">
+                <span class="num" id="countLeft">0</span> 台 ／ 平均
                 <span class="num" id="avgLeft">0</span> km/h
               </div>
-              <div class="row" style="margin-bottom: 0">
-                渋滞スコア
-                <div class="score-line">
-                  <span class="score-big" id="scoreLeft">0.0</span
-                  ><span class="score-unit">/ 100</span>
-                </div>
-                <div class="bar"><div id="barLeft"></div></div>
-                <div class="status" id="statusLeft"><i data-lucide="gauge"></i>スイスイ</div>
-              </div>
-              <div class="note">※ 速い車が来たら走行車線へ譲り、追い越し後はすぐ戻る</div>
             </div>
             <div class="seam"></div>
-            <div class="side right">
-              <div class="crown" id="crownRight"><i data-lucide="crown"></i>こちらがスムーズ</div>
-              <div class="side-head">
-                <span class="route-badge">自</span
-                ><i data-lucide="circle" class="dot dot-amber"></i>義務なし
+            <div class="refside">
+              <div class="refside-head">
+                <i data-lucide="circle" class="dot dot-amber"></i>義務なし
+                <span class="now-crown" id="crownRight"><i data-lucide="crown"></i>今スムーズ</span>
               </div>
-              <div class="row">
-                車両数: <span class="num" id="countRight">0</span> 台 ／ 平均
+              <div class="bar"><div id="barRight"></div></div>
+              <div class="refrow">
+                スコア <span class="num" id="scoreRight">0.0</span><span class="refunit">/100</span>
+                <span class="refstatus" id="statusRight"><i data-lucide="gauge"></i>スイスイ</span>
+              </div>
+              <div class="refrow">
+                <span class="num" id="countRight">0</span> 台 ／ 平均
                 <span class="num" id="avgRight">0</span> km/h
               </div>
-              <div class="row" style="margin-bottom: 0">
-                渋滞スコア
-                <div class="score-line">
-                  <span class="score-big" id="scoreRight">0.0</span
-                  ><span class="score-unit">/ 100</span>
-                </div>
-                <div class="bar"><div id="barRight"></div></div>
-                <div class="status" id="statusRight"><i data-lucide="gauge"></i>スイスイ</div>
-              </div>
-              <div class="note">※ 譲る義務がなく、追い越し車線に長居するマイペース派も混在</div>
             </div>
           </div>
-          <!-- 開始からの累積: どちらが優勢だった時間が長いか(1本のバーを割合で分割) -->
-          <div class="smooth-time">
-            <div class="smooth-time-head">
-              <i data-lucide="timer"></i>優勢だった時間(開始から)
-              <span class="smooth-lead" id="smoothLead">互角</span>
+
+          <!-- 知りたい人向け: 判定のしくみは畳んでおく -->
+          <details class="criteria">
+            <summary>
+              <i data-lucide="scale"></i>判定基準<span class="crit-chev"
+                ><i data-lucide="chevron-down"></i
+              ></span>
+            </summary>
+            <div class="criteria-body">
+              <p class="criteria-diff">
+                <b>区間の違い</b>:
+                義務あり側は速い車に追いつかれたら走行車線へ譲り、追い越し後はすぐ戻ります。義務なし側は譲る義務がなく、追い越し車線に長居するマイペース派も混在します。それ以外の条件は両区間で共通です。
+              </p>
+              <ul id="criteriaList"></ul>
             </div>
-            <div class="smooth-time-bars">
-              <span class="smooth-side">義 <span class="num" id="smoothTimeLeft">0:00</span></span>
-              <div class="smooth-bar"><div id="smoothBarLeft"></div></div>
-              <span class="smooth-side"><span class="num" id="smoothTimeRight">0:00</span> 自</span>
-            </div>
-          </div>
+          </details>
         </div>
       </div>
     </div>
