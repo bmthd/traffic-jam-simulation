@@ -141,12 +141,16 @@ body {
   color: #05613b;
   border-color: #05613b;
 }
-.compare {
+/* 参考情報(車両数・平均速度・渋滞スコア)は主役の下に小さく並べる (Issue #113) */
+.refstats {
   display: grid;
   grid-template-columns: 1fr 1px 1fr;
   gap: 0 14px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.28);
 }
-.compare .seam {
+.refstats .seam {
   background: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0) 0%,
@@ -155,55 +159,36 @@ body {
     rgba(255, 255, 255, 0) 100%
   );
 }
-.side {
+.refside {
   min-width: 0;
 }
-/* 王冠はパネル上端の外側左右へ(#infoPanel が位置基準) */
-.side.left .crown {
-  left: 14px;
-  right: auto;
-}
-.side.right .crown {
-  right: 14px;
-  left: auto;
-}
-.side-head {
+.refside-head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   font-weight: 800;
-  font-size: 13px;
-  margin-bottom: 6px;
+  font-size: 11.5px;
+  margin-bottom: 4px;
 }
-.side.right .route-badge {
-  color: #965c03;
-  border-color: #965c03;
-}
-.mini-pair {
+/* 折りたたみ時にタイトル行へ出す要約(今どちらがリードしているか) */
+.mini-lead {
   display: none;
   margin-left: auto;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
-#infoPanel.collapsed .mini-pair {
+#infoPanel.collapsed .mini-lead {
   display: inline-flex;
-  gap: 5px;
   align-items: center;
 }
-.mini-pair .mL {
+.mini-lead.lead-left {
   color: #c9f5dc;
 }
-.mini-pair .mR {
+.mini-lead.lead-right {
   color: #ffe1a8;
-}
-.mini-pair .sep {
-  opacity: 0.6;
-  font-weight: 600;
-}
-.mini-pair .win {
-  text-shadow: 0 0 8px rgba(255, 213, 74, 0.9);
 }
 
 .panel-title {
@@ -256,40 +241,41 @@ button.panel-title {
   margin: 7px 0;
   line-height: 1.45;
 }
-.note {
-  font-size: 10.5px;
-  opacity: 0.85;
-  margin-top: 6px;
-  line-height: 1.5;
-}
 .num {
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
 
-/* 開始からの累積「優勢だった時間」(Issue #26) */
-.smooth-time {
-  margin-top: 9px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.28);
+/* 主役: 開始からの累積「スムーズだった時間」でどちらが勝っているか (Issue #26, #113) */
+.verdict {
+  text-align: center;
 }
-.smooth-time-head {
+.verdict-main {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  font-weight: 800;
-  margin-bottom: 5px;
+  justify-content: center;
+  gap: 7px;
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 1.15;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
 }
-.smooth-lead {
-  margin-left: auto;
-  font-size: 11px;
-  font-weight: 800;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  white-space: nowrap;
+.verdict.lead-left .verdict-main {
+  color: #d7ffe8;
+}
+.verdict.lead-right .verdict-main {
+  color: #ffe9c2;
+}
+.verdict-main .lucide {
+  width: 0.85em;
+  height: 0.85em;
+  color: #ffd54a;
+}
+.verdict-sub {
+  font-size: 11.5px;
+  opacity: 0.88;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
 }
 .smooth-time-bars {
   display: flex;
@@ -322,29 +308,29 @@ button.panel-title {
   transition: width 0.3s;
 }
 
-.score-line {
+/* 参考情報の 1 行(スコア・台数・平均速度) */
+.refrow {
+  font-size: 11px;
+  line-height: 1.5;
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  margin-top: 2px;
+  flex-wrap: wrap;
+  gap: 0 4px;
 }
-.score-big {
-  font-size: 30px;
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
+.refunit {
+  opacity: 0.75;
 }
-.score-unit {
-  font-size: 11px;
-  opacity: 0.85;
+.refstatus {
+  margin-left: auto;
+  font-weight: 700;
+  white-space: nowrap;
 }
 .bar {
-  height: 9px;
+  height: 7px;
   border-radius: 5px;
   background: rgba(255, 255, 255, 0.25);
   overflow: hidden;
-  margin: 7px 0 4px;
+  margin: 0 0 4px;
 }
 .bar > div {
   height: 100%;
@@ -355,29 +341,64 @@ button.panel-title {
     width 0.25s linear,
     background-color 0.25s linear;
 }
-.status {
-  font-size: 12.5px;
-  font-weight: 700;
-}
-.crown {
-  position: absolute;
-  top: -13px;
-  right: 10px;
+/* 今この瞬間スムーズな側に付く小さな王冠(累積の勝敗とは別) */
+.now-crown {
+  display: none;
+  margin-left: auto;
+  align-items: center;
   background: #fff;
   color: #a87900;
-  border: 2px solid #ffd54a;
+  border: 1px solid #ffd54a;
   border-radius: 999px;
-  padding: 1px 10px;
+  padding: 0 6px;
+  font-size: 9.5px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.now-crown.show {
+  display: inline-flex;
+}
+
+/* 判定基準のアコーディオン(知りたい人だけ開く) */
+.criteria {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.28);
+}
+.criteria > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11.5px;
   font-weight: 800;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.25);
-  opacity: 0;
-  transform: translateY(4px);
-  transition: all 0.3s;
+  cursor: pointer;
+  opacity: 0.9;
+  list-style: none;
 }
-.crown.show {
-  opacity: 1;
-  transform: translateY(0);
+.criteria > summary::-webkit-details-marker {
+  display: none;
+}
+.crit-chev {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  transition: transform 0.25s;
+}
+.criteria[open] .crit-chev {
+  transform: rotate(180deg);
+}
+.criteria-body {
+  font-size: 10.5px;
+  line-height: 1.6;
+  opacity: 0.9;
+  margin-top: 5px;
+}
+.criteria-diff {
+  margin: 0 0 5px;
+}
+.criteria-body ul {
+  margin: 0;
+  padding-left: 1.2em;
 }
 
 input[type='range'] {
@@ -862,17 +883,16 @@ body.night #nightBtn {
     width: calc(100vw - 16px);
     padding: 9px 10px;
   }
-  .compare {
+  .refstats {
     gap: 0 9px;
   }
-  .side-head {
-    font-size: 11.5px;
+  .refside-head {
+    font-size: 11px;
     gap: 5px;
   }
-  .crown {
-    font-size: 10px;
-    padding: 1px 7px;
-    right: 2px;
+  .now-crown {
+    font-size: 9px;
+    padding: 0 5px;
   }
   .panel-title {
     font-size: 12px;
@@ -881,17 +901,15 @@ body.night #nightBtn {
     font-size: 11px;
     margin: 5px 0;
   }
-  .score-big {
-    font-size: 22px;
+  .verdict-main {
+    font-size: 20px;
   }
-  .hint,
-  .note {
+  .hint {
     display: none;
   }
 }
 @media (max-height: 520px) {
-  .hint,
-  .note {
+  .hint {
     display: none;
   }
   .row {
@@ -915,8 +933,8 @@ body.night #nightBtn {
     gap: 10px;
     padding: 10px;
   }
-  /* fixed をやめてフレックス項目にする。position は王冠(.crown)の
-     位置基準として必要なので relative を残す */
+  /* fixed をやめてフレックス項目にする。position は重なり順(z-index)の
+     指定が効くよう relative を残す */
   #panelLayer > .panel {
     position: relative;
     inset: auto;
@@ -940,8 +958,7 @@ body.night #nightBtn {
     /* 操作パネルは上、比較パネルは下という元の並びの印象を保つ */
     align-self: flex-end;
   }
-  /* 画面が極端に低いときはタイトル行を残したまま中身だけスクロールさせる。
-     王冠は #infoPanel 基準の絶対配置なのでスクロール領域に切られない */
+  /* 画面が極端に低いときはタイトル行を残したまま中身だけスクロールさせる */
   .panel-body {
     overflow: auto;
     min-height: 0;
@@ -969,9 +986,16 @@ button .lucide {
 .fair-note .lucide {
   margin-right: 5px;
 }
-.side-head .lucide,
-.status .lucide {
-  margin-right: 6px;
+.refside-head .lucide,
+.refstatus .lucide,
+.criteria > summary .lucide {
+  margin-right: 5px;
+}
+.crit-chev .lucide {
+  width: 13px;
+  height: 13px;
+  margin-right: 0;
+  stroke-width: 2.4;
 }
 .panel-title .lucide {
   flex: none;
@@ -989,11 +1013,11 @@ button .lucide {
   height: 13px;
   stroke-width: 2.4;
 }
-.crown .lucide {
-  width: 13px;
-  height: 13px;
+.now-crown .lucide {
+  width: 11px;
+  height: 11px;
   margin-right: 3px;
-  vertical-align: -0.2em;
+  vertical-align: -0.15em;
   color: #a87900;
 }
 /* 義務あり/なしの識別ドット: 白い縁取り + 塗り色でどの背景でも視認できる */
@@ -1010,8 +1034,9 @@ button .lucide {
   color: #fff;
   fill: #ffc24a;
 }
-/* 勝者マーカー(折りたたみ時のミニ表示)は擬似要素のため lucide crown を埋め込む */
-.mini-pair .win::before {
+/* リードマーカー(折りたたみ時のミニ表示)は擬似要素のため lucide crown を埋め込む */
+.mini-lead.lead-left::before,
+.mini-lead.lead-right::before {
   content: '';
   display: inline-block;
   width: 1em;
