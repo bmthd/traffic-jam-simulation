@@ -4,9 +4,10 @@
    ============================================================ */
 import { CONST, TYPES } from './constants';
 import type { Section, VehicleTypeName, VehicleTypeSpec } from './constants';
+import { LaneChangeController } from './lane-change-controller';
 import { MergeCoordinator } from './merge-coordinator';
 export { mergeCongestion, nextArrivalDistance, smoothstepRange } from './merge-coordinator';
-import { clamp, lerp, smooth, wrapDelta, WRAP_LENGTH } from './utils';
+import { clamp, lerp, smooth, WRAP_LENGTH } from './utils';
 import type { World } from './world';
 
 export type LaneChangeState = 'none' | 'changing' | 'holding' | 'cancel';
@@ -538,62 +539,19 @@ export class Vehicle {
 
   // 隣車線にほぼ同速で並走する車両がいるか(車線変更を物理的に塞ぐ「象レース」検知)
   hasDeadlockAlongside(lane: number): boolean {
-    const vehicles = this.world.sectionVehicles[this.section];
-    for (const other of vehicles) {
-      if (other === this || !other.occupies(lane)) continue;
-      if (
-        Math.abs(wrapDelta(other.z - this.z)) < (this.length + other.length) / 2 + 5 &&
-        Math.abs(other.speed - this.speed) < 1.5
-      )
-        return true;
-    }
-    return false;
+    return new LaneChangeController(this).hasDeadlockAlongside(lane);
   }
 
   // 復帰先車線で自分の真横(±車体+8m)を占有し、車線変更を物理的に塞ぐ並走車を返す
   findAlongside(lane: number): Vehicle | null {
-    const vehicles = this.world.sectionVehicles[this.section];
-    let best: Vehicle | null = null,
-      bestDistance = Infinity;
-    for (const other of vehicles) {
-      if (other === this || !other.occupies(lane)) continue;
-      const distance = Math.abs(wrapDelta(other.z - this.z));
-      if (distance < (this.length + other.length) / 2 + 8 && distance < bestDistance) {
-        bestDistance = distance;
-        best = other;
-      }
-    }
-    return best;
+    return new LaneChangeController(this).findAlongside(lane);
   }
 
   // 加速復帰の開始判定: 追い越し車線で後続に追いつかれ、復帰先(レーン1)が並走車に
   // 塞がれている時、「速度差が小さく、並走車の前方が空いていて前に出れば戻れる
   // 見込みがある」なら一時的に加速して並走車を抜き、車線復帰を狙う
   tryStartReturnBoost(ahead: NeighborInfo | null): boolean {
-    // ロジックは左右共通。区間差は「戻ろうとする早さ」(returnTime = 義務の有無に
-    // 由来する気質)からのみ生まれ、この判定自体は両区間とも同じ条件で発動する。
-    // 流れが悪い時に加速すると自分がブレーキ連鎖の起点になる。ほぼ自分の
-    // ペースで走れている(=本当に並走車だけが障害)時に限って踏み込む
-    if (this.speed < this.desiredSpeed * 0.85) return false;
-    // (a) 明確に速い後続に追いつかれている(=どいてあげたい動機がある)時だけ
-    //     発動する(閾値は「追いつかれた車両の義務」の譲り判定と同一)
-    const behind = this.findBehind(this.lane);
-    if (!behind) return false;
-    const relativeSpeed = behind.vehicle.speed - this.speed;
-    if (relativeSpeed < 2.5 || behind.gap > 24 + relativeSpeed * 4.5) return false;
-    // (b) 復帰先を並走車が塞いでおり、待っていても抜けず(相手が同速以上)、
-    //     かつ速度差が小さい(少し加速すれば前に出られる)
-    const side = this.findAlongside(1);
-    if (!side) return false;
-    const sideSpeedDiff = side.speed - this.speed;
-    if (sideSpeedDiff < -0.5 || sideSpeedDiff > CONST.RETURN_BOOST_MAX_SPEED_DIFF) return false;
-    // (c) 並走車の前方に空きがあり、前に出れば戻るスペースができる見込みがある
-    const sideAhead = side.findAhead(1);
-    if (sideAhead && sideAhead.gap < CONST.RETURN_BOOST_TARGET_CLEARANCE) return false;
-    // (d) 自車線の前方にも加速の余地がある(前が詰まっているのに踏まない)
-    if (ahead && ahead.gap < CONST.RETURN_BOOST_AHEAD_CLEARANCE + this.speed * 0.5) return false;
-    this.returnBoostTimer = CONST.RETURN_BOOST_DURATION;
-    return true;
+    return new LaneChangeController(this).tryStartReturnBoost(ahead);
   }
 
   /**
@@ -636,281 +594,23 @@ export class Vehicle {
   // 車線変更先の安全確認: 'safe' | 'hold' | 'danger'
   // 左方向(譲り・キープレフト)は遅い車線へ移るため、要求マージンをやや緩和する
   checkLaneSafetyForChange(toLane: number): 'safe' | 'hold' | 'danger' {
-    let result: 'safe' | 'hold' | 'danger' = 'safe';
-    const relax = toLane > this.lane ? 0.8 : 1.0;
-    const vehicles = this.world.sectionVehicles[this.section];
-    for (const other of vehicles) {
-      if (other === this || !other.occupies(toLane)) continue;
-      // 周回路なので符号付き最短距離で前後を判定する(継ぎ目をまたぐ相手も拾う)。
-      // deltaZ <= 0 なら相手は前方(z が小さい側)、> 0 なら後方。
-      const deltaZ = wrapDelta(other.z - this.z);
-      if (Math.abs(deltaZ) > 90) continue;
-      if (deltaZ <= 0) {
-        // 変更先の前方車
-        const gap = -deltaZ - (this.length + other.length) / 2;
-        if (gap < 1.5) return 'danger';
-        const requiredGap = (4 + this.speed * 0.45) * relax;
-        if (gap < requiredGap) {
-          if (other.speed >= this.speed + 1)
-            result = 'hold'; // 前方だが自車より速い → 待機
-          else return 'danger';
-        }
-      } else {
-        // 変更先の後方車
-        const gap = deltaZ - (this.length + other.length) / 2;
-        if (gap < 1.5) return 'danger';
-        const relativeSpeed = other.speed - this.speed;
-        const requiredGap = (4 + Math.max(0, relativeSpeed) * 2.2 + other.speed * 0.22) * relax;
-        if (gap < requiredGap) {
-          if (relativeSpeed <= -1)
-            result = 'hold'; // 後方だが自車より遅い → 待機
-          else return 'danger';
-        }
-      }
-    }
-    return result;
+    return new LaneChangeController(this).checkLaneSafetyForChange(toLane);
   }
 
   tryLaneChange(toLane: number): boolean {
-    if (toLane < 0 || toLane > 2) return false;
-    if (this.world.blocksReservedLaneChange(this, toLane)) return false;
-    if (this.checkLaneSafetyForChange(toLane) !== 'safe') return false;
-    this.laneChange.state = 'changing';
-    this.laneChange.from = this.lane;
-    this.laneChange.to = toLane;
-    this.laneChange.progress = 0;
-    this.laneChange.holdTime = 0;
-    this.laneChange.checkTimer = 0.15;
-    this.world.stats.changes[this.section]++;
-    return true;
+    return new LaneChangeController(this).tryLaneChange(toLane);
   }
 
   cancelLaneChange(): void {
-    if (this.laneChange.from === 3 && this.laneChange.to === 2) {
-      const rear = this.mergePlan.rear;
-      if (rear?.mergeCooperationTarget === this.mergePlan.targetPassTime) {
-        rear.mergeCooperationTarget = null;
-        rear.mergeCooperationDecel = 0;
-      }
-      this.mergePlan = {
-        ...this.mergePlan,
-        state: 'seeking',
-        front: null,
-        rear: null,
-        targetPassTime: 0,
-        nextSource: null,
-        cooperationDecel: undefined,
-      };
-    }
-    if (this.laneChange.state !== 'cancel') {
-      this.laneChange.state = 'cancel';
-      this.world.stats.cancels[this.section]++;
-    }
+    return new LaneChangeController(this).cancelLaneChange();
   }
 
   updateLaneChange(deltaTime: number): void {
-    const laneChange = this.laneChange;
-    if (laneChange.state === 'none') return;
-    laneChange.checkTimer -= deltaTime;
-
-    if (laneChange.state === 'changing') {
-      laneChange.progress += deltaTime / CONST.LANE_CHANGE_DURATION;
-      if (laneChange.checkTimer <= 0) {
-        laneChange.checkTimer = 0.15;
-        const safety = this.checkLaneSafetyForChange(laneChange.to);
-        if (safety === 'danger') {
-          this.cancelLaneChange();
-          return;
-        }
-        if (safety === 'hold' && laneChange.progress < 0.3) {
-          laneChange.state = 'holding';
-          laneChange.holdTime = 0;
-        }
-      }
-      if (laneChange.progress >= 1) {
-        laneChange.progress = 1;
-        this.lane = laneChange.to;
-        laneChange.state = 'none';
-        if (laneChange.from === 3 && laneChange.to === 2) {
-          const targetPassTime = this.mergePlan.targetPassTime;
-          const rear = this.mergePlan.rear;
-          if (rear?.mergeCooperationTarget === targetPassTime) {
-            rear.mergeCooperationTarget = null;
-            rear.mergeCooperationDecel = 0;
-          }
-          this.mergePlan = {
-            ...this.mergePlan,
-            state: 'completed',
-            front: null,
-            rear: null,
-            targetPassTime: 0,
-            nextSource: null,
-            cooperationDecel: undefined,
-          };
-          this.mergedFromRamp = this.z >= CONST.MERGE_POINT_Z;
-          this.rampMergePassPending = true;
-        }
-        this.laneChangeCooldown = 4.0 + this.world.rng() * 5; // 変更直後は当分しない(面倒・疲れる)
-      }
-    } else if (laneChange.state === 'holding') {
-      laneChange.holdTime += deltaTime;
-      if (laneChange.checkTimer <= 0) {
-        laneChange.checkTimer = 0.15;
-        const safety = this.checkLaneSafetyForChange(laneChange.to);
-        if (safety === 'safe') laneChange.state = 'changing';
-        else if (safety === 'danger' || laneChange.holdTime > CONST.LANE_CHANGE_WAIT_MAX_DURATION)
-          this.cancelLaneChange();
-      }
-    } else if (laneChange.state === 'cancel') {
-      laneChange.progress -= deltaTime / (CONST.LANE_CHANGE_DURATION * 0.8);
-      if (laneChange.progress <= 0) {
-        laneChange.progress = 0;
-        laneChange.state = 'none';
-        this.lane = laneChange.from;
-        this.laneChangeCooldown = CONST.LANE_CHANGE_RETRY_COOLDOWN;
-      }
-    }
+    return new LaneChangeController(this).updateLaneChange(deltaTime);
   }
 
   decide(ahead: NeighborInfo | null, deltaTime: number): void {
-    // 渋滞吸収運転モードでは車線変更なし(単一車線の追従実験と同じ純粋比較)。
-    // 車線変更があると吸収運転車の広い車間が追い越しで埋められ、比較が濁る。
-    if (this.world.mode === 'absorb') return;
-    // ランプ車の合流開始は予約を確定した applyMergePlan だけが行う。
-    if (this.lane === 3) return;
-    // 渋滞にはまっている時は譲り・復帰・キープレフトの車線変更はしない。
-    // 実際のドライバーも、流れている時にだけ譲り合いの車線変更をする
-    const flowing = this.speed > this.desiredSpeed * 0.6;
-    // (0) 渋滞中の乗り換え: 自分の車線が進まず、隣が明確に流れている/空いている
-    // 時は隣へ移る(全員ではなく苛立っている人ほど。左右では左を優先)。
-    // これがないと「追い越し車線だけ詰まり、隣がガラ空き」の不自然な状態になる
-    if (!flowing && this.frustration > 0.5 && this.world.rng() < deltaTime / 3) {
-      const here = this.findAhead(this.lane);
-      const hereGap = here ? here.gap : 999;
-      const hereSpeed = here ? here.vehicle.speed : this.desiredSpeed;
-      let bestLane = -1,
-        bestScore = 4; // 「明確に良い」時だけ動く
-      for (const laneOffset of [1, -1]) {
-        // 左(走行車線側)から評価 = 同点なら左へ
-        const lane = this.lane + laneOffset;
-        if (lane < 0 || lane > 2) continue;
-        const candidateAhead = this.findAhead(lane);
-        // 渋滞中の判断は一瞥なので雑(隣の芝生は青く見える): ノイズ込みで評価
-        const score =
-          ((candidateAhead ? candidateAhead.gap : 999) - hereGap) * 0.15 +
-          ((candidateAhead ? candidateAhead.vehicle.speed : this.desiredSpeed) - hereSpeed) +
-          (this.world.rng() * 2 - 1) * 3;
-        if (score > bestScore) {
-          bestScore = score;
-          bestLane = lane;
-        }
-      }
-      if (bestLane >= 0 && this.tryLaneChange(bestLane)) {
-        this.yieldSlowTimer = 0.6; // 移った直後は体勢を立て直すため少し緩める
-        return;
-      }
-    }
-    // (0.5) マイペース派(義務なし区間): 走行車線に縛られず、追い越し車線を
-    // 定位置にして自分のペースで巡航する(これが義務なし文化の象徴)
-    if (this.camper && this.lane > 0 && flowing) {
-      this.keepRightTimer += deltaTime;
-      if (this.keepRightTimer > 6 && this.tryLaneChange(this.lane - 1)) {
-        this.keepRightTimer = 0;
-        return;
-      }
-    }
-    // (1) 「追いつかれた車両の義務」— 義務あり区間のみ: 速い後続車に進路を譲る。
-    // ただし現実のドライバー同様、(a)明確に速い車が来た時だけ、(b)移った先でも
-    // 自分のペースを保てる時だけ譲る(遅いトラックの直後への自己犠牲はしない)
-    if (this.yields && flowing && this.lane < 2) {
-      const behind = this.findBehind(this.lane);
-      if (behind) {
-        const relativeSpeed = behind.vehicle.speed - this.speed;
-        if (relativeSpeed > 2.5 && behind.gap < 24 + relativeSpeed * 4.5) {
-          const targetAhead = this.findAhead(this.lane + 1);
-          const okTarget =
-            !targetAhead ||
-            targetAhead.gap > 45 ||
-            targetAhead.vehicle.speed > this.desiredSpeed - 2;
-          if (okTarget && this.tryLaneChange(this.lane + 1)) {
-            this.world.stats.yields[this.section]++;
-            this.noOvertakeTimer = 6; // 譲った直後はしばらく追い越しを我慢する
-            return;
-          }
-          // 並走車に塞がれて譲れない(象レース)場合のみ、少し減速して後ろに入る
-          if (okTarget && this.hasDeadlockAlongside(this.lane + 1)) this.yieldSlowTimer = 1.0;
-        }
-      }
-    }
-    // (2) 追い越し — 両区間共通: 遅い前方車がいれば右車線へ。
-    // ただし人間は危険と面倒から車線変更を嫌うので、明確に遅い車に
-    // 「しばらく」抑え込まれて初めて決意する(イライラしているほど早い)
-    if (this.lane > 0) {
-      const blockedNow =
-        ahead &&
-        ahead.gap < 18 + this.speed * 0.9 &&
-        (ahead.vehicle.speed < this.desiredSpeed - 2 || this.speed < this.desiredSpeed * 0.88);
-      this.slowAheadTimer = blockedNow ? this.slowAheadTimer + deltaTime : 0;
-      let want = this.slowAheadTimer > 3.0 * this.laneChangeAversion * (1 - 0.6 * this.frustration);
-      // 吸収運転車は車線を維持して波を吸収する。よほど遅くない限り追い越さない
-      if (want && this.absorber && this.speed > this.desiredSpeed * 0.55) want = false;
-      // 移った先が今より悪ければ追い越さない(渋滞した追い越し車線へは突っ込まない)
-      if (want && ahead) {
-        const targetAhead = this.findAhead(this.lane - 1);
-        if (
-          targetAhead &&
-          targetAhead.vehicle.speed < ahead.vehicle.speed + 1 &&
-          targetAhead.gap < ahead.gap + 10
-        )
-          want = false;
-      }
-      if (want && this.noOvertakeTimer > 0) {
-        // 我慢中はよほど詰まらない限り追い越さない(譲り→追い越しの往復を防ぐ)
-        want =
-          !!ahead &&
-          ahead.gap < 12 + this.speed * 0.5 &&
-          ahead.vehicle.speed < this.desiredSpeed - 5;
-      }
-      if (want && this.tryLaneChange(this.lane - 1)) return;
-    }
-    // (3) 追い越し車線からの復帰 — 両区間共通だが、復帰の早さは気質 (returnTime) で異なる
-    if (this.lane === 0) {
-      const slowAhead = ahead && ahead.gap < 55 && ahead.vehicle.speed < this.desiredSpeed - 1;
-      if (!slowAhead) this.returnTimer += deltaTime;
-      else this.returnTimer = 0;
-      if (this.returnTimer > this.returnTime && flowing) {
-        if (this.tryLaneChange(1)) {
-          this.returnTimer = 0; // 加速中なら残り時間だけ速度を維持したまま戻る
-        } else if (this.returnBoostTimer <= 0) {
-          // 復帰先が塞がっている: まず「加速して並走車の前に出て戻る」を試み、
-          // 見込みがなければ従来どおり少し減速して並走車の後ろに入る
-          if (this.returnBoostCooldown > 0 || !this.tryStartReturnBoost(ahead)) {
-            if (this.hasDeadlockAlongside(1)) this.yieldSlowTimer = 1.0;
-          }
-        }
-      }
-      this.keepLeftTimer = 0;
-    } else if (this.keepLeft && flowing && this.lane === 1) {
-      // (4) キープレフト — 義務あり区間のみ: 空いていれば走行車線へ寄る
-      this.returnTimer = 0;
-      // 70m先まで見て、自分のペースで走れる場合だけ走行車線へ寄る(トラック隊列の罠を回避)
-      const leftAhead = this.findAhead(2);
-      const leftClear =
-        !leftAhead || leftAhead.gap > 70 || leftAhead.vehicle.speed > this.desiredSpeed - 1;
-      const notBlocked = !ahead || ahead.gap > 22;
-      if (leftClear && notBlocked) {
-        this.keepLeftTimer += deltaTime;
-        if (this.keepLeftTimer > 2.0 && this.tryLaneChange(2)) {
-          this.keepLeftTimer = 0;
-          this.noOvertakeTimer = 2;
-        }
-      } else {
-        this.keepLeftTimer = 0;
-      }
-    } else {
-      this.returnTimer = 0;
-      this.keepLeftTimer = 0;
-    }
+    return new LaneChangeController(this).decide(ahead, deltaTime);
   }
 
   update(deltaTime: number): void {
