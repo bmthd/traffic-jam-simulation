@@ -9,6 +9,8 @@
 
 - ランタイム: Node.js 26 (`.node-version` で固定)
 - パッケージマネージャ: pnpm (`package.json#packageManager` で固定)
+- ツール導入: [mise](https://mise.jdx.dev/) (`mise.toml`)。`mise install` で Node (`.node-version`) と pnpm が揃う。
+  CI も同じ設定を `jdx/mise-action` 経由で使う
 - ツールチェーン: [Vite+](https://viteplus.dev/) (`vp`) に統一。
   ビルド (Vite) / テスト (Vitest) / lint (Oxlint) / フォーマット (Oxfmt) / 型チェックがすべて `vp` 経由で動く
 
