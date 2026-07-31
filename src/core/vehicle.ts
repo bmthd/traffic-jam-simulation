@@ -169,8 +169,7 @@ export type VehicleFactory = (
 
 export class Vehicle {
   world: World;
-  /** 判断を委譲するコントローラ群 (生成時に注入され、以降は差し替えない) */
-  readonly deps: VehicleDeps;
+  /** 判断の委譲先。生成時に注入され、以降は差し替えない (Issue #120) */
   readonly laneChangeController: LaneChangeController;
   readonly longitudinalController: LongitudinalController;
   readonly mergeCoordinator: MergeCoordinator;
@@ -244,14 +243,9 @@ export class Vehicle {
     z: number,
     typeName: VehicleTypeName,
     desiredSpeed: number,
-    deps: VehicleDeps = world.vehicleDeps,
+    deps: VehicleDeps = world.deps.vehicleDeps,
   ) {
     this.world = world;
-    // コントローラは状態を持たない薄い委譲先なので、1台につき1組だけ作る
-    this.deps = deps;
-    this.laneChangeController = deps.createLaneChangeController(this);
-    this.longitudinalController = deps.createLongitudinalController(this);
-    this.mergeCoordinator = deps.createMergeCoordinator(this);
     this.spawnOrder = world.nextVehicleOrder++;
     this.section = section; // 'L' = 義務あり / 'R' = 義務なし
     this.lane = lane; // 0 = 追い越し車線(進行方向の右端)
@@ -358,6 +352,12 @@ export class Vehicle {
     this.laneChangeAversion = 0.7 + random() * 0.6; // 車線変更への腰の重さ(個人差)
     this.slowAheadTimer = 0; // 遅い車に抑え込まれている時間
     this.noiseAmplitude = 0.5 + random() * 0.7; // 揺らぎの大きさの個人差
+
+    // コントローラは状態を持たない委譲先なので、1台につき1組だけ作る。
+    // 生成時に車両の状態を読んでも安全なよう、初期化を終えてから作る
+    this.laneChangeController = deps.createLaneChangeController(this);
+    this.longitudinalController = deps.createLongitudinalController(this);
+    this.mergeCoordinator = deps.createMergeCoordinator(this);
   }
 
   occupies(lane: number): boolean {

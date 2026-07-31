@@ -61,8 +61,6 @@ export interface SmoothTime {
 export class World {
   /** 生成時に注入された依存 (以降は差し替えない) */
   readonly deps: WorldDeps;
-  /** この World が作る車両へ渡すコントローラ群の初期化 */
-  readonly vehicleDeps: VehicleDeps;
   rng: Rng;
   mode: SimMode;
   spawnInterval: number;
@@ -87,7 +85,6 @@ export class World {
 
   constructor(options: WorldOptions = {}, deps: WorldDeps = createWorldDeps()) {
     this.deps = deps;
-    this.vehicleDeps = deps.vehicleDeps;
     this.rng = options.rng || Math.random;
     this.mode = options.mode || 'rules'; // 'rules' = ルール比較 / 'absorb' = 渋滞吸収運転
     this.spawnInterval = options.spawnInterval != null ? options.spawnInterval : 800;
@@ -105,7 +102,11 @@ export class World {
     this.smoothTime = { L: 0, R: 0, draw: 0 };
   }
 
-  /** 車両を生成する。実体の選択は注入された依存に委ねる (Issue #120)。 */
+  /**
+   * 車両を生成する。実体の選択は注入された依存に委ねる (Issue #120)。
+   * 車両側の依存も明示的に渡し、生成関数を差し替えても
+   * vehicleDeps の差し替えが黙って無視されないようにする。
+   */
   createVehicle(
     section: Section,
     lane: number,
@@ -113,7 +114,15 @@ export class World {
     typeName: VehicleTypeName,
     desiredSpeed: number,
   ): Vehicle {
-    return this.deps.createVehicle(this, section, lane, z, typeName, desiredSpeed);
+    return this.deps.createVehicle(
+      this,
+      section,
+      lane,
+      z,
+      typeName,
+      desiredSpeed,
+      this.deps.vehicleDeps,
+    );
   }
 
   pickType(): VehicleTypeName {

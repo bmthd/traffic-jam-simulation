@@ -19,9 +19,9 @@ import {
   createVehicle,
   createVehicleDeps,
   createWorldDeps,
+  isMergeTransactionAdmissible,
   LaneChangeController,
   LongitudinalController,
-  isMergeTransactionAdmissible,
   mergeCongestion,
   MergeCoordinator,
   nextArrivalDistance,
@@ -3624,8 +3624,6 @@ describe('依存注入 (Issue #120)', () => {
     expect(vehicle.laneChangeController).toBeInstanceOf(LaneChangeController);
     expect(vehicle.longitudinalController).toBeInstanceOf(LongitudinalController);
     expect(vehicle.mergeCoordinator).toBeInstanceOf(MergeCoordinator);
-    // World の既定依存は生成した車両へそのまま引き継がれる
-    expect(vehicle.deps).toBe(world.vehicleDeps);
   });
 
   test('コントローラは車両ごとに1組だけ作られ、呼び出しごとに作り直さない', () => {
@@ -3668,6 +3666,8 @@ describe('依存注入 (Issue #120)', () => {
     const created: string[] = [];
     const deps = createWorldDeps({
       createVehicle: (world, section, lane, z, typeName, desiredSpeed, vehicleDeps) => {
+        // World は車両側の依存を明示的に渡してくる(暗黙のフォールバック頼みにしない)
+        expect(vehicleDeps).toBe(world.deps.vehicleDeps);
         created.push(`${section}:${lane}`);
         return createVehicle(world, section, lane, z, typeName, desiredSpeed, vehicleDeps);
       },
@@ -3693,7 +3693,12 @@ describe('依存注入 (Issue #120)', () => {
     );
     const vehicle = world.createVehicle('L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
     expect(vehicle.estimateMergeEta()).toBe(42);
+    // 差し替えていない依存は既定の実体のまま
     expect(vehicle.laneChangeController).toBeInstanceOf(LaneChangeController);
+    // World が自分で作る車両にも同じ依存が渡る
+    world.populateInitial();
+    expect(world.vehicles.length).toBeGreaterThan(0);
+    for (const spawned of world.vehicles) expect(spawned.estimateMergeEta()).toBe(42);
   });
 
   test('依存注入はシミュレーション結果を変えない（既定依存の明示指定と同一）', () => {

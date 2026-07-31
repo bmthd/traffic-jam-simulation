@@ -30,7 +30,10 @@ export function createVehicleDeps(overrides: Partial<VehicleDeps> = {}): Vehicle
   };
 }
 
-/** 既定の車両生成。deps 省略時は生成元 World が持つ車両依存を使う。 */
+/**
+ * 既定の車両生成。deps は素通しで渡し、省略時の既定値は Vehicle 側の
+ * デフォルト引数 (= 生成元 World の車両依存) の一箇所に委ねる。
+ */
 export const createVehicle: VehicleFactory = (
   world,
   section,
@@ -38,7 +41,7 @@ export const createVehicle: VehicleFactory = (
   z,
   typeName,
   desiredSpeed,
-  deps = world.vehicleDeps,
+  deps,
 ) => new Vehicle(world, section, lane, z, typeName, desiredSpeed, deps);
 
 /**
