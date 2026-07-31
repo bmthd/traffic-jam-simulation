@@ -16,8 +16,14 @@ import {
   buildMergeDependencyClosure,
   CONST,
   createRng,
+  createVehicle,
+  createVehicleDeps,
+  createWorldDeps,
+  LaneChangeController,
+  LongitudinalController,
   isMergeTransactionAdmissible,
   mergeCongestion,
+  MergeCoordinator,
   nextArrivalDistance,
   planMergeTransaction,
   RAMP_GEOMETRY,
@@ -3605,5 +3611,100 @@ describe('前方車探索の並べ替え耐性 (Issue #52)', () => {
         if (expectedBehind) expect(actualBehind!.gap).toBeCloseTo(expectedBehind.gap, 9);
       }
     }
+  });
+});
+
+/* ============================================================
+   依存注入 (Issue #120)
+   ============================================================ */
+describe('依存注入 (Issue #120)', () => {
+  test('既定の依存で実体のコントローラが注入される', () => {
+    const world = new World({ rng: createRng(120), spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    expect(vehicle.laneChangeController).toBeInstanceOf(LaneChangeController);
+    expect(vehicle.longitudinalController).toBeInstanceOf(LongitudinalController);
+    expect(vehicle.mergeCoordinator).toBeInstanceOf(MergeCoordinator);
+    // World の既定依存は生成した車両へそのまま引き継がれる
+    expect(vehicle.deps).toBe(world.vehicleDeps);
+  });
+
+  test('コントローラは車両ごとに1組だけ作られ、呼び出しごとに作り直さない', () => {
+    const world = new World({ rng: createRng(121), spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const laneChangeController = vehicle.laneChangeController;
+    const mergeCoordinator = vehicle.mergeCoordinator;
+    world.rebuildSectionIndex();
+    vehicle.update(1 / 20);
+    vehicle.checkLaneSafetyForChange(2);
+    vehicle.estimateMergeEta();
+    expect(vehicle.laneChangeController).toBe(laneChangeController);
+    expect(vehicle.mergeCoordinator).toBe(mergeCoordinator);
+  });
+
+  test('車両の依存を差し替えると判断の委譲先が入れ替わる', () => {
+    const world = new World({ rng: createRng(122), spawnInterval: 1e9 });
+    const calls: number[] = [];
+    const deps = createVehicleDeps({
+      // 「絶対に車線変更しない」偽コントローラ(他の判断は実体のまま)
+      createLaneChangeController: (vehicle) =>
+        Object.assign(new LaneChangeController(vehicle), {
+          tryLaneChange: (toLane: number) => {
+            calls.push(toLane);
+            return false;
+          },
+        }),
+    });
+    const vehicle = new Vehicle(world, 'L', 1, 0, 'Sedan', 25, deps);
+    world.vehicles.push(vehicle);
+    world.rebuildSectionIndex();
+    expect(vehicle.tryLaneChange(2)).toBe(false);
+    expect(calls).toEqual([2]);
+    // 差し替えていない依存は既定の実体のまま
+    expect(vehicle.mergeCoordinator).toBeInstanceOf(MergeCoordinator);
+    expect(vehicle.laneChange.state).toBe('none');
+  });
+
+  test('World の車両生成を差し替えられる', () => {
+    const created: string[] = [];
+    const deps = createWorldDeps({
+      createVehicle: (world, section, lane, z, typeName, desiredSpeed, vehicleDeps) => {
+        created.push(`${section}:${lane}`);
+        return createVehicle(world, section, lane, z, typeName, desiredSpeed, vehicleDeps);
+      },
+    });
+    const world = new World({ rng: createRng(123), spawnInterval: 1e9 }, deps);
+    world.populateInitial();
+    expect(created.length).toBe(world.vehicles.length);
+    expect(created.length).toBeGreaterThan(0);
+    // 差し替えた生成関数から作られた車両も既定のコントローラを持つ
+    for (const vehicle of world.vehicles)
+      expect(vehicle.laneChangeController).toBeInstanceOf(LaneChangeController);
+  });
+
+  test('World の依存経由で車両のコントローラまで差し替えられる', () => {
+    const world = new World(
+      { rng: createRng(124), spawnInterval: 1e9 },
+      createWorldDeps({
+        vehicleDeps: createVehicleDeps({
+          createMergeCoordinator: (vehicle) =>
+            Object.assign(new MergeCoordinator(vehicle), { estimateMergeEta: () => 42 }),
+        }),
+      }),
+    );
+    const vehicle = world.createVehicle('L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    expect(vehicle.estimateMergeEta()).toBe(42);
+    expect(vehicle.laneChangeController).toBeInstanceOf(LaneChangeController);
+  });
+
+  test('依存注入はシミュレーション結果を変えない（既定依存の明示指定と同一）', () => {
+    const runSteps = (deps?: ReturnType<typeof createWorldDeps>): number[] => {
+      const world = deps
+        ? new World({ rng: createRng(125), spawnInterval: 800 }, deps)
+        : new World({ rng: createRng(125), spawnInterval: 800 });
+      world.populateInitial();
+      for (let i = 0; i < 200; i++) world.step(1 / 20);
+      return world.vehicles.map((vehicle) => vehicle.z);
+    };
+    expect(runSteps(createWorldDeps())).toEqual(runSteps());
   });
 });

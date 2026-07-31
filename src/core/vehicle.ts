@@ -4,10 +4,9 @@
    ============================================================ */
 import { CONST, TYPES } from './constants';
 import type { Section, VehicleTypeName, VehicleTypeSpec } from './constants';
-import { LaneChangeController } from './lane-change-controller';
-import { LongitudinalController } from './longitudinal-controller';
-import { MergeCoordinator } from './merge-coordinator';
-export { mergeCongestion, nextArrivalDistance, smoothstepRange } from './merge-coordinator';
+import type { LaneChangeController } from './lane-change-controller';
+import type { LongitudinalController } from './longitudinal-controller';
+import type { MergeCoordinator } from './merge-coordinator';
 import { clamp, lerp, smooth, WRAP_LENGTH } from './utils';
 import type { World } from './world';
 
@@ -146,8 +145,35 @@ export interface ProjectedMergeSlot {
   rampEta: number;
 }
 
+/**
+ * 車両が判断を委譲するコントローラ群の初期化関数 (Issue #120)。
+ * 実体は初期化用モジュール (factory.ts) が供給するため、
+ * ここからコントローラ実装への値 import は持たない (import cycle 防止)。
+ */
+export interface VehicleDeps {
+  readonly createLaneChangeController: (vehicle: Vehicle) => LaneChangeController;
+  readonly createLongitudinalController: (vehicle: Vehicle) => LongitudinalController;
+  readonly createMergeCoordinator: (vehicle: Vehicle) => MergeCoordinator;
+}
+
+/** 車両の生成関数。World は実体を直接 new せずこれを介して車両を作る。 */
+export type VehicleFactory = (
+  world: World,
+  section: Section,
+  lane: number,
+  z: number,
+  typeName: VehicleTypeName,
+  desiredSpeed: number,
+  deps?: VehicleDeps,
+) => Vehicle;
+
 export class Vehicle {
   world: World;
+  /** 判断を委譲するコントローラ群 (生成時に注入され、以降は差し替えない) */
+  readonly deps: VehicleDeps;
+  readonly laneChangeController: LaneChangeController;
+  readonly longitudinalController: LongitudinalController;
+  readonly mergeCoordinator: MergeCoordinator;
   spawnOrder: number;
   section: Section;
   lane: number;
@@ -218,8 +244,14 @@ export class Vehicle {
     z: number,
     typeName: VehicleTypeName,
     desiredSpeed: number,
+    deps: VehicleDeps = world.vehicleDeps,
   ) {
     this.world = world;
+    // コントローラは状態を持たない薄い委譲先なので、1台につき1組だけ作る
+    this.deps = deps;
+    this.laneChangeController = deps.createLaneChangeController(this);
+    this.longitudinalController = deps.createLongitudinalController(this);
+    this.mergeCoordinator = deps.createMergeCoordinator(this);
     this.spawnOrder = world.nextVehicleOrder++;
     this.section = section; // 'L' = 義務あり / 'R' = 義務なし
     this.lane = lane; // 0 = 追い越し車線(進行方向の右端)
@@ -396,11 +428,11 @@ export class Vehicle {
   }
 
   mergeHeadways(congestion: number): { front: number; rear: number } {
-    return new MergeCoordinator(this).mergeHeadways(congestion);
+    return this.mergeCoordinator.mergeHeadways(congestion);
   }
 
   evaluateEntryCertificate(snapshot: WorldSnapshot, deltaTime = 1 / 20): MergeCertificate | null {
-    return new MergeCoordinator(this).evaluateEntryCertificate(snapshot, deltaTime);
+    return this.mergeCoordinator.evaluateEntryCertificate(snapshot, deltaTime);
   }
 
   projectReservation(
@@ -408,23 +440,23 @@ export class Vehicle {
     plan: MergePlan,
     deltaTime: number,
   ): MergeDirective | null {
-    return new MergeCoordinator(this).projectReservation(snapshot, plan, deltaTime);
+    return this.mergeCoordinator.projectReservation(snapshot, plan, deltaTime);
   }
 
   projectMergeSlot(rampEta: number): ProjectedMergeSlot | null {
-    return new MergeCoordinator(this).projectMergeSlot(rampEta);
+    return this.mergeCoordinator.projectMergeSlot(rampEta);
   }
 
   projectReservedMergeSlot(plan: MergePlan): ProjectedMergeSlot | null {
-    return new MergeCoordinator(this).projectReservedMergeSlot(plan);
+    return this.mergeCoordinator.projectReservedMergeSlot(plan);
   }
 
   isProjectedSlotSafe(slot: ProjectedMergeSlot, congestion: number): boolean {
-    return new MergeCoordinator(this).isProjectedSlotSafe(slot, congestion);
+    return this.mergeCoordinator.isProjectedSlotSafe(slot, congestion);
   }
 
   projectMergeCongestionSample(slot: ProjectedMergeSlot | null): number {
-    return new MergeCoordinator(this).projectMergeCongestionSample(slot);
+    return this.mergeCoordinator.projectMergeCongestionSample(slot);
   }
 
   projectMergeCongestion(
@@ -432,23 +464,23 @@ export class Vehicle {
     deltaTime: number,
     sample = this.projectMergeCongestionSample(slot),
   ): number {
-    return new MergeCoordinator(this).projectMergeCongestion(slot, deltaTime, sample);
+    return this.mergeCoordinator.projectMergeCongestion(slot, deltaTime, sample);
   }
 
   estimateMergeEta(): number {
-    return new MergeCoordinator(this).estimateMergeEta();
+    return this.mergeCoordinator.estimateMergeEta();
   }
 
   latestMergeCommitZ(): number {
-    return new MergeCoordinator(this).latestMergeCommitZ();
+    return this.mergeCoordinator.latestMergeCommitZ();
   }
 
   evaluateMergePlan(deltaTime: number, lastSource: MergeSource | null): MergePlan {
-    return new MergeCoordinator(this).evaluateMergePlan(deltaTime, lastSource);
+    return this.mergeCoordinator.evaluateMergePlan(deltaTime, lastSource);
   }
 
   isMergeApplySafe(plan: MergePlan): boolean {
-    return new MergeCoordinator(this).isMergeApplySafe(plan);
+    return this.mergeCoordinator.isMergeApplySafe(plan);
   }
 
   applyMergePlan(plan: MergePlan): void {
@@ -540,19 +572,19 @@ export class Vehicle {
 
   // 隣車線にほぼ同速で並走する車両がいるか(車線変更を物理的に塞ぐ「象レース」検知)
   hasDeadlockAlongside(lane: number): boolean {
-    return new LaneChangeController(this).hasDeadlockAlongside(lane);
+    return this.laneChangeController.hasDeadlockAlongside(lane);
   }
 
   // 復帰先車線で自分の真横(±車体+8m)を占有し、車線変更を物理的に塞ぐ並走車を返す
   findAlongside(lane: number): Vehicle | null {
-    return new LaneChangeController(this).findAlongside(lane);
+    return this.laneChangeController.findAlongside(lane);
   }
 
   // 加速復帰の開始判定: 追い越し車線で後続に追いつかれ、復帰先(レーン1)が並走車に
   // 塞がれている時、「速度差が小さく、並走車の前方が空いていて前に出れば戻れる
   // 見込みがある」なら一時的に加速して並走車を抜き、車線復帰を狙う
   tryStartReturnBoost(ahead: NeighborInfo | null): boolean {
-    return new LaneChangeController(this).tryStartReturnBoost(ahead);
+    return this.laneChangeController.tryStartReturnBoost(ahead);
   }
 
   /**
@@ -595,23 +627,23 @@ export class Vehicle {
   // 車線変更先の安全確認: 'safe' | 'hold' | 'danger'
   // 左方向(譲り・キープレフト)は遅い車線へ移るため、要求マージンをやや緩和する
   checkLaneSafetyForChange(toLane: number): 'safe' | 'hold' | 'danger' {
-    return new LaneChangeController(this).checkLaneSafetyForChange(toLane);
+    return this.laneChangeController.checkLaneSafetyForChange(toLane);
   }
 
   tryLaneChange(toLane: number): boolean {
-    return new LaneChangeController(this).tryLaneChange(toLane);
+    return this.laneChangeController.tryLaneChange(toLane);
   }
 
   cancelLaneChange(): void {
-    return new LaneChangeController(this).cancelLaneChange();
+    return this.laneChangeController.cancelLaneChange();
   }
 
   updateLaneChange(deltaTime: number): void {
-    return new LaneChangeController(this).updateLaneChange(deltaTime);
+    return this.laneChangeController.updateLaneChange(deltaTime);
   }
 
   decide(ahead: NeighborInfo | null, deltaTime: number): void {
-    return new LaneChangeController(this).decide(ahead, deltaTime);
+    return this.laneChangeController.decide(ahead, deltaTime);
   }
 
   update(deltaTime: number): void {
@@ -631,15 +663,14 @@ export class Vehicle {
     }
     this.updateLaneChange(deltaTime);
 
-    const longitudinalController = new LongitudinalController(this);
-    const ahead = longitudinalController.update(deltaTime);
+    const ahead = this.longitudinalController.update(deltaTime);
     this.z -= this.speed * deltaTime;
 
     // --- 意思決定 ---
     if (this.laneChange.state === 'none' && this.laneChangeCooldown <= 0)
       this.decide(ahead, deltaTime);
 
-    longitudinalController.updateHazard(deltaTime);
+    this.longitudinalController.updateHazard(deltaTime);
 
     // --- 終端処理 ---
     // rulesモード: 終端 = 出口。一定割合の車がここで流出する(捌けた分だけ出る)。

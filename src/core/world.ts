@@ -6,12 +6,12 @@ import { CONST, rampBodyIntersectsGore, sectionTrackX, TYPES, TYPE_WEIGHTS } fro
 import type { Section, SimMode, VehicleTypeName } from './constants';
 import { clamp, wrapDelta, WRAP_LENGTH } from './utils';
 import type { Rng } from './utils';
+import { createWorldDeps } from './factory';
 import {
   isMergeTransactionAdmissible,
   MergeTransactionPlanningError,
   planMergeTransaction,
 } from './merge-transaction';
-import { Vehicle } from './vehicle';
 import type {
   MergeCandidate,
   MergeCertificate,
@@ -20,6 +20,9 @@ import type {
   MergeSource,
   MergeTransaction,
   ReservedMotion,
+  Vehicle,
+  VehicleDeps,
+  VehicleFactory,
   VehicleSnapshot,
   WorldSnapshot,
 } from './vehicle';
@@ -28,6 +31,18 @@ export interface WorldOptions {
   rng?: Rng;
   mode?: SimMode;
   spawnInterval?: number;
+}
+
+/**
+ * World が使う依存 (Issue #120)。
+ * 実体は初期化用モジュール (factory.ts) が供給するため、
+ * ここから Vehicle 実装への値 import は持たない (import cycle 防止)。
+ */
+export interface WorldDeps {
+  /** 車両の生成。テストでは偽物の車両生成へ差し替えられる。 */
+  readonly createVehicle: VehicleFactory;
+  /** 生成した車両へ引き継ぐコントローラ群の初期化。 */
+  readonly vehicleDeps: VehicleDeps;
 }
 
 export interface SectionStats {
@@ -44,6 +59,10 @@ export interface SmoothTime {
 }
 
 export class World {
+  /** 生成時に注入された依存 (以降は差し替えない) */
+  readonly deps: WorldDeps;
+  /** この World が作る車両へ渡すコントローラ群の初期化 */
+  readonly vehicleDeps: VehicleDeps;
   rng: Rng;
   mode: SimMode;
   spawnInterval: number;
@@ -66,7 +85,9 @@ export class World {
   laneRoundRobin = 0; // absorbモード: レーン割当のラウンドロビン
   perturbTimer: number | null = null; // absorbモード: 次のよそ見ブレーキまでの残り時間
 
-  constructor(options: WorldOptions = {}) {
+  constructor(options: WorldOptions = {}, deps: WorldDeps = createWorldDeps()) {
+    this.deps = deps;
+    this.vehicleDeps = deps.vehicleDeps;
     this.rng = options.rng || Math.random;
     this.mode = options.mode || 'rules'; // 'rules' = ルール比較 / 'absorb' = 渋滞吸収運転
     this.spawnInterval = options.spawnInterval != null ? options.spawnInterval : 800;
@@ -82,6 +103,17 @@ export class World {
       outflow: { L: 0, R: 0 },
     };
     this.smoothTime = { L: 0, R: 0, draw: 0 };
+  }
+
+  /** 車両を生成する。実体の選択は注入された依存に委ねる (Issue #120)。 */
+  createVehicle(
+    section: Section,
+    lane: number,
+    z: number,
+    typeName: VehicleTypeName,
+    desiredSpeed: number,
+  ): Vehicle {
+    return this.deps.createVehicle(this, section, lane, z, typeName, desiredSpeed);
   }
 
   pickType(): VehicleTypeName {
@@ -216,8 +248,8 @@ export class World {
       const z = CONST.ROAD_HALF + spec.length;
       if (!this.isSpawnClear('L', lane, z, null) || !this.isSpawnClear('R', lane, z, null))
         return false;
-      const vehicleL = new Vehicle(this, 'L', lane, z, typeName, speed);
-      const vehicleR = new Vehicle(this, 'R', lane, z, typeName, speed);
+      const vehicleL = this.createVehicle('L', lane, z, typeName, speed);
+      const vehicleR = this.createVehicle('R', lane, z, typeName, speed);
       vehicleL.speed = this.safeSpawnSpeed('L', lane, z, vehicleL.length, vehicleL.speed, null);
       vehicleR.speed = this.safeSpawnSpeed('R', lane, z, vehicleR.length, vehicleR.speed, null);
       this.vehicles.push(vehicleL, vehicleR);
@@ -248,8 +280,7 @@ export class World {
       // ランプ需要は入口の lane 3 が空いていても、lane 2 の将来枠を証明するまで
       // 有効道路状態へ入れない。本線需要は従来通り入口判定だけで扱う。
       const lane = viaRamp ? null : this.admissibleLane(section, lanes, z);
-      const vehicle = new Vehicle(
-        this,
+      const vehicle = this.createVehicle(
         section,
         lane != null ? lane : preferredLane,
         z,
@@ -749,8 +780,8 @@ export class World {
             : Math.floor(this.rng() * 3);
         const laneR = this.mode === 'absorb' ? laneL : Math.floor(this.rng() * 3);
         if (this.isSpawnClear('L', laneL, z, null) && this.isSpawnClear('R', laneR, z, null)) {
-          this.vehicles.push(new Vehicle(this, 'L', laneL, z, typeName, speed));
-          this.vehicles.push(new Vehicle(this, 'R', laneR, z, typeName, speed));
+          this.vehicles.push(this.createVehicle('L', laneL, z, typeName, speed));
+          this.vehicles.push(this.createVehicle('R', laneR, z, typeName, speed));
           break;
         }
       }

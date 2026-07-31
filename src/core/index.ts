@@ -22,7 +22,17 @@ export type {
 } from './constants';
 export { clamp, lerp, smooth, createRng, WRAP_LENGTH, wrapDelta } from './utils';
 export type { Rng } from './utils';
-export { Vehicle, mergeCongestion, nextArrivalDistance, smoothstepRange } from './vehicle';
+// 依存の初期化(DI)はこのモジュール経由で行う (Issue #120)
+export { createVehicle, createVehicleDeps, createWorldDeps } from './factory';
+export { LaneChangeController } from './lane-change-controller';
+export { LongitudinalController } from './longitudinal-controller';
+export {
+  mergeCongestion,
+  MergeCoordinator,
+  nextArrivalDistance,
+  smoothstepRange,
+} from './merge-coordinator';
+export { Vehicle } from './vehicle';
 export {
   buildMergeDependencyClosure,
   isMergeTransactionAdmissible,
@@ -52,8 +62,10 @@ export type {
   ProjectedMergeSlot,
   SpeedEnvelope,
   ReservedMotion,
+  VehicleDeps,
+  VehicleFactory,
   VehicleSnapshot,
   WorldSnapshot,
 } from './vehicle';
 export { World } from './world';
-export type { WorldOptions, SectionStats, SmoothTime } from './world';
+export type { WorldDeps, WorldOptions, SectionStats, SmoothTime } from './world';
