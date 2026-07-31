@@ -67,3 +67,13 @@
 ## E. コード・コミット規約
 
 - **コメント・コミットメッセージは日本語**で書く。
+
+### 依存注入 (DI) の規約 (Issue #120)
+
+- DI ライブラリは導入しない。**依存はコンストラクタ／生成関数の末尾引数で受け取り、既定値（デフォルト引数）で初期化**する。
+- 実体の生成は **`src/core/factory.ts`（初期化用関数を集めた合成ルート）に集約**する。`createVehicleDeps()` / `createWorldDeps()` / `createVehicle()` がそれ。
+- **import cycle 防止:** 依存される側（`vehicle.ts` / `world.ts`）は相手の実体を値 import してはならない（**型 import のみ**）。実体への値 import は `factory.ts` だけが持つ。逆に `factory.ts` は、自分を値 import しているモジュール（`world.ts`）を値 import してはならない。
+  - 値 import の向き: `factory.ts` → `vehicle.ts` / 各 controller、`world.ts` → `factory.ts`。
+- `World` は `deps.createVehicle` 経由で車両を作り（`World#createVehicle`）、その際 **車両側の依存 `vehicleDeps` も明示的に渡す**（生成関数だけを差し替えた時に `vehicleDeps` の差し替えが黙って無視されるのを防ぐ）。既定値は `Vehicle` のデフォルト引数の一箇所だけに置く。
+- `Vehicle` は注入された `VehicleDeps` からコントローラを **1台につき1組だけ**生成して保持する（状態を持たない委譲先なので挙動は変わらない）。生成時に車両状態を読んでも安全なよう、**コンストラクタ末尾**で作る。
+- 依存の差し替えはテスト専用の抜け道ではあるが、**差し替えで L/R の挙動差を作ってはならない**（A の不変条件が優先）。
