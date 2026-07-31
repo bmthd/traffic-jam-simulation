@@ -38,6 +38,7 @@
 
 - ランタイムは **Node.js**（版数は `.node-version` / `package.json#devEngines` 参照）。
 - パッケージマネージャは **pnpm**（版数は `package.json#packageManager` 参照）。
+- Node / pnpm の導入は **mise**（`mise.toml`）に集約。ローカルは `mise install`、CI は `jdx/mise-action` が同じ設定を読む。Node の版数は `.node-version` が単一の情報源で、pnpm の版数は `mise.toml` に `package.json#packageManager` と同じ値を書く（両方を更新すること）。
 - ツールチェーンは **Vite+（`vp`）** に統一（ビルド=Vite / テスト=Vitest / lint=Oxlint / フォーマット=Oxfmt / 型チェック）。設定は `vite.config.ts` に集約。
 
 | コマンド                    | 内容                                                                                   |
