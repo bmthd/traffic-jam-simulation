@@ -1,0 +1,7 @@
+[settings]
+# Node の版数は .node-version を情報源にする（package.json#devEngines は範囲指定なので使わない）
+idiomatic_version_file_enable_tools = ["node"]
+idiomatic_version_file_disable_files = ["node:package.json"]
+
+[tools]
+pnpm = "11.13.0"
