@@ -176,7 +176,14 @@ export class Vehicle {
   spawnOrder: number;
   section: Section;
   lane: number;
-  z: number;
+  private _z = 0;
+  get z(): number {
+    return this._z;
+  }
+  set z(value: number) {
+    this._z = value;
+    this.world?.reindexVehicle(this);
+  }
   previousZ: number;
   mergedFromRamp = false;
   rampMergePassPending = false;
@@ -597,22 +604,7 @@ export class Vehicle {
    * リング上の一方向距離が最小の一台を選び直す (Issue #52)。
    */
   private findNeighbor(lane: number, ahead: boolean): NeighborInfo | null {
-    const vehicles = this.world.sectionVehicles[this.section];
-    let best: Vehicle | null = null;
-    let bestDistance = Infinity;
-    for (const other of vehicles) {
-      if (other === this || !other.occupies(lane)) continue;
-      const raw = ahead ? this.z - other.z : other.z - this.z;
-      // リング上の一方向距離 (0, WRAP_LENGTH]。
-      // 距離 0(完全に同じ z)は従来と同じく「一周先」として扱う。
-      const distance = ((raw % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH || WRAP_LENGTH;
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        best = other;
-      }
-    }
-    if (best === null) return null;
-    return { vehicle: best, gap: bestDistance - (this.length + best.length) / 2 };
+    return this.world.findLaneNeighbor(this, lane, ahead);
   }
 
   // 前方車探索（ahead = 進行方向側 = z が小さい側。周回路として探索）

@@ -136,6 +136,18 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
    個別シードは「逆転しない・過大にならない」ことを判定する。
    ============================================================ */
 const SEEDS = [11, 22, 33, 44, 55, 66, 77, 88, 99, 110];
+const EXPECTED_SEED_SCORES = new Map<number, readonly [number, number]>([
+  [11, [41.9945, 45.8944]],
+  [22, [40.9098, 48.7195]],
+  [33, [40.8784, 45.6114]],
+  [44, [40.6312, 45.005]],
+  [55, [39.1814, 43.0821]],
+  [66, [40.057, 44.6967]],
+  [77, [40.9472, 45.3294]],
+  [88, [41.1939, 43.9657]],
+  [99, [41.7407, 45.9858]],
+  [110, [40.8127, 45.5542]],
+]);
 // 目標値は #50(車線変更の安全判定が周回を考慮していなかった) と
 // #52(sectionIndex の陳腐化で最近接の前方車を見落とす) の修正に伴い 10 → 4 へ
 // 再較正した。旧値 10 のうち相当部分は #50 のバグが水増ししていたぶんである
@@ -146,7 +158,7 @@ const SEEDS = [11, 22, 33, 44, 55, 66, 77, 88, 99, 110];
 // 修正後も 10 シード全てで R > L は維持されており、本実験の結論は変わらない。
 // 経緯の詳細は CLAUDE.md A 章を参照。
 const DIFF_TARGET = 4.5;
-// 10シード平均の実測は 4.00(シード別 1.25〜9.19、標準偏差 2.29、平均の標準誤差 0.72)。
+// 10シード平均の実測は 4.5498（シード別 2.7718〜7.8097、標準偏差 1.2191、平均の標準誤差 0.3855）。
 // シードは固定で測定値は決定的なので、この幅は「実行ごとの揺らぎの吸収」ではなく
 // 「将来の正当な変更に許す余地」として目標値の ±25% を取ったもの
 // (旧設定の 10±2 = ±20% と同じ考え方。信号が小さくなったぶん相対幅を広げた)。
@@ -165,6 +177,8 @@ function getResults(): ({ seed: number } & ScenarioResult)[] {
 describe('渋滞スコア差（義務あり vs 義務なし）', () => {
   test.each(SEEDS)('seed=%i: 義務なし側のスコアが高い(逆転・暴走しない)', (seed) => {
     const result = getResults().find((entry) => entry.seed === seed)!;
+    const expected = EXPECTED_SEED_SCORES.get(seed)!;
+    expect([Number(result.scoreL.toFixed(4)), Number(result.scoreR.toFixed(4))]).toEqual(expected);
     const diff = Math.round((result.scoreR - result.scoreL) * 10) / 10; // 表示と同じ精度で判定する
     expect(
       result.scoreR,
@@ -3790,5 +3804,88 @@ describe('施設テーブルと座標の一般化 (Issue #128)', () => {
     expect(
       nextArrivalDistance(CONST.MERGE_POINT_Z - FACILITY_SPACING + 10, CONST.MERGE_POINT_Z),
     ).toBe(10);
+  });
+});
+
+/* ============================================================
+   車線別近傍索引の挙動不変性 (Issue #128)
+   ============================================================ */
+describe('車線別近傍索引の挙動不変性 (Issue #128)', () => {
+  test('周回境界をまたぐ最近接の前後車を返す', () => {
+    const world = new World({ rng: createRng(1281), spawnInterval: 1e9 });
+    const self = new Vehicle(world, 'L', 1, -CONST.ROAD_HALF - 4, 'Sedan', 25);
+    const ahead = new Vehicle(world, 'L', 1, CONST.ROAD_HALF + 4, 'Sedan', 25);
+    const behind = new Vehicle(world, 'L', 1, -CONST.ROAD_HALF + 16, 'Sedan', 25);
+    world.vehicles.push(self, ahead, behind);
+    world.rebuildSectionIndex();
+
+    expect(world.laneVehicles.L[1]).toEqual([self, behind, ahead]);
+    expect(self.findAhead(1)?.vehicle).toBe(ahead);
+    expect(self.findBehind(1)?.vehicle).toBe(behind);
+  });
+
+  test('車線変更中の車両を変更元と変更先の両車線で見つける', () => {
+    const world = new World({ rng: createRng(1282), spawnInterval: 1e9 });
+    const sourceFollower = new Vehicle(world, 'L', 0, 0, 'Sedan', 25);
+    const targetFollower = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const changing = new Vehicle(world, 'L', 0, -20, 'Sedan', 25);
+    changing.laneChange = {
+      state: 'changing',
+      from: 0,
+      to: 1,
+      progress: 0.5,
+      holdTime: 0,
+      checkTimer: 0,
+    };
+    world.vehicles.push(sourceFollower, targetFollower, changing);
+    world.rebuildSectionIndex();
+
+    expect(sourceFollower.findAhead(0)?.vehicle).toBe(changing);
+    expect(targetFollower.findAhead(1)?.vehicle).toBe(changing);
+  });
+
+  test('非占有の隣接車線に一台だけいる前後車を返す', () => {
+    const world = new World({ rng: createRng(1285), spawnInterval: 1e9 });
+    const self = new Vehicle(world, 'L', 0, 0, 'Sedan', 25);
+    const other = new Vehicle(world, 'L', 1, -20, 'Sedan', 25);
+    world.vehicles.push(self, other);
+    world.rebuildSectionIndex();
+
+    expect(self.findAhead(1)?.vehicle).toBe(other);
+    expect(self.findBehind(1)?.vehicle).toBe(other);
+  });
+
+  test('step途中で先行車のz順が崩れても後続車は同じ最近接車を見る', () => {
+    const world = new World({ rng: createRng(1283), spawnInterval: 1e9 });
+    const mover = new Vehicle(world, 'L', 1, -20, 'Sedan', 25);
+    const observer = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const far = new Vehicle(world, 'L', 1, -300, 'Sedan', 25);
+    let observed: Vehicle | null = null;
+    mover.update = () => {
+      mover.z += WRAP_LENGTH;
+    };
+    observer.update = () => {
+      observed = observer.findAhead(1)?.vehicle ?? null;
+    };
+    far.update = () => {};
+    world.vehicles.push(mover, observer, far);
+
+    world.step(TIME_STEP);
+
+    expect(observed).toBe(mover);
+  });
+
+  test('同距離の候補は既存のsectionVehicles順を保存する', () => {
+    const world = new World({ rng: createRng(1284), spawnInterval: 1e9 });
+    const self = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const first = new Vehicle(world, 'L', 1, -20, 'Sedan', 25);
+    const second = new Vehicle(world, 'L', 1, -20, 'Sedan', 25);
+    world.vehicles.push(self, first, second);
+    world.rebuildSectionIndex();
+
+    expect(self.findAhead(1)?.vehicle).toBe(first);
+    first.z += WRAP_LENGTH;
+    world.reindexVehicle(first);
+    expect(self.findAhead(1)?.vehicle).toBe(first);
   });
 });

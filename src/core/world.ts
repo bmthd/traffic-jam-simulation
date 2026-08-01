@@ -25,6 +25,7 @@ import type {
   MergeCandidate,
   MergeCertificate,
   MergeDirective,
+  NeighborInfo,
   MergePlan,
   MergeSource,
   MergeTransaction,
@@ -77,6 +78,9 @@ export class World {
   spawnAccumulator: number;
   time: number;
   sectionVehicles: Record<Section, Vehicle[]>;
+  laneVehicles: Record<Section, Vehicle[][]>;
+  private laneVehicleOrder = new Map<Vehicle, number>();
+  private laneMemberships = new Map<Vehicle, number[]>();
   lastMergeSource: Record<Section, MergeSource | null> = { L: null, R: null };
   private lastMergeSourceByFacility: Record<Section, (MergeSource | null)[]> = {
     L: FACILITIES.map(() => null),
@@ -105,6 +109,7 @@ export class World {
     this.spawnAccumulator = 0;
     this.time = 0;
     this.sectionVehicles = { L: [], R: [] };
+    this.laneVehicles = { L: [[], [], [], []], R: [[], [], [], []] };
     this.stats = {
       changes: { L: 0, R: 0 },
       yields: { L: 0, R: 0 },
@@ -754,7 +759,10 @@ export class World {
           rear.mergeCooperationDecel = directive.cooperation.decel;
         }
       }
-      if (directive.startLaneChange) ramp.startReservedMergeLaneChange();
+      if (directive.startLaneChange) {
+        ramp.startReservedMergeLaneChange();
+        this.syncLaneMembership(ramp);
+      }
     }
     return motionByOrder;
   }
@@ -846,6 +854,9 @@ export class World {
     this.spawnAccumulator = 0;
     this.time = 0;
     this.sectionVehicles = { L: [], R: [] };
+    this.laneVehicles = { L: [[], [], [], []], R: [[], [], [], []] };
+    this.laneVehicleOrder.clear();
+    this.laneMemberships.clear();
     this.stats = {
       changes: { L: 0, R: 0 },
       yields: { L: 0, R: 0 },
@@ -883,6 +894,116 @@ export class World {
     vehiclesR.sort((a, b) => a.z - b.z);
     this.sectionVehicles.L = vehiclesL;
     this.sectionVehicles.R = vehiclesR;
+    this.rebuildLaneIndex();
+  }
+
+  /** 現在の車線占有状態から車線別索引を作り直す。 */
+  private rebuildLaneIndex(): void {
+    this.laneVehicleOrder.clear();
+    this.laneMemberships.clear();
+    this.laneVehicles = { L: [[], [], [], []], R: [[], [], [], []] };
+    for (const section of ['L', 'R'] as const) {
+      const sectionVehicles = this.sectionVehicles[section];
+      sectionVehicles.forEach((vehicle, index) => this.laneVehicleOrder.set(vehicle, index));
+      for (const vehicle of sectionVehicles) {
+        const lanes: number[] = [];
+        for (let lane = 0; lane < 4; lane++) {
+          if (!vehicle.occupies(lane)) continue;
+          this.laneVehicles[section][lane].push(vehicle);
+          lanes.push(lane);
+        }
+        this.laneMemberships.set(vehicle, lanes);
+      }
+      for (const laneVehicles of this.laneVehicles[section])
+        laneVehicles.sort((left, right) => this.compareLaneVehicles(left, right));
+    }
+  }
+
+  /** 周回上で同値なzを同じ索引位置へ写す。 */
+  private laneIndexZ(z: number): number {
+    const roadStart = -CONST.ROAD_HALF - 8;
+    return (((z - roadStart) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+  }
+
+  private compareLaneVehicles(left: Vehicle, right: Vehicle): number {
+    return (
+      this.laneIndexZ(left.z) - this.laneIndexZ(right.z) ||
+      this.laneVehicleOrder.get(left)! - this.laneVehicleOrder.get(right)!
+    );
+  }
+
+  /** 逐次更新された1台だけを車線別索引へ挿入し直す。 */
+  reindexVehicle(vehicle: Vehicle): void {
+    const order = this.laneVehicleOrder.get(vehicle);
+    if (order === undefined) return;
+    for (const lane of this.laneMemberships.get(vehicle) ?? []) {
+      const vehicles = this.laneVehicles[vehicle.section][lane];
+      const index = vehicles.indexOf(vehicle);
+      if (index >= 0) vehicles.splice(index, 1);
+    }
+    const lanes: number[] = [];
+    for (let lane = 0; lane < 4; lane++) {
+      if (!vehicle.occupies(lane)) continue;
+      const vehicles = this.laneVehicles[vehicle.section][lane];
+      let low = 0,
+        high = vehicles.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (this.compareLaneVehicles(vehicles[middle], vehicle) <= 0) low = middle + 1;
+        else high = middle;
+      }
+      vehicles.splice(low, 0, vehicle);
+      lanes.push(lane);
+    }
+    this.laneMemberships.set(vehicle, lanes);
+  }
+
+  /** zを変えずに変化した車線占有だけを索引へ同期する。 */
+  private syncLaneMembership(vehicle: Vehicle): void {
+    if (!this.laneVehicleOrder.has(vehicle)) return;
+    const lanes: number[] = [];
+    for (let lane = 0; lane < 4; lane++) if (vehicle.occupies(lane)) lanes.push(lane);
+    const indexed = this.laneMemberships.get(vehicle) ?? [];
+    if (lanes.length !== indexed.length || lanes.some((lane, index) => lane !== indexed[index]))
+      this.reindexVehicle(vehicle);
+  }
+
+  /** zソート済み車線索引から周回上の最近接車を二分探索する。 */
+  findLaneNeighbor(vehicle: Vehicle, lane: number, ahead: boolean): NeighborInfo | null {
+    const vehicles = this.laneVehicles[vehicle.section][lane];
+    if (vehicles.length === 0 || (vehicles.length === 1 && vehicles[0] === vehicle)) return null;
+    const key = this.laneIndexZ(vehicle.z);
+    let low = 0,
+      high = vehicles.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      const middleKey = this.laneIndexZ(vehicles[middle].z);
+      if (middleKey < key || (!ahead && middleKey === key)) low = middle + 1;
+      else high = middle;
+    }
+    let index = ahead ? low - 1 : low;
+    if (index < 0) index = vehicles.length - 1;
+    if (index >= vehicles.length) index = 0;
+    const candidateKey = this.laneIndexZ(vehicles[index].z);
+    let first = index;
+    while (first > 0 && this.laneIndexZ(vehicles[first - 1].z) === candidateKey) first--;
+    let best: Vehicle | null = null;
+    for (
+      let cursor = first;
+      cursor < vehicles.length && this.laneIndexZ(vehicles[cursor].z) === candidateKey;
+      cursor++
+    ) {
+      const candidate = vehicles[cursor];
+      if (
+        candidate !== vehicle &&
+        (best === null || this.laneVehicleOrder.get(candidate)! < this.laneVehicleOrder.get(best)!)
+      )
+        best = candidate;
+    }
+    if (best === null) return null;
+    const raw = ahead ? vehicle.z - best.z : best.z - vehicle.z;
+    const distance = ((raw % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH || WRAP_LENGTH;
+    return { vehicle: best, gap: distance - (vehicle.length + best.length) / 2 };
   }
 
   recordMergePasses(): void {
@@ -953,10 +1074,13 @@ export class World {
           targetPassTime: 0,
           nextSource: null,
         });
+        this.syncLaneMembership(evaluation.leader);
         continue;
       }
       if (rear) reservedRears.add(rear);
       evaluation.leader.applyMergePlan(evaluation.plan);
+      this.syncLaneMembership(evaluation.leader);
+      if (rear) this.syncLaneMembership(rear);
     }
   }
 
@@ -1059,6 +1183,7 @@ export class World {
       const motion = motionByOrder.get(vehicle.spawnOrder);
       if (motion) vehicle.applyReservedMotion(motion, deltaTime);
       else vehicle.update(deltaTime);
+      this.syncLaneMembership(vehicle);
     }
     // 合流評価と速度更新は移動前の位置と同じ時刻スナップショットで行い、
     // 全車両を次フレームの位置へ進めた後にシミュレーション時刻を更新する
