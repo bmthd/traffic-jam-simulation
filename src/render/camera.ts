@@ -224,6 +224,7 @@ const AUTO_MODE_INDEX = 0;
 const FIRST_PRESET_MODE_INDEX = 1;
 
 const AUTO_CYCLE_INTERVAL = 9; // オートモードでプリセットを切り替える間隔 (s)
+const AUTO_RESUME_DELAY = 3; // 操作終了後に巡回を再開するまでの待機時間 (s)
 const TRANSITION_DURATION = 1.2; // 視点の切り替えにかける時間 (s)
 
 interface SpectatorState {
@@ -236,6 +237,8 @@ interface SpectatorState {
   pitchOffset: number;
   zoom: number;
   panOffsetZ: number;
+  interacting: boolean;
+  resumeDelay: number;
 }
 // 起動直後はオートモード。まず自動で動く画を見せ、画面に触れた時点で
 // マニュアルモードへ移る(モードの存在に気づいてもらうため) (Issue #43)
@@ -249,6 +252,8 @@ const spectator: SpectatorState = {
   pitchOffset: 0,
   zoom: 1,
   panOffsetZ: 0,
+  interacting: false,
+  resumeDelay: 0,
 };
 
 // 補間の開始姿勢・現在姿勢・各プリセットが書き込む目標姿勢
@@ -375,7 +380,8 @@ export function enterManualMode(): void {
 function updateSpectator(world: World, deltaTime: number): void {
   spectator.presetTime += deltaTime;
   if (spectator.modeIndex === AUTO_MODE_INDEX) {
-    spectator.cycleTimer += deltaTime;
+    spectator.resumeDelay = Math.max(0, spectator.resumeDelay - deltaTime);
+    if (!spectator.interacting && spectator.resumeDelay === 0) spectator.cycleTimer += deltaTime;
     if (spectator.cycleTimer >= AUTO_CYCLE_INTERVAL) {
       // モードは「オートモード」のままなので UI へは通知しない。
       // プリセットごとに表示が入れ替わるとうるさいため (Issue #43)
@@ -443,6 +449,7 @@ export function setupCameraControls(): void {
   const pointers = new Map<number, { x: number; y: number }>();
   let pinchDistance = 0;
   dom.addEventListener('pointerdown', function (e) {
+    spectator.interacting = true;
     // 画面に触れた時点でマニュアルモードへ。ドラッグを待たずに切り替えるので
     // 「タップすれば自分で操作できる」ことが伝わる (Issue #43)
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -484,6 +491,10 @@ export function setupCameraControls(): void {
   function release(e: PointerEvent): void {
     pointers.delete(e.pointerId);
     pinchDistance = 0;
+    if (pointers.size === 0) {
+      spectator.interacting = false;
+      spectator.resumeDelay = AUTO_RESUME_DELAY;
+    }
   }
   dom.addEventListener('pointerup', release);
   dom.addEventListener('pointercancel', release);
@@ -491,6 +502,7 @@ export function setupCameraControls(): void {
     'wheel',
     function (e) {
       e.preventDefault();
+      spectator.resumeDelay = AUTO_RESUME_DELAY;
       spectator.zoom = clamp(spectator.zoom * (1 + e.deltaY * 0.0011), 0.35, 3);
       notify();
     },
