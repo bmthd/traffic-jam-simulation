@@ -1,7 +1,7 @@
 /* ================= カメラ操作（回転・ズーム・カメラモード） ================= */
 import * as THREE from 'three';
 import { CONST, clamp, smooth } from '../core';
-import type { Vehicle, World } from '../core';
+import type { Section, Vehicle, World } from '../core';
 import { isLandscapeViewport } from './camera-layout';
 import { flybyPose } from './flyby';
 import { camera, renderer, syncBackgroundAnchor } from './scene';
@@ -76,23 +76,27 @@ let followVehicle: Vehicle | null = null;
 let followChanged = false; // 追う車が入れ替わったフレームを知らせる(視点を繋ぎ直すため)
 let previousFollowZ: number | null = null;
 let pendingCameraWrap = 0;
+let followSection: Section = 'L';
+let skipFollowVehicle: Vehicle | null = null;
 function pickFollowVehicle(world: World): Vehicle | null {
-  if (followVehicle && !followVehicle.waiting && world.vehicles.includes(followVehicle)) {
+  if (
+    followVehicle &&
+    followVehicle.section === followSection &&
+    !followVehicle.waiting &&
+    world.vehicles.includes(followVehicle)
+  ) {
     pendingCameraWrap = cameraWrapOffset(previousFollowZ ?? followVehicle.z, followVehicle.z);
     previousFollowZ = followVehicle.z;
     return followVehicle;
   }
   // 画面中央付近(z≈0)を走行中の車を選ぶ。見失ったら選び直す
-  let best: Vehicle | null = null;
-  let bestScore = Infinity;
-  for (const vehicle of world.vehicles) {
-    if (vehicle.waiting || vehicle.speed < 6) continue;
-    const score = Math.abs(vehicle.z);
-    if (score < bestScore) {
-      bestScore = score;
-      best = vehicle;
-    }
-  }
+  const candidates = world.vehicles.filter(
+    (vehicle) =>
+      vehicle.section === followSection && !vehicle.waiting && vehicle !== skipFollowVehicle,
+  );
+  const best = candidates[Math.floor(Math.random() * candidates.length)] ?? null;
+  skipFollowVehicle = null;
+  if (followVehicle && best !== followVehicle) resetCameraAdjustment();
   followVehicle = best;
   followChanged = true;
   previousFollowZ = best?.z ?? null;
@@ -266,6 +270,7 @@ export interface SpectatorStatus {
   auto: boolean;
   mode: SpectatorMode; // トグルボタンが示す現在のモード
   adjusted: boolean;
+  section: Section;
 }
 export function getSpectatorStatus(): SpectatorStatus {
   return {
@@ -277,6 +282,7 @@ export function getSpectatorStatus(): SpectatorStatus {
       spectator.pitchOffset !== 0 ||
       spectator.zoom !== 1 ||
       spectator.panOffsetZ !== 0,
+    section: followSection,
   };
 }
 
@@ -326,6 +332,21 @@ function panFixedCamera(deltaZ: number): void {
   if (!isFixedPreset()) return;
   spectator.panOffsetZ = clamp(spectator.panOffsetZ + deltaZ, -180, 180);
   notify();
+}
+
+/** カメラが表示する区間を選ぶ（シミュレーションの車両挙動には影響しない） */
+export function selectCameraSection(section: Section): void {
+  if (followSection === section) return;
+  followSection = section;
+  followVehicle = null;
+  resetCameraAdjustment();
+}
+
+/** 同じ区間内の別の車両へ追尾対象を切り替える */
+export function selectNextFollowVehicle(): void {
+  skipFollowVehicle = followVehicle;
+  followVehicle = null;
+  resetCameraAdjustment();
 }
 
 // 表示するプリセットを切り替える。今の姿勢から新しい姿勢へ補間を始める

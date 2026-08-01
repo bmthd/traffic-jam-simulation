@@ -9,6 +9,8 @@ import {
   onSpectatorChange,
   onSpectatorProgress,
   resetCameraAdjustment,
+  selectCameraSection,
+  selectNextFollowVehicle,
   selectSpectatorMode,
 } from '../render/camera';
 import type { SpectatorStatus } from '../render/camera';
@@ -22,6 +24,7 @@ export function setupSpectator(): void {
   const menu = document.getElementById('spectatorMenu')!;
   const resetButton = document.getElementById('cameraResetBtn')!;
   const panHint = document.getElementById('cameraPanHint')!;
+  const vehicleBar = document.getElementById('vehicleCameraBar')!;
   let labelTimer: ReturnType<typeof setTimeout> | undefined;
 
   function render(status: SpectatorStatus, showLabel: boolean): void {
@@ -46,6 +49,10 @@ export function setupSpectator(): void {
     });
     resetButton.hidden = !status.adjusted;
     panHint.hidden = !['overhead', 'lookup', 'ramp'].includes(status.mode.id);
+    vehicleBar.hidden = !['follow', 'driver'].includes(status.mode.id);
+    vehicleBar.querySelectorAll<HTMLButtonElement>('[data-section]').forEach((item) => {
+      item.classList.toggle('selected', item.dataset.section === status.section);
+    });
   }
 
   const groups = [
@@ -76,6 +83,12 @@ export function setupSpectator(): void {
     button.setAttribute('aria-expanded', 'false');
   });
   resetButton.addEventListener('click', resetCameraAdjustment);
+  vehicleBar.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement;
+    const sectionButton = target.closest<HTMLButtonElement>('[data-section]');
+    if (sectionButton) selectCameraSection(sectionButton.dataset.section as 'L' | 'R');
+    if (target.closest('#nextVehicleBtn')) selectNextFollowVehicle();
+  });
   onSpectatorChange((status) => render(status, true));
   onSpectatorProgress((progress) => {
     button.style.setProperty('--auto-cycle-progress', String(progress));

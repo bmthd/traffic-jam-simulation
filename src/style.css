@@ -685,6 +685,29 @@ body.night #nightBtn {
   font-size: 11px;
   pointer-events: none;
 }
+.camera-operation-bar {
+  position: fixed;
+  right: 14px;
+  bottom: 18px;
+  z-index: 30;
+  display: flex;
+  gap: 5px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(3, 38, 27, 0.9);
+}
+.camera-operation-bar[hidden] {
+  display: none;
+}
+.camera-operation-bar button {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+}
+.camera-operation-bar button.selected {
+  color: #173b20;
+  background: #ffd54a;
+}
 @media (max-width: 700px) {
   #spectatorBtn {
     width: 50px;
