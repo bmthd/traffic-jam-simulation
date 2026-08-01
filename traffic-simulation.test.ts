@@ -3724,3 +3724,38 @@ describe('追尾カメラの周回境界 (Issue #127)', () => {
     expect(cameraWrapOffset(407, -407)).toBe(-WRAP_LENGTH);
   });
 });
+
+/* ============================================================
+   車線変更中の切り返し防止 (Issue #83)
+   車線変更開始時に安全確認を済ませた後、進行中の再確認が danger になっても
+   進捗を逆戻ししない。途中の cancel は横方向のガタつきの原因になる。
+   ============================================================ */
+describe('車線変更中の切り返し防止 (Issue #83)', () => {
+  test.each([
+    ['義務あり', 'L'],
+    ['義務なし', 'R'],
+  ] as const)('%s区間: 進行中に危険判定へ変わっても切り返さない', (_name, section) => {
+    const world = new World({ rng: createRng(83), spawnInterval: 1e9 });
+    const changing = new Vehicle(world, section, 1, 0, 'Sedan', 25);
+    changing.speed = 25;
+    const targetLaneVehicle = new Vehicle(world, section, 0, -30, 'Sedan', 25);
+    targetLaneVehicle.speed = 25;
+    targetLaneVehicle.keepLeft = false;
+    targetLaneVehicle.camper = false;
+    changing.keepLeft = false;
+    changing.camper = false;
+    world.vehicles.push(changing, targetLaneVehicle);
+    world.rebuildSectionIndex();
+
+    expect(changing.tryLaneChange(0), '安全な状態で車線変更を開始できない').toBe(true);
+    targetLaneVehicle.z = -2;
+    world.rebuildSectionIndex();
+
+    changing.updateLaneChange(0.7);
+
+    expect(changing.laneChange.state, '危険判定で車線変更をキャンセルした').toBe('changing');
+    expect(changing.laneChange.progress, '進捗が逆戻りした').toBeCloseTo(
+      0.7 / CONST.LANE_CHANGE_DURATION,
+    );
+  });
+});

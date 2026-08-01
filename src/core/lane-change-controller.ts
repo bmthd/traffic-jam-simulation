@@ -145,7 +145,8 @@ export class LaneChangeController {
       if (laneChange.checkTimer <= 0) {
         laneChange.checkTimer = 0.15;
         const safety = this.vehicle.checkLaneSafetyForChange(laneChange.to);
-        if (safety === 'danger') {
+        // 進捗30%を超えた車線変更はコミット済みとし、切り返しによる横揺れを防ぐ。
+        if (safety === 'danger' && laneChange.progress < 0.3) {
           this.vehicle.cancelLaneChange();
           return;
         }
