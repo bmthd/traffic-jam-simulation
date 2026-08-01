@@ -26,6 +26,7 @@ const L_CENTER_X = CONST.LANE_X.L[1]; // 義務あり区間の中心
 const R_CENTER_X = CONST.LANE_X.R[1]; // 義務なし区間の中心
 const CENTER_X = (L_CENTER_X + R_CENTER_X) / 2; // 全体の中心
 const L_SHOULDER_X = CONST.LANE_X.L[2] - 2.9; // 義務あり区間の左路肩(見上げ視点の立ち位置)
+const R_SHOULDER_X = CONST.LANE_X.R[2] - 2.9; // 義務なし区間の左路肩
 const RAMP_Z_MID = (CONST.RAMP_Z_TOP + CONST.RAMP_Z_END) / 2; // 合流帯の中央
 
 /* ================= マニュアルモードの視点操作（従来どおりの軌道カメラ） ================= */
@@ -149,8 +150,9 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     // 路肩の地面すれすれから、向かってくる車列を見上げる視点。
     // 車は -Z へ進むので +Z 側(奥)から迫ってきて、目の前を大きく通り過ぎる
     compute(pose) {
-      pose.position.set(L_SHOULDER_X, 0.3, -20);
-      pose.target.set(L_CENTER_X, 4.6, 46);
+      const centerX = followSection === 'L' ? L_CENTER_X : R_CENTER_X;
+      pose.position.set(followSection === 'L' ? L_SHOULDER_X : R_SHOULDER_X, 0.3, -20);
+      pose.target.set(centerX, 4.6, 46);
     },
   },
   {
@@ -201,8 +203,9 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     icon: 'merge',
     // 合流ランプ(加速車線)付近を斜め上から捉え、本線への合流を眺める
     compute(pose) {
-      pose.position.set(L_CENTER_X - 30, 17, RAMP_Z_MID + 55);
-      pose.target.set(L_CENTER_X - 9, 1.5, RAMP_Z_MID);
+      const centerX = followSection === 'L' ? L_CENTER_X : R_CENTER_X;
+      pose.position.set(centerX - 30, 17, RAMP_Z_MID + 55);
+      pose.target.set(centerX - 9, 1.5, RAMP_Z_MID);
     },
   },
 ];
@@ -339,6 +342,7 @@ export function selectCameraSection(section: Section): void {
   if (followSection === section) return;
   followSection = section;
   followVehicle = null;
+  beginTransition();
   resetCameraAdjustment();
 }
 

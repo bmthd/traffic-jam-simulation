@@ -49,7 +49,10 @@ export function setupSpectator(): void {
     });
     resetButton.hidden = !status.adjusted;
     panHint.hidden = !['overhead', 'lookup', 'ramp'].includes(status.mode.id);
-    vehicleBar.hidden = !['follow', 'driver'].includes(status.mode.id);
+    vehicleBar.hidden = !['follow', 'driver', 'lookup', 'ramp'].includes(status.mode.id);
+    document.getElementById('nextVehicleBtn')!.hidden = !['follow', 'driver'].includes(
+      status.mode.id,
+    );
     vehicleBar.querySelectorAll<HTMLButtonElement>('[data-section]').forEach((item) => {
       item.classList.toggle('selected', item.dataset.section === status.section);
     });
