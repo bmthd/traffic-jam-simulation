@@ -17,7 +17,7 @@ import {
   mountainNearMaterial,
   cloudMaterial,
 } from './materials';
-import { nightGroup, nightDome } from './night';
+import { nightGroup, nightSkyGroup, nightDome } from './night';
 
 export interface EnvSpec {
   background: number;
@@ -124,6 +124,7 @@ export function applyEnv(): void {
   // 夜専用アセットはまとめてフェード
   nightDome.material.opacity = mix;
   nightGroup.visible = mix > 0.02;
+  nightSkyGroup.visible = mix > 0.02;
   starMaterial.opacity = mix;
   moonMaterial.opacity = mix;
   haloMaterial.opacity = mix * 0.9;

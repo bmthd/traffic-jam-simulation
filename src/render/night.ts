@@ -1,7 +1,7 @@
 /* ================= ナイトモード用アセット(空・星・月・街灯・投光) ================= */
 import * as THREE from 'three';
-import { CONST } from '../core';
-import { scene } from './scene';
+import { WRAP_LENGTH } from '../core';
+import { backgroundAnchor, scene } from './scene';
 import {
   starMaterial,
   moonMaterial,
@@ -13,13 +13,15 @@ import {
 } from './materials';
 import { GANTRY_Z, SECTIONS, sectionX } from './track';
 import { instancedAt, instancedWith } from './instancing';
-
-const ROAD_HALF = CONST.ROAD_HALF;
+import { loopCopies } from './looping';
 
 // 夜だけ表示するものをまとめるグループ
 export const nightGroup = new THREE.Group();
 nightGroup.visible = false;
 scene.add(nightGroup);
+export const nightSkyGroup = new THREE.Group();
+nightSkyGroup.visible = false;
+backgroundAnchor.add(nightSkyGroup);
 
 // 空: 縦グラデーションのドーム(昼ドームの内側に夜ドームを重ね、opacityでクロスフェード)
 function makeSkyDome(
@@ -46,7 +48,7 @@ function makeSkyDome(
     }),
   );
   mesh.renderOrder = order;
-  scene.add(mesh);
+  backgroundAnchor.add(mesh);
   return mesh;
 }
 makeSkyDome(
@@ -87,7 +89,7 @@ nightDome.material.opacity = 0;
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   const stars = new THREE.Points(geometry, starMaterial);
   stars.renderOrder = -18;
-  nightGroup.add(stars);
+  nightSkyGroup.add(stars);
 })();
 
 // 月(ハロー付き)
@@ -96,12 +98,12 @@ nightDome.material.opacity = 0;
   moon.position.set(330, 520, 260);
   moon.lookAt(0, 0, 0);
   moon.renderOrder = -17;
-  nightGroup.add(moon);
+  nightSkyGroup.add(moon);
   const halo = new THREE.Sprite(haloMaterial);
   halo.scale.set(170, 170, 1);
   halo.position.copy(moon.position);
   halo.renderOrder = -17;
-  nightGroup.add(halo);
+  nightSkyGroup.add(halo);
 })();
 
 // 街灯(区間の仕切りの上から両側へアームを伸ばすダブルアーム式・ナトリウム灯)。
@@ -127,21 +129,24 @@ const LAMP_GLOW_OFFSET_X = 3.6;
   const headPositions: [number, number, number][] = [];
   const glowMatrices: THREE.Matrix4[] = [];
   const glowRotation = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
-  for (let z = -ROAD_HALF + 14; z < ROAD_HALF; z += 42) {
-    polePositions.push([LAMP_ROW_X, 3.6, z]);
-    armPositions.push([LAMP_ROW_X, 7.1, z]);
-    for (const side of [-1, 1]) {
-      headPositions.push([LAMP_ROW_X + side * LAMP_HEAD_OFFSET_X, 7.0, z]);
-      // 電球のにじみ(夜のみ): 灯具が光源として「光って見える」ように
-      // 発光表現が影を落とすと不自然なため castShadow は設定しない
-      const bulb = new THREE.Sprite(bulbMaterial);
-      bulb.scale.set(2.6, 2.6, 1);
-      bulb.position.set(LAMP_ROW_X + side * LAMP_HEAD_OFFSET_X, 6.92, z);
-      nightGroup.add(bulb);
-      // 路面の光だまり(夜のみ)
-      glowMatrices.push(
-        glowRotation.clone().setPosition(LAMP_ROW_X + side * LAMP_GLOW_OFFSET_X, 0.03, z),
-      );
+  const lampSpacing = WRAP_LENGTH / 24;
+  for (let z = -WRAP_LENGTH / 2 + lampSpacing / 2; z < WRAP_LENGTH / 2; z += lampSpacing) {
+    for (const copyZ of loopCopies(z)) {
+      polePositions.push([LAMP_ROW_X, 3.6, copyZ]);
+      armPositions.push([LAMP_ROW_X, 7.1, copyZ]);
+      for (const side of [-1, 1]) {
+        headPositions.push([LAMP_ROW_X + side * LAMP_HEAD_OFFSET_X, 7.0, copyZ]);
+        // 電球のにじみ(夜のみ): 灯具が光源として「光って見える」ように
+        // 発光表現が影を落とすと不自然なため castShadow は設定しない
+        const bulb = new THREE.Sprite(bulbMaterial);
+        bulb.scale.set(2.6, 2.6, 1);
+        bulb.position.set(LAMP_ROW_X + side * LAMP_HEAD_OFFSET_X, 6.92, copyZ);
+        nightGroup.add(bulb);
+        // 路面の光だまり(夜のみ)
+        glowMatrices.push(
+          glowRotation.clone().setPosition(LAMP_ROW_X + side * LAMP_GLOW_OFFSET_X, 0.03, copyZ),
+        );
+      }
     }
   }
   const poles = instancedAt(poleGeometry, poleMaterial, polePositions);

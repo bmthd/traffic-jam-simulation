@@ -37,7 +37,7 @@ import {
 } from './src/core';
 import { isLandscapeViewport } from './src/render/camera-layout';
 import { flybyPose } from './src/render/flyby';
-import { loopCopies } from './src/render/looping';
+import { cameraWrapOffset, loopCopies } from './src/render/looping';
 
 /* ---------- ヘルパー: シナリオ実行 ---------- */
 const TIME_STEP = 1 / 20;
@@ -3711,5 +3711,16 @@ describe('依存注入 (Issue #120)', () => {
       return world.vehicles.map((vehicle) => vehicle.z);
     };
     expect(runSteps(createWorldDeps())).toEqual(runSteps());
+  });
+});
+
+describe('追尾カメラの周回境界 (Issue #127)', () => {
+  test('車両が進行方向へ周回したときカメラを次の複製へ繋ぎ直す', () => {
+    expect(cameraWrapOffset(-407, 407)).toBe(WRAP_LENGTH);
+  });
+
+  test('通常走行と逆向きの境界通過を区別する', () => {
+    expect(cameraWrapOffset(120, 119)).toBe(0);
+    expect(cameraWrapOffset(407, -407)).toBe(-WRAP_LENGTH);
   });
 });

@@ -2,13 +2,11 @@
    道路施設(track.js)とは別の「風景」を担当する。
    山・雲のマテリアルは materials.js にあり、昼夜の色は theme.js が補間する */
 import * as THREE from 'three';
-import { CONST, WRAP_LENGTH } from '../core';
-import { scene } from './scene';
+import { WRAP_LENGTH } from '../core';
+import { backgroundAnchor, scene } from './scene';
 import { mountainFarMaterial, mountainNearMaterial, cloudMaterial } from './materials';
 import { instancedAt } from './instancing';
 import { loopCopies } from './looping';
-
-const ROAD_HALF = CONST.ROAD_HALF;
 
 /* ---- 路側の防護柵(ガードレール) ---- */
 (function buildRoadside() {
@@ -44,16 +42,19 @@ const ROAD_HALF = CONST.ROAD_HALF;
       zEnd = -130,
       length = zEnd - zStart,
       zCenter = (zStart + zEnd) / 2;
-    const base = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.5, length), wallMaterial);
-    base.position.set(19.2 * side, 0.75, zCenter);
-    base.castShadow = true;
-    scene.add(base);
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.7, length), panelMaterial);
-    panel.position.set(19.2 * side, 2.35, zCenter);
-    // three r128 では半透明の影は不透明になるが、下段の影が途中で切れる違和感を避ける
-    panel.castShadow = true;
-    scene.add(panel);
-    for (let z = zStart; z <= zEnd; z += 10) wallPostPositions.push([19.2 * side, 1.6, z]);
+    for (const offset of loopCopies(0)) {
+      const base = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.5, length), wallMaterial);
+      base.position.set(19.2 * side, 0.75, zCenter + offset);
+      base.castShadow = true;
+      scene.add(base);
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.7, length), panelMaterial);
+      panel.position.set(19.2 * side, 2.35, zCenter + offset);
+      // three r128 では半透明の影は不透明になるが、下段の影が途中で切れる違和感を避ける
+      panel.castShadow = true;
+      scene.add(panel);
+      for (let z = zStart; z <= zEnd; z += 10)
+        wallPostPositions.push([19.2 * side, 1.6, z + offset]);
+    }
   }
   const wallPosts = instancedAt(wallPostGeometry, wallPostMaterial, wallPostPositions);
   wallPosts.castShadow = true;
@@ -69,12 +70,12 @@ const ROAD_HALF = CONST.ROAD_HALF;
   const trunks = new THREE.InstancedMesh(
     trunkGeometry,
     new THREE.MeshLambertMaterial({ color: 0x6b4e35 }),
-    treeCount,
+    treeCount * 3,
   );
   const canopies = new THREE.InstancedMesh(
     canopyGeometry,
     new THREE.MeshLambertMaterial({ color: 0xffffff }),
-    treeCount,
+    treeCount * 3,
   );
   trunks.castShadow = true;
   canopies.castShadow = true;
@@ -86,21 +87,23 @@ const ROAD_HALF = CONST.ROAD_HALF;
   for (let i = 0; i < treeCount; i++) {
     const side = Math.random() < 0.5 ? -1 : 1;
     const x = side * (22 + Math.pow(Math.random(), 1.6) * 70);
-    const z = -ROAD_HALF + Math.random() * ROAD_HALF * 2;
+    const z = -WRAP_LENGTH / 2 + Math.random() * WRAP_LENGTH;
     const height = 2.4 + Math.random() * 3.6; // 幹の高さ
     const radius = height * (0.42 + Math.random() * 0.22); // 樹冠の半径
-    matrix.makeScale(1 + radius * 0.3, height, 1 + radius * 0.3).setPosition(x, 0, z);
-    trunks.setMatrixAt(i, matrix);
-    matrix
-      .makeScale(radius, radius * (0.9 + Math.random() * 0.5), radius)
-      .setPosition(x, height + radius * 0.5, z);
-    canopies.setMatrixAt(i, matrix);
+    const canopyHeight = radius * (0.9 + Math.random() * 0.5);
     color.setHSL(
       0.26 + Math.random() * 0.09,
       0.35 + Math.random() * 0.25,
       0.26 + Math.random() * 0.14,
     );
-    canopies.setColorAt(i, color);
+    loopCopies(z).forEach((copyZ, copyIndex) => {
+      const index = i * 3 + copyIndex;
+      matrix.makeScale(1 + radius * 0.3, height, 1 + radius * 0.3).setPosition(x, 0, copyZ);
+      trunks.setMatrixAt(index, matrix);
+      matrix.makeScale(radius, canopyHeight, radius).setPosition(x, height + radius * 0.5, copyZ);
+      canopies.setMatrixAt(index, matrix);
+      canopies.setColorAt(index, color);
+    });
   }
   scene.add(trunks, canopies);
 })();
@@ -114,7 +117,7 @@ const ROAD_HALF = CONST.ROAD_HALF;
   );
   far.position.y = 66;
   far.renderOrder = -16;
-  scene.add(far);
+  backgroundAnchor.add(far);
   const near = new THREE.Mesh(
     new THREE.CylinderGeometry(760, 760, 130, 72, 1, true),
     mountainNearMaterial,
@@ -122,7 +125,7 @@ const ROAD_HALF = CONST.ROAD_HALF;
   near.position.y = 40;
   near.rotation.y = 2.1;
   near.renderOrder = -15;
-  scene.add(near);
+  backgroundAnchor.add(near);
 })();
 
 /* ---- 雲 ---- */
@@ -152,6 +155,6 @@ const ROAD_HALF = CONST.ROAD_HALF;
     sprite.scale.set(width, width * aspect, 1);
     sprite.position.set(centerX, centerY, centerZ);
     sprite.renderOrder = -14;
-    scene.add(sprite);
+    backgroundAnchor.add(sprite);
   }
 })();

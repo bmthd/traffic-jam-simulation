@@ -4,7 +4,8 @@ import { CONST, clamp, smooth } from '../core';
 import type { Vehicle, World } from '../core';
 import { isLandscapeViewport } from './camera-layout';
 import { flybyPose } from './flyby';
-import { camera, renderer } from './scene';
+import { camera, renderer, syncBackgroundAnchor } from './scene';
+import { cameraWrapOffset } from './looping';
 
 export interface CameraController {
   theta: number;
@@ -73,8 +74,12 @@ export interface SpectatorPreset {
    区間内から1台選び、退場するか止まるまで同じ車を追い続ける */
 let followVehicle: Vehicle | null = null;
 let followChanged = false; // 追う車が入れ替わったフレームを知らせる(視点を繋ぎ直すため)
+let previousFollowZ: number | null = null;
+let pendingCameraWrap = 0;
 function pickFollowVehicle(world: World): Vehicle | null {
   if (followVehicle && !followVehicle.waiting && world.vehicles.includes(followVehicle)) {
+    pendingCameraWrap = cameraWrapOffset(previousFollowZ ?? followVehicle.z, followVehicle.z);
+    previousFollowZ = followVehicle.z;
     return followVehicle;
   }
   // 画面中央付近(z≈0)を走行中の車を選ぶ。見失ったら選び直す
@@ -90,6 +95,8 @@ function pickFollowVehicle(world: World): Vehicle | null {
   }
   followVehicle = best;
   followChanged = true;
+  previousFollowZ = best?.z ?? null;
+  pendingCameraWrap = 0;
   return best;
 }
 // 追う車がいないときの逃げ場(生成直後など)。俯瞰気味に全体を映す
@@ -352,6 +359,14 @@ function updateSpectator(world: World, deltaTime: number): void {
     time: spectator.presetTime,
     world,
   });
+  if (pendingCameraWrap !== 0) {
+    // 車両と同時に同じ周回複製へ移し、補間が816mを横切らないようにする。
+    currentPose.position.z += pendingCameraWrap;
+    currentPose.target.z += pendingCameraWrap;
+    fromPose.position.z += pendingCameraWrap;
+    fromPose.target.z += pendingCameraWrap;
+    pendingCameraWrap = 0;
+  }
   // 追う車が入れ替わった時も繋ぎ直す(視点が瞬間移動せず、別の車へ寄っていく)
   if (followChanged) {
     followChanged = false;
@@ -382,6 +397,7 @@ export function updateCamera(world?: World, deltaTime = 0): void {
   } else {
     applyOrbit();
   }
+  syncBackgroundAnchor();
 }
 
 export function setupCameraControls(): void {

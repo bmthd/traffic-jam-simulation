@@ -9,6 +9,14 @@ export const scene = new THREE.Scene();
 scene.background = new THREE.Color(SKY_COLOR);
 scene.fog = new THREE.Fog(SKY_COLOR, 140, 420); // 遠景処理: 遠方が背景に溶け込む
 
+// 遠景と地面をカメラの進行位置へ追従させ、周回を重ねても相対位置を保つ。
+export const backgroundAnchor = new THREE.Group();
+scene.add(backgroundAnchor);
+
+export function syncBackgroundAnchor(): void {
+  backgroundAnchor.position.z = camera.position.z;
+}
+
 export const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.5, 1200);
 
 function createRenderer(): THREE.WebGLRenderer {
@@ -81,4 +89,4 @@ const ground = new THREE.Mesh(
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.18;
 ground.receiveShadow = true;
-scene.add(ground);
+backgroundAnchor.add(ground);
