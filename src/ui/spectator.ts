@@ -5,6 +5,7 @@
    カメラ状態そのものは render/camera.ts が持ち、ここは操作と表示だけを行う。 */
 import {
   SPECTATOR_MODES,
+  adjustCamera,
   getSpectatorStatus,
   onSpectatorChange,
   onSpectatorProgress,
@@ -91,6 +92,27 @@ export function setupSpectator(): void {
     const sectionButton = target.closest<HTMLButtonElement>('[data-section]');
     if (sectionButton) selectCameraSection(sectionButton.dataset.section as 'L' | 'R');
     if (target.closest('#nextVehicleBtn')) selectNextFollowVehicle();
+  });
+  document.addEventListener('keydown', (event) => {
+    const target = event.target as HTMLElement;
+    if (target.matches('input, textarea, select, button') || target.isContentEditable) return;
+    const status = getSpectatorStatus();
+    const adjustment = 0.08;
+    if (event.key === 'ArrowLeft') adjustCamera(adjustment, 0);
+    else if (event.key === 'ArrowRight') adjustCamera(-adjustment, 0);
+    else if (event.key === 'ArrowUp') adjustCamera(0, -adjustment);
+    else if (event.key === 'ArrowDown') adjustCamera(0, adjustment);
+    else if (event.key.toLowerCase() === 'n' && ['follow', 'driver'].includes(status.mode.id))
+      selectNextFollowVehicle();
+    else if (
+      ['lookup', 'ramp', 'follow', 'driver'].includes(status.mode.id) &&
+      ['l', 'r'].includes(event.key.toLowerCase())
+    )
+      selectCameraSection(event.key.toUpperCase() as 'L' | 'R');
+    else if (/^[1-8]$/.test(event.key))
+      selectSpectatorMode(SPECTATOR_MODES[Number(event.key) - 1].id);
+    else return;
+    event.preventDefault();
   });
   onSpectatorChange((status) => render(status, true));
   onSpectatorProgress((progress) => {

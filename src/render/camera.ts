@@ -337,6 +337,13 @@ function panFixedCamera(deltaZ: number): void {
   notify();
 }
 
+/** キーボード操作から現在の視点を少しだけ首振りする */
+export function adjustCamera(yaw: number, pitch: number): void {
+  spectator.yawOffset += yaw;
+  spectator.pitchOffset = clamp(spectator.pitchOffset + pitch, -1.2, 1.2);
+  notify();
+}
+
 /** カメラが表示する区間を選ぶ（シミュレーションの車両挙動には影響しない） */
 export function selectCameraSection(section: Section): void {
   if (followSection === section) return;
