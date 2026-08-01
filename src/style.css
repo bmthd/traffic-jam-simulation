@@ -621,6 +621,93 @@ body.night #nightBtn {
   opacity: 1;
   transform: translateY(0);
 }
+#spectatorMenu {
+  display: none;
+  position: fixed;
+  top: 78px;
+  right: 78px;
+  z-index: 31;
+  width: 210px;
+  padding: 10px;
+  border-radius: 12px;
+  color: #fff;
+  background: rgba(3, 38, 27, 0.94);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+#spectatorMenu.open {
+  display: block;
+}
+.camera-menu-heading {
+  padding: 5px 8px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.camera-menu-group button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+.camera-menu-group button:hover,
+.camera-menu-group button.selected {
+  background: rgba(255, 213, 74, 0.2);
+}
+.camera-menu-group .lucide {
+  width: 18px;
+  height: 18px;
+}
+#cameraResetBtn {
+  position: fixed;
+  top: 148px;
+  right: 14px;
+  z-index: 30;
+  padding: 7px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(3, 38, 27, 0.88);
+}
+#cameraPanHint {
+  position: fixed;
+  right: 14px;
+  bottom: 18px;
+  z-index: 29;
+  padding: 5px 9px;
+  border-radius: 7px;
+  color: #fff;
+  background: rgba(3, 38, 27, 0.75);
+  font-size: 11px;
+  pointer-events: none;
+}
+.camera-operation-bar {
+  position: fixed;
+  right: 14px;
+  bottom: 18px;
+  z-index: 30;
+  display: flex;
+  gap: 5px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(3, 38, 27, 0.9);
+}
+.camera-operation-bar[hidden] {
+  display: none;
+}
+.camera-operation-bar button {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+}
+.camera-operation-bar button.selected {
+  color: #173b20;
+  background: #ffd54a;
+}
 @media (max-width: 700px) {
   #spectatorBtn {
     width: 50px;
