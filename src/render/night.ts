@@ -129,6 +129,7 @@ const LAMP_GLOW_OFFSET_X = 3.6;
   const headPositions: [number, number, number][] = [];
   const glowMatrices: THREE.Matrix4[] = [];
   const glowRotation = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
+  // 総延長4倍と前後周回の複製で負荷が増えるため、延長前と同じ総数に制限する。
   const lampSpacing = WRAP_LENGTH / 24;
   for (let z = -WRAP_LENGTH / 2 + lampSpacing / 2; z < WRAP_LENGTH / 2; z += lampSpacing) {
     for (const copyZ of loopCopies(z)) {

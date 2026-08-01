@@ -10,6 +10,7 @@ import {
   onSpectatorProgress,
 } from '../render/camera';
 import type { SpectatorStatus } from '../render/camera';
+import { FACILITIES } from '../core';
 import { icon, renderIcons } from './icons';
 
 const MODE_LABEL_DURATION_MS = 3000;
@@ -24,7 +25,8 @@ export function setupSpectator(): void {
     button.innerHTML = icon(status.mode.icon);
     button.classList.toggle('on', status.enabled);
     button.classList.toggle('auto', status.auto);
-    label.textContent = status.mode.label;
+    const facilityLabel = status.mode.id === 'ramp' ? ` ${status.facilityIndex + 1}/4` : '';
+    label.textContent = status.mode.label + facilityLabel;
     label.classList.toggle('show', showLabel);
     clearTimeout(labelTimer);
     if (showLabel) {
@@ -32,7 +34,10 @@ export function setupSpectator(): void {
         label.classList.remove('show');
       }, MODE_LABEL_DURATION_MS);
     }
-    const title = 'カメラ: ' + status.mode.label + '(押して切替)';
+    const facilityKind = FACILITIES[status.facilityIndex].kind;
+    const detail =
+      status.mode.id === 'ramp' ? ` 施設${status.facilityIndex + 1} (${facilityKind})` : '';
+    const title = 'カメラ: ' + status.mode.label + detail + '(押して切替)';
     button.title = title;
     button.setAttribute('aria-label', title);
     renderIcons();
