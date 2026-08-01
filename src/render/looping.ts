@@ -7,3 +7,11 @@ import { WRAP_LENGTH } from '../core';
 export function loopCopies(z: number): [number, number, number] {
   return [z - WRAP_LENGTH, z, z + WRAP_LENGTH];
 }
+
+/** 周回境界をまたいだ追尾対象に合わせ、カメラを同じ複製位置へ移す量を返す。 */
+export function cameraWrapOffset(previousZ: number, currentZ: number): number {
+  const delta = currentZ - previousZ;
+  if (delta > WRAP_LENGTH / 2) return WRAP_LENGTH;
+  if (delta < -WRAP_LENGTH / 2) return -WRAP_LENGTH;
+  return 0;
+}
