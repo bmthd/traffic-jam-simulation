@@ -2,7 +2,16 @@
    シミュレーションコア: ワールド（車両生成・時間発展・スコア）
    （DOM / THREE 非依存・テスト対象）
    ============================================================ */
-import { CONST, rampBodyIntersectsGore, sectionTrackX, TYPES, TYPE_WEIGHTS } from './constants';
+import {
+  CONST,
+  FACILITIES,
+  facilityIndexForZ,
+  rampBodyIntersectsGore,
+  sectionTrackX,
+  toFacilityLocalZ,
+  TYPES,
+  TYPE_WEIGHTS,
+} from './constants';
 import type { Section, SimMode, VehicleTypeName } from './constants';
 import { clamp, wrapDelta, WRAP_LENGTH } from './utils';
 import type { Rng } from './utils';
@@ -69,6 +78,10 @@ export class World {
   time: number;
   sectionVehicles: Record<Section, Vehicle[]>;
   lastMergeSource: Record<Section, MergeSource | null> = { L: null, R: null };
+  private lastMergeSourceByFacility: Record<Section, (MergeSource | null)[]> = {
+    L: FACILITIES.map(() => null),
+    R: FACILITIES.map(() => null),
+  };
   nextVehicleOrder = 0;
   nextMergePlanId = 0;
   stats: {
@@ -143,8 +156,16 @@ export class World {
   // absorbモード: 円周実験(車両は退出しない)なので、この値を上限として
   // 間隔に応じた密度を維持する。
   targetCountPerSection(): number {
-    const factor = this.mode === 'absorb' ? CONST.ABSORB_DENSITY_FACTOR : CONST.DEMAND_FACTOR;
-    return clamp(Math.round(factor / this.spawnInterval / 2), 12, CONST.MAX_VEHICLES_PER_SECTION);
+    const absorbMode = this.mode === 'absorb';
+    const factor = absorbMode ? CONST.ABSORB_DENSITY_FACTOR : CONST.DEMAND_FACTOR;
+    // rules需要係数の意味を維持し、将来の道路延長にも同じ台数密度で追従させる。
+    // absorb係数は準安定密度そのものとして周長変更時に再較正する。
+    const lengthRatio = WRAP_LENGTH / 816;
+    return clamp(
+      Math.round((factor * (absorbMode ? 1 : lengthRatio)) / this.spawnInterval / 2),
+      12 * lengthRatio,
+      CONST.MAX_VEHICLES_PER_SECTION,
+    );
   }
 
   // HUDなど両区間合計を扱う呼び出し元向けの基準台数。
@@ -276,15 +297,32 @@ export class World {
       speed = Math.max(speed, 32 + this.rng() * 4); // 希望速度 ≒ 115〜130km/h
     }
     const viaRamp = this.rng() < CONST.RAMP_SHARE;
+    // 施設番号はペアにつき一度だけ抽選し、L/Rへ同じ入口座標を渡す。
+    const facility = viaRamp ? FACILITIES[Math.floor(this.rng() * FACILITIES.length)] : null;
     const preferredLane = viaRamp ? 3 : Math.floor(this.rng() * 3);
     // 本線流入は空いているレーンを選んで入る(上流から来る車は自然に分散する)。
     // 候補の優先順は左右で同一にし、どのレーンに入れるかだけ各道路の状況に従う
     const lanes = viaRamp ? [3] : [preferredLane, (preferredLane + 1) % 3, (preferredLane + 2) % 3];
-    const z = viaRamp ? CONST.RAMP_Z_TOP : CONST.ROAD_HALF + spec.length;
+    const rawZ = viaRamp ? CONST.RAMP_Z_TOP + facility!.offsetZ : CONST.ROAD_HALF + spec.length;
+    const z = viaRamp
+      ? ((((rawZ + CONST.ROAD_HALF + 8) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH) -
+        CONST.ROAD_HALF -
+        8
+      : rawZ;
     let added = false;
     for (const section of ['L', 'R'] as const) {
       if (this.sectionCount(section) >= CONST.MAX_VEHICLES_PER_SECTION) continue;
-      if (this.waitingCount(section, viaRamp ? 'ramp' : 'mainline') >= CONST.RAMP_QUEUE_MAX)
+      if (
+        (viaRamp
+          ? this.vehicles.filter(
+              (vehicle) =>
+                vehicle.waiting &&
+                vehicle.section === section &&
+                vehicle.lane === 3 &&
+                facilityIndexForZ(vehicle.z) === facility!.index,
+            ).length
+          : this.waitingCount(section, 'mainline')) >= CONST.RAMP_QUEUE_MAX
+      )
         continue;
       // ランプ需要は入口の lane 3 が空いていても、lane 2 の将来枠を証明するまで
       // 有効道路状態へ入れない。本線需要は従来通り入口判定だけで扱う。
@@ -463,14 +501,14 @@ export class World {
     deltaTime: number,
   ): void {
     const candidates: { vehicle: Vehicle; candidate: MergeCandidate }[] = [];
-    const activeRampSections = new Set(
+    const activeRampFacilities = new Set(
       this.vehicles
         .filter((vehicle) => !vehicle.waiting && vehicle.lane === 3)
-        .map((vehicle) => vehicle.section),
+        .map((vehicle) => `${vehicle.section}:${facilityIndexForZ(vehicle.z)}`),
     );
     for (const vehicle of heads) {
       if (!vehicle.waiting || vehicle.lane !== 3) continue;
-      if (activeRampSections.has(vehicle.section)) continue;
+      if (activeRampFacilities.has(`${vehicle.section}:${facilityIndexForZ(vehicle.z)}`)) continue;
       const certificate = vehicle.evaluateEntryCertificate(snapshot, deltaTime);
       if (!certificate) continue;
       const provisionalPlan: MergePlan = {
@@ -549,7 +587,7 @@ export class World {
         vehicle.width,
         vehicle.length,
       );
-      if (vehicle.z <= CONST.GORE_Z_START || intersects)
+      if (toFacilityLocalZ(vehicle.z) <= CONST.GORE_Z_START || intersects)
         throw new Error(`導流帯不変条件違反(${phase}): vehicle=${vehicle.spawnOrder}`);
     }
   }
@@ -627,7 +665,7 @@ export class World {
       const nextRampX = rampMotion.nextX;
       if (
         nextProgress < 1 &&
-        (nextRampZ <= CONST.GORE_Z_START ||
+        (toFacilityLocalZ(nextRampZ) <= CONST.GORE_Z_START ||
           rampBodyIntersectsGore(
             sectionTrackX(ramp.section, nextRampX),
             nextRampZ,
@@ -731,9 +769,13 @@ export class World {
       const waiting = this.vehicles
         .filter((candidate) => candidate.waiting && candidate.section === section)
         .sort((left, right) => left.spawnOrder - right.spawnOrder);
-      const rampHead = waiting.find((vehicle) => vehicle.lane === 3);
+      const rampHeadsByFacility = FACILITIES.map((facility) =>
+        waiting.find(
+          (vehicle) => vehicle.lane === 3 && facilityIndexForZ(vehicle.z) === facility.index,
+        ),
+      );
       const mainlineHead = waiting.find((vehicle) => vehicle.lane !== 3);
-      if (rampHead) rampHeads.push(rampHead);
+      for (const rampHead of rampHeadsByFacility) if (rampHead) rampHeads.push(rampHead);
       if (mainlineHead) mainlineHeads.push(mainlineHead);
     }
     for (const vehicle of mainlineHeads) {
@@ -812,6 +854,10 @@ export class World {
       outflow: { L: 0, R: 0 },
     };
     this.lastMergeSource = { L: null, R: null };
+    this.lastMergeSourceByFacility = {
+      L: FACILITIES.map(() => null),
+      R: FACILITIES.map(() => null),
+    };
     this.smoothTime = { L: 0, R: 0, draw: 0 }; // 累積の比較もやり直す
     this.absorberRoundRobin = null;
     this.laneRoundRobin = 0;
@@ -843,9 +889,11 @@ export class World {
     for (const vehicle of this.vehicles) {
       if (vehicle.waiting) continue;
       const crossedMergePoint =
-        vehicle.previousZ >= CONST.MERGE_POINT_Z && vehicle.z < CONST.MERGE_POINT_Z;
+        toFacilityLocalZ(vehicle.previousZ) >= CONST.MERGE_POINT_Z &&
+        toFacilityLocalZ(vehicle.z) < CONST.MERGE_POINT_Z;
       if (vehicle.rampMergePassPending) {
         this.lastMergeSource[vehicle.section] = 'ramp';
+        this.lastMergeSourceByFacility[vehicle.section][facilityIndexForZ(vehicle.z)] = 'ramp';
         vehicle.rampMergePassPending = false;
         if (crossedMergePoint) vehicle.mergedFromRamp = false;
         continue;
@@ -855,19 +903,33 @@ export class World {
         vehicle.mergedFromRamp = false;
       } else {
         this.lastMergeSource[vehicle.section] = 'main';
+        this.lastMergeSourceByFacility[vehicle.section][facilityIndexForZ(vehicle.z)] = 'main';
       }
     }
   }
 
+  rampLeaders(section: Section): Vehicle[] {
+    const rampVehicles = this.sectionVehicles[section].filter(
+      (vehicle) =>
+        vehicle.lane === 3 ||
+        (vehicle.laneChange.from === 3 && vehicle.laneChange.state !== 'none'),
+    );
+    return FACILITIES.map(
+      (facility) =>
+        rampVehicles
+          .filter((vehicle) => facilityIndexForZ(vehicle.z) === facility.index)
+          .sort(
+            (a, b) => toFacilityLocalZ(a.z) - toFacilityLocalZ(b.z) || a.spawnOrder - b.spawnOrder,
+          )[0] ?? null,
+    ).filter((vehicle): vehicle is Vehicle => vehicle !== null);
+  }
+
+  /** 単一施設時代の呼び出し互換。進行上もっとも先頭のランプ車を返す。 */
   rampLeader(section: Section): Vehicle | null {
     return (
-      this.sectionVehicles[section]
-        .filter(
-          (vehicle) =>
-            vehicle.lane === 3 ||
-            (vehicle.laneChange.from === 3 && vehicle.laneChange.state !== 'none'),
-        )
-        .sort((a, b) => a.z - b.z || a.spawnOrder - b.spawnOrder)[0] ?? null
+      this.rampLeaders(section).sort(
+        (a, b) => toFacilityLocalZ(a.z) - toFacilityLocalZ(b.z) || a.spawnOrder - b.spawnOrder,
+      )[0] ?? null
     );
   }
 
@@ -876,7 +938,8 @@ export class World {
     const sorted = [...evaluations].sort(
       (a, b) =>
         a.plan.targetPassTime - b.plan.targetPassTime ||
-        Math.abs(a.leader.z - CONST.MERGE_POINT_Z) - Math.abs(b.leader.z - CONST.MERGE_POINT_Z) ||
+        Math.abs(toFacilityLocalZ(a.leader.z) - CONST.MERGE_POINT_Z) -
+          Math.abs(toFacilityLocalZ(b.leader.z) - CONST.MERGE_POINT_Z) ||
         a.leader.spawnOrder - b.leader.spawnOrder,
     );
     for (const evaluation of sorted) {
@@ -901,8 +964,8 @@ export class World {
     deltaTime: number,
     protectedOrders: ReadonlySet<number> = new Set(),
   ): void {
-    const leaders = (['L', 'R'] as const).map((section) => this.rampLeader(section));
-    const leaderSet = new Set(leaders.filter((vehicle): vehicle is Vehicle => vehicle !== null));
+    const leaders = (['L', 'R'] as const).flatMap((section) => this.rampLeaders(section));
+    const leaderSet = new Set(leaders);
     for (const vehicle of this.vehicles) {
       if (
         vehicle.waiting ||
@@ -914,22 +977,22 @@ export class World {
     }
     const evaluations = leaders
       .filter(
-        (leader): leader is Vehicle =>
-          leader !== null &&
-          leader.mergePlan.state !== 'committed' &&
-          leader.mergePlan.certificate === null,
+        (leader) => leader.mergePlan.state !== 'committed' && leader.mergePlan.certificate === null,
       )
       .map((leader) => ({
         leader,
-        plan: leader.evaluateMergePlan(deltaTime, this.lastMergeSource[leader.section]),
+        plan: leader.evaluateMergePlan(
+          deltaTime,
+          this.lastMergeSourceByFacility[leader.section][facilityIndexForZ(leader.z)] ??
+            this.lastMergeSource[leader.section],
+        ),
       }));
     this.applyMergeEvaluations(evaluations);
     const activeRears = new Set(
       leaders
         .filter(
-          (leader): leader is Vehicle =>
-            leader !== null &&
-            (leader.mergePlan.state === 'coordinating' || leader.mergePlan.state === 'committed'),
+          (leader) =>
+            leader.mergePlan.state === 'coordinating' || leader.mergePlan.state === 'committed',
         )
         .map((leader) => leader.mergePlan.rear)
         .filter((rear): rear is Vehicle => rear !== null),

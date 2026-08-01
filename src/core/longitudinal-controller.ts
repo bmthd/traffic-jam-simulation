@@ -1,4 +1,4 @@
-import { CONST } from './constants';
+import { CONST, facilityWorldZ } from './constants';
 import { clamp } from './utils';
 import type { NeighborInfo, Vehicle } from './vehicle';
 
@@ -55,7 +55,10 @@ export class LongitudinalController {
       this.vehicle.mergePlan.targetPassTime > this.vehicle.world.time
     ) {
       const time = this.vehicle.mergePlan.targetPassTime - this.vehicle.world.time;
-      const mergeSpeed = Math.max(1, (this.vehicle.z - CONST.MERGE_POINT_Z) / time);
+      const mergeSpeed = Math.max(
+        1,
+        (this.vehicle.z - facilityWorldZ(CONST.MERGE_POINT_Z, this.vehicle.z)) / time,
+      );
       const reservedSlot = this.vehicle.projectReservedMergeSlot(this.vehicle.mergePlan);
       mergeArrivalLimited = reservedSlot !== null;
       const keepsReservedArrivalBeforeCommit =
@@ -90,7 +93,10 @@ export class LongitudinalController {
         this.vehicle.mergeCooperationTarget - this.vehicle.world.time,
         deltaTime,
       );
-      const cooperativeSpeed = Math.max(0, (this.vehicle.z - CONST.MERGE_POINT_Z) / remaining);
+      const cooperativeSpeed = Math.max(
+        0,
+        (this.vehicle.z - facilityWorldZ(CONST.MERGE_POINT_Z, this.vehicle.z)) / remaining,
+      );
       mergeCooperationLimited = cooperativeSpeed < targetSpeed;
       targetSpeed = Math.min(targetSpeed, cooperativeSpeed);
     }

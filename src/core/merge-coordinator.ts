@@ -1,11 +1,17 @@
-import { CONST } from './constants';
+import {
+  CONST,
+  FACILITY_SPACING,
+  facilityWorldZ,
+  nextFacilityWorldZ,
+  toFacilityLocalZ,
+} from './constants';
 import {
   buildMergeDependencyClosure,
   mergeClosureTerminalSpeeds,
   mergeTransactionStepDuration,
   quantizeMergeDuration,
 } from './merge-transaction';
-import { clamp, lerp, wrapDelta, WRAP_LENGTH } from './utils';
+import { clamp, lerp, wrapDelta } from './utils';
 import type {
   MergeCertificate,
   MergeDirective,
@@ -20,7 +26,7 @@ import type {
 } from './vehicle';
 
 export function nextArrivalDistance(z: number, mergeZ: number): number {
-  return (((z - mergeZ) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+  return (((z - mergeZ) % FACILITY_SPACING) + FACILITY_SPACING) % FACILITY_SPACING;
 }
 
 export function smoothstepRange(a: number, b: number, value: number): number {
@@ -62,9 +68,12 @@ export class MergeCoordinator {
     const ramp = snapshot.vehicles.find((vehicle) => vehicle.order === this.vehicle.spawnOrder);
     if (!ramp || !ramp.waiting || ramp.lane !== 3) return null;
 
-    const bodySafeCompletionZ = CONST.GORE_Z_START + ramp.length / 2 + CONST.MERGE_BODY_CLEARANCE;
+    const bodySafeCompletionZ = facilityWorldZ(
+      CONST.GORE_Z_START + ramp.length / 2 + CONST.MERGE_BODY_CLEARANCE,
+      ramp.z,
+    );
     // 合流点は導流帯の手前にあり、ここで車線変更を完了できれば車体も安全側に残る。
-    const completionZ = Math.max(CONST.MERGE_POINT_Z, bodySafeCompletionZ);
+    const completionZ = Math.max(facilityWorldZ(CONST.MERGE_POINT_Z, ramp.z), bodySafeCompletionZ);
     const distance = ramp.z - completionZ;
     if (distance <= 0) return null;
 
@@ -94,7 +103,10 @@ export class MergeCoordinator {
           vehicle.order !== ramp.order &&
           !vehicle.waiting &&
           vehicle.section === ramp.section &&
-          occupiesLane2(vehicle),
+          occupiesLane2(vehicle) &&
+          Math.abs(
+            wrapDelta(nextFacilityWorldZ(toFacilityLocalZ(completionZ), vehicle.z) - completionZ),
+          ) < 1e-9,
       )
       .map((vehicle) => ({
         vehicle,
@@ -176,7 +188,10 @@ export class MergeCoordinator {
       certificate.targetPassTime,
       deltaTime,
     );
-    const bodySafeCompletionZ = CONST.GORE_Z_START + ramp.length / 2 + CONST.MERGE_BODY_CLEARANCE;
+    const bodySafeCompletionZ = facilityWorldZ(
+      CONST.GORE_Z_START + ramp.length / 2 + CONST.MERGE_BODY_CLEARANCE,
+      ramp.z,
+    );
     if (stepDuration === null || certificate.completionZ < bodySafeCompletionZ) return null;
     const resolve = (order: number | null): VehicleSnapshot | null =>
       order === null
@@ -244,10 +259,22 @@ export class MergeCoordinator {
 
   projectMergeSlot(rampEta: number): ProjectedMergeSlot | null {
     const arrivals = this.vehicle.world.sectionVehicles[this.vehicle.section]
-      .filter((vehicle) => vehicle !== this.vehicle && vehicle.occupies(2))
+      .filter(
+        (vehicle) =>
+          vehicle !== this.vehicle &&
+          vehicle.occupies(2) &&
+          Math.abs(
+            wrapDelta(
+              nextFacilityWorldZ(CONST.MERGE_POINT_Z, vehicle.z) -
+                facilityWorldZ(CONST.MERGE_POINT_Z, this.vehicle.z),
+            ),
+          ) < 1e-9,
+      )
       .map((vehicle) => ({
         vehicle,
-        eta: nextArrivalDistance(vehicle.z, CONST.MERGE_POINT_Z) / Math.max(vehicle.speed, 1),
+        eta:
+          nextArrivalDistance(vehicle.z, facilityWorldZ(CONST.MERGE_POINT_Z, this.vehicle.z)) /
+          Math.max(vehicle.speed, 1),
       }))
       .sort((a, b) => a.eta - b.eta || a.vehicle.spawnOrder - b.vehicle.spawnOrder);
     if (arrivals.length === 0) return null;
@@ -283,21 +310,22 @@ export class MergeCoordinator {
       vehicle,
       z: vehicle.z - vehicle.speed * rampEta,
     }));
+    const mergeZ = facilityWorldZ(CONST.MERGE_POINT_Z, this.vehicle.z);
     // 予約時の rear が先に合流点を通る場合があるため、固定した車両参照を
     // targetPassTime の位置へ投影してから前後を分類し直す
     const front =
       projected
-        .filter(({ z }) => z <= CONST.MERGE_POINT_Z)
+        .filter(({ z }) => wrapDelta(z - mergeZ) <= 0)
         .sort((a, b) => b.z - a.z || a.vehicle.spawnOrder - b.vehicle.spawnOrder)[0] ?? null;
     const rear =
       projected
-        .filter(({ z }) => z > CONST.MERGE_POINT_Z)
+        .filter(({ z }) => wrapDelta(z - mergeZ) > 0)
         .sort((a, b) => a.z - b.z || a.vehicle.spawnOrder - b.vehicle.spawnOrder)[0] ?? null;
     const frontGap = front
-      ? CONST.MERGE_POINT_Z - front.z - (front.vehicle.length + this.vehicle.length) / 2
+      ? -wrapDelta(front.z - mergeZ) - (front.vehicle.length + this.vehicle.length) / 2
       : Infinity;
     const rearGap = rear
-      ? rear.z - CONST.MERGE_POINT_Z - (rear.vehicle.length + this.vehicle.length) / 2
+      ? wrapDelta(rear.z - mergeZ) - (rear.vehicle.length + this.vehicle.length) / 2
       : Infinity;
     const closingSpeed = rear ? rear.vehicle.speed - this.vehicle.speed : 0;
     return {
@@ -360,7 +388,7 @@ export class MergeCoordinator {
   }
 
   estimateMergeEta(): number {
-    const distance = Math.max(0, this.vehicle.z - CONST.MERGE_POINT_Z);
+    const distance = Math.max(0, toFacilityLocalZ(this.vehicle.z) - CONST.MERGE_POINT_Z);
     if (distance === 0) return 0;
     const speed = Math.max(this.vehicle.speed, 1);
     const targetSpeed = Math.max(speed, this.vehicle.desiredSpeed);
@@ -378,7 +406,7 @@ export class MergeCoordinator {
       Math.max(this.vehicle.speed, 1) * CONST.LANE_CHANGE_DURATION +
       this.vehicle.length +
       CONST.MERGE_BODY_CLEARANCE;
-    return CONST.GORE_Z_START + completionDistance;
+    return facilityWorldZ(CONST.GORE_Z_START + completionDistance, this.vehicle.z);
   }
 
   evaluateMergePlan(deltaTime: number, lastSource: MergeSource | null): MergePlan {
@@ -417,7 +445,8 @@ export class MergeCoordinator {
     const passHeadway = Math.max(headways.front, headways.rear);
     const mainVehicle = slot?.rear ?? slot?.front ?? null;
     const mainEta = mainVehicle
-      ? nextArrivalDistance(mainVehicle.z, CONST.MERGE_POINT_Z) / Math.max(mainVehicle.speed, 1)
+      ? nextArrivalDistance(mainVehicle.z, facilityWorldZ(CONST.MERGE_POINT_Z, this.vehicle.z)) /
+        Math.max(mainVehicle.speed, 1)
       : rampEta;
     const nextSource: MergeSource =
       mainVehicle === null

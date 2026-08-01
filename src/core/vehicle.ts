@@ -2,7 +2,7 @@
    シミュレーションコア: 車両（ドライバーモデル）
    （DOM / THREE 非依存・テスト対象）
    ============================================================ */
-import { CONST, TYPES } from './constants';
+import { CONST, TYPES, toFacilityLocalZ } from './constants';
 import type { Section, VehicleTypeName, VehicleTypeSpec } from './constants';
 import type { LaneChangeController } from './lane-change-controller';
 import type { LongitudinalController } from './longitudinal-controller';
@@ -422,7 +422,7 @@ export class Vehicle {
       envelope: undefined,
       completionZ: undefined,
     };
-    this.mergedFromRamp = this.z >= CONST.MERGE_POINT_Z;
+    this.mergedFromRamp = toFacilityLocalZ(this.z) >= CONST.MERGE_POINT_Z;
     this.rampMergePassPending = true;
     this.laneChangeCooldown = 4.0 + this.world.rng() * 5;
   }

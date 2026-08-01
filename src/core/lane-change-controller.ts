@@ -1,4 +1,4 @@
-import { CONST } from './constants';
+import { CONST, toFacilityLocalZ } from './constants';
 import { wrapDelta } from './utils';
 import type { NeighborInfo, Vehicle } from './vehicle';
 
@@ -174,7 +174,7 @@ export class LaneChangeController {
             nextSource: null,
             cooperationDecel: undefined,
           };
-          this.vehicle.mergedFromRamp = this.vehicle.z >= CONST.MERGE_POINT_Z;
+          this.vehicle.mergedFromRamp = toFacilityLocalZ(this.vehicle.z) >= CONST.MERGE_POINT_Z;
           this.vehicle.rampMergePassPending = true;
         }
         this.vehicle.laneChangeCooldown = 4.0 + this.vehicle.world.rng() * 5; // 変更直後は当分しない(面倒・疲れる)
