@@ -8,6 +8,7 @@ import {
   getSpectatorStatus,
   onSpectatorChange,
   onSpectatorProgress,
+  resetCameraAdjustment,
   selectSpectatorMode,
 } from '../render/camera';
 import type { SpectatorStatus } from '../render/camera';
@@ -19,6 +20,8 @@ export function setupSpectator(): void {
   const button = document.getElementById('spectatorBtn')!;
   const label = document.getElementById('spectatorLabel')!;
   const menu = document.getElementById('spectatorMenu')!;
+  const resetButton = document.getElementById('cameraResetBtn')!;
+  const panHint = document.getElementById('cameraPanHint')!;
   let labelTimer: ReturnType<typeof setTimeout> | undefined;
 
   function render(status: SpectatorStatus, showLabel: boolean): void {
@@ -41,6 +44,8 @@ export function setupSpectator(): void {
     menu.querySelectorAll<HTMLButtonElement>('[data-camera-mode]').forEach((item) => {
       item.classList.toggle('selected', item.dataset.cameraMode === status.mode.id);
     });
+    resetButton.hidden = !status.adjusted;
+    panHint.hidden = !['overhead', 'lookup', 'ramp'].includes(status.mode.id);
   }
 
   const groups = [
@@ -70,6 +75,7 @@ export function setupSpectator(): void {
     menu.classList.remove('open');
     button.setAttribute('aria-expanded', 'false');
   });
+  resetButton.addEventListener('click', resetCameraAdjustment);
   onSpectatorChange((status) => render(status, true));
   onSpectatorProgress((progress) => {
     button.style.setProperty('--auto-cycle-progress', String(progress));

@@ -232,6 +232,10 @@ interface SpectatorState {
   presetTime: number; // 現プリセットに切り替わってからの経過秒
   cycleTimer: number; // オートモードのプリセット切り替えタイマー
   transitionTime: number; // 視点切り替えの補間経過秒
+  yawOffset: number;
+  pitchOffset: number;
+  zoom: number;
+  panOffsetZ: number;
 }
 // 起動直後はオートモード。まず自動で動く画を見せ、画面に触れた時点で
 // マニュアルモードへ移る(モードの存在に気づいてもらうため) (Issue #43)
@@ -241,6 +245,10 @@ const spectator: SpectatorState = {
   presetTime: 0,
   cycleTimer: 0,
   transitionTime: TRANSITION_DURATION,
+  yawOffset: 0,
+  pitchOffset: 0,
+  zoom: 1,
+  panOffsetZ: 0,
 };
 
 // 補間の開始姿勢・現在姿勢・各プリセットが書き込む目標姿勢
@@ -252,12 +260,18 @@ export interface SpectatorStatus {
   enabled: boolean; // カメラが自動で動いている(マニュアルモード以外)
   auto: boolean;
   mode: SpectatorMode; // トグルボタンが示す現在のモード
+  adjusted: boolean;
 }
 export function getSpectatorStatus(): SpectatorStatus {
   return {
     enabled: true,
     auto: spectator.modeIndex === AUTO_MODE_INDEX,
     mode: SPECTATOR_MODES[spectator.modeIndex],
+    adjusted:
+      spectator.yawOffset !== 0 ||
+      spectator.pitchOffset !== 0 ||
+      spectator.zoom !== 1 ||
+      spectator.panOffsetZ !== 0,
   };
 }
 
@@ -289,6 +303,26 @@ function beginTransition(): void {
   fromPose.target.copy(currentPose.target);
 }
 
+/** 現在のプリセットに加えた首振りと距離調整を初期値へ戻す */
+export function resetCameraAdjustment(): void {
+  spectator.yawOffset = 0;
+  spectator.pitchOffset = 0;
+  spectator.zoom = 1;
+  spectator.panOffsetZ = 0;
+  notify();
+}
+
+function isFixedPreset(): boolean {
+  return ['overhead', 'lookup', 'ramp'].includes(getSpectatorStatus().mode.id);
+}
+
+/** 固定視点を道路沿いに移動する。追尾・動的視点では安全に無視する */
+function panFixedCamera(deltaZ: number): void {
+  if (!isFixedPreset()) return;
+  spectator.panOffsetZ = clamp(spectator.panOffsetZ + deltaZ, -180, 180);
+  notify();
+}
+
 // 表示するプリセットを切り替える。今の姿勢から新しい姿勢へ補間を始める
 function switchPreset(index: number): void {
   spectator.presetIndex = (index + SPECTATOR_PRESETS.length) % SPECTATOR_PRESETS.length;
@@ -296,6 +330,7 @@ function switchPreset(index: number): void {
   spectator.cycleTimer = 0;
   progressListener?.(0);
   beginTransition();
+  resetCameraAdjustment();
   followVehicle = null; // プリセットが変わったら追尾対象は選び直す
   followChanged = false;
 }
@@ -311,7 +346,6 @@ function syncOrbitFromCamera(): void {
 }
 
 function setMode(index: number): void {
-  const previous = spectator.modeIndex;
   spectator.modeIndex = (index + SPECTATOR_MODES.length) % SPECTATOR_MODES.length;
   if (spectator.modeIndex === AUTO_MODE_INDEX) {
     // オートモードは先頭のプリセットから始める
@@ -353,6 +387,16 @@ function updateSpectator(world: World, deltaTime: number): void {
     time: spectator.presetTime,
     world,
   });
+  if (isFixedPreset()) {
+    goalPose.position.z += spectator.panOffsetZ;
+    goalPose.target.z += spectator.panOffsetZ;
+  }
+  const relative = goalPose.position.clone().sub(goalPose.target);
+  const spherical = new THREE.Spherical().setFromVector3(relative);
+  spherical.theta += spectator.yawOffset;
+  spherical.phi = clamp(spherical.phi + spectator.pitchOffset, 0.08, Math.PI - 0.08);
+  spherical.radius *= spectator.zoom;
+  goalPose.position.copy(goalPose.target).add(new THREE.Vector3().setFromSpherical(spherical));
   if (pendingCameraWrap !== 0) {
     // 車両と同時に同じ周回複製へ移し、補間が816mを横切らないようにする。
     currentPose.position.z += pendingCameraWrap;
@@ -401,7 +445,6 @@ export function setupCameraControls(): void {
   dom.addEventListener('pointerdown', function (e) {
     // 画面に触れた時点でマニュアルモードへ。ドラッグを待たずに切り替えるので
     // 「タップすれば自分で操作できる」ことが伝わる (Issue #43)
-    enterManualMode();
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     dom.setPointerCapture(e.pointerId);
     if (pointers.size === 2) {
@@ -412,24 +455,29 @@ export function setupCameraControls(): void {
   dom.addEventListener('pointermove', function (e) {
     if (!pointers.has(e.pointerId)) return;
     const previous = pointers.get(e.pointerId)!;
+    const previousPoints = Array.from(pointers.values());
     const deltaX = e.clientX - previous.x,
       deltaY = e.clientY - previous.y;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     // ドラッグでもマニュアルモードへ戻す(タップを伴わないペン等の操作に備える)。
     // enterManualMode() の中で今の見え方が軌道パラメータへ引き継がれる
-    enterManualMode();
     if (pointers.size === 1) {
-      cameraController.theta -= deltaX * 0.005;
-      cameraController.phi = clamp(cameraController.phi - deltaY * 0.004, 0.25, 1.45);
+      if (e.shiftKey && isFixedPreset()) {
+        panFixedCamera(deltaY * 0.7);
+      } else {
+        spectator.yawOffset -= deltaX * 0.005;
+        spectator.pitchOffset = clamp(spectator.pitchOffset - deltaY * 0.004, -1.2, 1.2);
+        notify();
+      }
     } else if (pointers.size === 2) {
       const points = Array.from(pointers.values());
       const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
       if (pinchDistance > 0)
-        cameraController.radius = clamp(
-          cameraController.radius * (pinchDistance / distance),
-          30,
-          240,
-        );
+        spectator.zoom = clamp(spectator.zoom * (pinchDistance / distance), 0.35, 3);
+      const previousMidY = (previousPoints[0].y + previousPoints[1].y) / 2;
+      const currentMidY = (points[0].y + points[1].y) / 2;
+      panFixedCamera((currentMidY - previousMidY) * 0.7);
+      notify();
       pinchDistance = distance;
     }
   });
@@ -443,8 +491,8 @@ export function setupCameraControls(): void {
     'wheel',
     function (e) {
       e.preventDefault();
-      enterManualMode(); // ホイール操作もマニュアルモードへの復帰扱い
-      cameraController.radius = clamp(cameraController.radius * (1 + e.deltaY * 0.0011), 30, 240);
+      spectator.zoom = clamp(spectator.zoom * (1 + e.deltaY * 0.0011), 0.35, 3);
+      notify();
     },
     { passive: false },
   );

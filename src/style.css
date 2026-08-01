@@ -662,6 +662,29 @@ body.night #nightBtn {
   width: 18px;
   height: 18px;
 }
+#cameraResetBtn {
+  position: fixed;
+  top: 148px;
+  right: 14px;
+  z-index: 30;
+  padding: 7px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(3, 38, 27, 0.88);
+}
+#cameraPanHint {
+  position: fixed;
+  right: 14px;
+  bottom: 18px;
+  z-index: 29;
+  padding: 5px 9px;
+  border-radius: 7px;
+  color: #fff;
+  background: rgba(3, 38, 27, 0.75);
+  font-size: 11px;
+  pointer-events: none;
+}
 @media (max-width: 700px) {
   #spectatorBtn {
     width: 50px;
