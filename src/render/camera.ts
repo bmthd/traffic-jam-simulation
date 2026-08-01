@@ -208,12 +208,11 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
    先頭は「マニュアルモード(自分で視点を操作する)」、次が「オートモード」、
    以降は各プリセットの手動固定。オートモードも1つのモードとして循環に含める */
 export interface SpectatorMode {
-  id: 'manual' | 'auto' | SpectatorPresetId;
+  id: 'auto' | SpectatorPresetId;
   label: string;
   icon: string;
 }
 export const SPECTATOR_MODES: SpectatorMode[] = [
-  { id: 'manual', label: 'マニュアルモード', icon: 'mouse' },
   { id: 'auto', label: 'オートモード', icon: 'repeat' },
   ...SPECTATOR_PRESETS.map((preset) => ({
     id: preset.id,
@@ -221,9 +220,8 @@ export const SPECTATOR_MODES: SpectatorMode[] = [
     icon: preset.icon,
   })),
 ];
-const MANUAL_MODE_INDEX = 0;
-const AUTO_MODE_INDEX = 1;
-const FIRST_PRESET_MODE_INDEX = 2;
+const AUTO_MODE_INDEX = 0;
+const FIRST_PRESET_MODE_INDEX = 1;
 
 const AUTO_CYCLE_INTERVAL = 9; // オートモードでプリセットを切り替える間隔 (s)
 const TRANSITION_DURATION = 1.2; // 視点の切り替えにかける時間 (s)
@@ -257,7 +255,7 @@ export interface SpectatorStatus {
 }
 export function getSpectatorStatus(): SpectatorStatus {
   return {
-    enabled: spectator.modeIndex !== MANUAL_MODE_INDEX,
+    enabled: true,
     auto: spectator.modeIndex === AUTO_MODE_INDEX,
     mode: SPECTATOR_MODES[spectator.modeIndex],
   };
@@ -315,17 +313,7 @@ function syncOrbitFromCamera(): void {
 function setMode(index: number): void {
   const previous = spectator.modeIndex;
   spectator.modeIndex = (index + SPECTATOR_MODES.length) % SPECTATOR_MODES.length;
-  if (previous === MANUAL_MODE_INDEX && spectator.modeIndex !== MANUAL_MODE_INDEX) {
-    // マニュアルモードから入る: 今のカメラ位置から飛び始める(いきなり瞬間移動しない)
-    currentPose.position.copy(camera.position);
-    currentPose.target.copy(cameraController.target);
-  }
-  if (spectator.modeIndex === MANUAL_MODE_INDEX) {
-    // マニュアルモードへ戻す。今の見え方をそのまま軌道パラメータへ引き継ぐ
-    syncOrbitFromCamera();
-    followVehicle = null;
-    progressListener?.(0);
-  } else if (spectator.modeIndex === AUTO_MODE_INDEX) {
+  if (spectator.modeIndex === AUTO_MODE_INDEX) {
     // オートモードは先頭のプリセットから始める
     switchPreset(0);
   } else {
@@ -339,9 +327,15 @@ export function cycleSpectatorMode(): void {
   setMode(spectator.modeIndex + 1);
 }
 
+/** メニューやショートカットから目的のモードへ直接切り替える */
+export function selectSpectatorMode(id: SpectatorMode['id']): void {
+  const index = SPECTATOR_MODES.findIndex((mode) => mode.id === id);
+  if (index >= 0) setMode(index);
+}
+
 /** マニュアルモードへ戻す(画面のタップ・ドラッグ・ホイール操作から呼ばれる) */
 export function enterManualMode(): void {
-  if (spectator.modeIndex !== MANUAL_MODE_INDEX) setMode(MANUAL_MODE_INDEX);
+  syncOrbitFromCamera();
 }
 
 function updateSpectator(world: World, deltaTime: number): void {
@@ -392,7 +386,7 @@ function updateSpectator(world: World, deltaTime: number): void {
    マニュアルモードなら従来の軌道カメラ、それ以外はプリセットで描く。
    world/deltaTime はプリセット描画のときだけ使う(初期化時の引数なし呼び出しも許容) */
 export function updateCamera(world?: World, deltaTime = 0): void {
-  if (spectator.modeIndex !== MANUAL_MODE_INDEX && world) {
+  if (world) {
     updateSpectator(world, deltaTime);
   } else {
     applyOrbit();
