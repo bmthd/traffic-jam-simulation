@@ -3738,3 +3738,69 @@ describe('追尾カメラの周回境界 (Issue #127)', () => {
     expect(cameraWrapOffset(407, -407)).toBe(-WRAP_LENGTH);
   });
 });
+
+describe('予約回廊への割り込み禁止 (Issue #160)', () => {
+  /**
+   * ランプ車 1 台と lane 2 の縦列で closure を成立させた世界を作る。
+   * 返り値の member は closure member（運動が固定され追従で反応できない車）。
+   *
+   * ここでの検証は blocksReservedLaneChange() の直接呼び出しだけで完結する。
+   * 車線変更中の danger 再判定（事後キャンセル）はこの経路を通らないため、
+   * 「割り込みを開始させない」という証明側の性質だけを切り出して検査できる。
+   */
+  function corridorWorld(): { world: World; member: Vehicle; remaining: number } {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const front = new Vehicle(world, 'L', 2, 310, 'Sedan', 20);
+    const member = new Vehicle(world, 'L', 2, 285, 'Sedan', 20);
+    const rear = new Vehicle(world, 'L', 2, 375, 'Sedan', 20);
+    const safeBoundary = new Vehicle(world, 'L', 2, 150, 'Sedan', 20);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    for (const vehicle of [front, member, rear, safeBoundary]) vehicle.speed = 20;
+    world.vehicles.push(ramp, front, member, rear, safeBoundary);
+    world.admitWaiting();
+    const certificate = ramp.mergePlan.certificate!;
+    expect(certificate.closure.orders).toContain(member.spawnOrder);
+    return { world, member, remaining: certificate.targetPassTime - world.time };
+  }
+
+  /** member の 32.9m 前方（lane 1）へ割り込もうとする車を置く。 */
+  function placeIntruder(world: World, member: Vehicle, gap: number, speed: number): Vehicle {
+    const intruder = new Vehicle(world, 'L', 1, member.z - gap, 'Sedan', speed);
+    intruder.speed = speed;
+    world.vehicles.push(intruder);
+    world.rebuildSectionIndex();
+    return intruder;
+  }
+
+  test('Issue #160のseed=187相当（距離32.9m・接近速度3.8m/s）の割り込みを拒否する', () => {
+    const { world, member } = corridorWorld();
+    member.speed = 21.8;
+    const intruder = placeIntruder(world, member, 32.9, 18.0);
+
+    expect(world.blocksReservedLaneChange(intruder, 2)).toBe(true);
+  });
+
+  test('接近速度が0以下でもlocked memberの前方への割り込みを拒否する', () => {
+    // 旧実装はその瞬間の接近速度で距離を外挿していたため、割り込む車が
+    // member より速ければ閾値が車体長+クリアランス（約6.6m）まで縮み、
+    // 32.9m 先への割り込みを通していた。割り込んだ車がその後減速すると
+    // member 側は運動が固定されていて吸収できず貫通する。
+    for (const speed of [0, 10, 18, 20, 22, 26, 30]) {
+      const { world, member } = corridorWorld();
+      const intruder = placeIntruder(world, member, 32.9, speed);
+
+      expect(world.blocksReservedLaneChange(intruder, 2)).toBe(true);
+    }
+  });
+
+  test('closure中にmemberが掃く区間の外なら割り込みを許可する', () => {
+    // 一律 true を返しているのではないことの確認。
+    const { world, member, remaining } = corridorWorld();
+    const corridor = CONST.MERGE_BODY_CLEARANCE + member.length + member.speed * remaining + 10;
+    const intruder = placeIntruder(world, member, corridor, 20);
+
+    expect(world.blocksReservedLaneChange(intruder, 2)).toBe(false);
+  });
+});

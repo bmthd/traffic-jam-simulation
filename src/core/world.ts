@@ -433,20 +433,27 @@ export class World {
         Math.max(0, certificate.targetPassTime - this.time),
       ),
     );
-    const blocks = (
-      neighbor: { vehicle: Vehicle; distance: number } | null,
-      closingSpeed: number,
-    ) =>
-      neighbor !== null &&
-      lockedOrders.has(neighbor.vehicle.spawnOrder) &&
-      neighbor.distance <=
-        (vehicle.length + neighbor.vehicle.length) / 2 +
-          CONST.MERGE_BODY_CLEARANCE +
-          Math.max(0, closingSpeed) * remaining;
-    return (
-      blocks(nearestAhead, vehicle.speed - (nearestAhead?.vehicle.speed ?? vehicle.speed)) ||
-      blocks(nearestBehind, (nearestBehind?.vehicle.speed ?? vehicle.speed) - vehicle.speed)
-    );
+    const clearance = (neighbor: { vehicle: Vehicle }) =>
+      (vehicle.length + neighbor.vehicle.length) / 2 + CONST.MERGE_BODY_CLEARANCE;
+    // 後方が locked member の場合（= locked member の前方への割り込み）。
+    // Issue #160: 以前はその瞬間の接近速度で距離を外挿していたため
+    // 「割り込んだ車がその後減速しない」ことを暗黙の前提にしていた。前提が崩れても
+    // member は運動が固定されていて追従で吸収できず、実際に貫通し得る。
+    // そこで割り込む側の将来の挙動を一切前提にせず、closure が生きている間に
+    // member が掃きうる区間（残り時間 × member の速度）への割り込みを一律に禁止する。
+    const blocksBehind =
+      nearestBehind !== null &&
+      lockedOrders.has(nearestBehind.vehicle.spawnOrder) &&
+      nearestBehind.distance <= clearance(nearestBehind) + nearestBehind.vehicle.speed * remaining;
+    // 前方が locked member の場合（= locked member の後方への割り込み）は、
+    // 割り込む側が追従モデルで自ら減速できるため上記の穴は生じない。従来判定のまま。
+    const blocksAhead =
+      nearestAhead !== null &&
+      lockedOrders.has(nearestAhead.vehicle.spawnOrder) &&
+      nearestAhead.distance <=
+        clearance(nearestAhead) +
+          Math.max(0, vehicle.speed - nearestAhead.vehicle.speed) * remaining;
+    return blocksAhead || blocksBehind;
   }
 
   private certificateLocks(section: Section, certificate: MergeCertificate): string[] {
