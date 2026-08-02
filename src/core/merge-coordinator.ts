@@ -390,11 +390,7 @@ export class MergeCoordinator {
       reservedRear.laneChange.from === 2 &&
       reservedRear.laneChange.to === 1
     ) {
-      if (
-        reservedRear.laneChange.state === 'changing' ||
-        reservedRear.laneChange.state === 'holding'
-      )
-        return this.vehicle.mergePlan;
+      if (reservedRear.laneChange.state === 'changing') return this.vehicle.mergePlan;
       if (reservedRear.lane === 1 && reservedRear.laneChange.state === 'none')
         return { ...this.vehicle.mergePlan, state: 'committed' };
     }

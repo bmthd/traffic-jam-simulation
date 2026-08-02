@@ -100,6 +100,7 @@ export class LaneChangeController {
 
   tryLaneChange(toLane: number): boolean {
     if (toLane < 0 || toLane > 2) return false;
+    if (this.vehicle.laneChange.state !== 'none') return false;
     if (this.vehicle.world.blocksReservedLaneChange(this.vehicle, toLane)) return false;
     const safety = this.vehicle.checkLaneSafetyForChange(toLane);
     if (this.vehicle.laneChangeBlockedLane === toLane) {
@@ -176,15 +177,6 @@ export class LaneChangeController {
           this.vehicle.rampMergePassPending = true;
         }
         this.vehicle.laneChangeCooldown = 4.0 + this.vehicle.world.rng() * 5; // 変更直後は当分しない(面倒・疲れる)
-      }
-    } else if (laneChange.state === 'holding') {
-      laneChange.holdTime += deltaTime;
-      if (laneChange.checkTimer <= 0) {
-        laneChange.checkTimer = 0.15;
-        const safety = this.vehicle.checkLaneSafetyForChange(laneChange.to);
-        if (safety === 'safe') laneChange.state = 'changing';
-        else if (safety === 'danger' || laneChange.holdTime > CONST.LANE_CHANGE_WAIT_MAX_DURATION)
-          this.vehicle.cancelLaneChange();
       }
     } else if (laneChange.state === 'cancel') {
       laneChange.progress -= deltaTime / (CONST.LANE_CHANGE_DURATION * 0.8);

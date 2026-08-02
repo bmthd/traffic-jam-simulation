@@ -3763,6 +3763,16 @@ describe('車線変更中の切り返し防止 (Issue #83)', () => {
   });
 });
 
+function createChangingVehicleFor83(seed: number) {
+  const world = new World({ rng: createRng(seed), spawnInterval: 1e9 });
+  const changing = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+  const target = new Vehicle(world, 'L', 0, -30, 'Sedan', 25);
+  world.vehicles.push(changing, target);
+  world.rebuildSectionIndex();
+  expect(changing.tryLaneChange(0)).toBe(true);
+  return { world, changing, target };
+}
+
 describe('車線変更の物理的な緊急中断 (Issue #83)', () => {
   function createChangingVehicle(section: 'L' | 'R') {
     const world = new World({ rng: createRng(8301), spawnInterval: 1e9 });
@@ -3822,5 +3832,115 @@ describe('車線変更の物理的な緊急中断 (Issue #83)', () => {
     };
 
     expect(traces('L')).toEqual(traces('R'));
+  });
+});
+
+describe('車線変更キャンセル中の再開始防止 (Issue #83)', () => {
+  test('cancel完了前は通常経路から新しい車線変更を開始しない', () => {
+    const world = new World({ rng: createRng(8310), spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const target = new Vehicle(world, 'L', 0, -30, 'Sedan', 25);
+    world.vehicles.push(vehicle, target);
+    world.rebuildSectionIndex();
+    expect(vehicle.tryLaneChange(0)).toBe(true);
+
+    vehicle.cancelLaneChange(true);
+
+    expect(vehicle.laneChange.state).toBe('cancel');
+    expect(vehicle.tryLaneChange(2)).toBe(false);
+    expect(vehicle.laneChange.state).toBe('cancel');
+  });
+
+  test('cancel完了前はmerge-coordinator経由の車線変更も開始しない', () => {
+    const world = new World({ rng: createRng(8311), spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 2, 0, 'Sedan', 25);
+    world.vehicles.push(vehicle);
+    world.rebuildSectionIndex();
+    vehicle.laneChange = { ...vehicle.laneChange, from: 2, to: 1, state: 'cancel' };
+    vehicle.mergePlan = {
+      ...vehicle.mergePlan,
+      state: 'coordinating',
+      rear: vehicle,
+    };
+
+    vehicle.applyMergePlan(vehicle.mergePlan);
+
+    expect(vehicle.laneChange.state).toBe('cancel');
+  });
+
+  test('緊急キャンセルの再試行抑止は同じ対象車線だけに適用する', () => {
+    const { changing, target } = createChangingVehicleFor83(8312);
+    changing.laneChange.progress = 0.6;
+    target.z = 0;
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('cancel');
+    changing.updateLaneChange(CONST.LANE_CHANGE_DURATION);
+    expect(changing.tryLaneChange(2)).toBe(true);
+  });
+
+  test('同じ対象車線もcancel完了後に安全になれば再試行できる', () => {
+    const { changing, target } = createChangingVehicleFor83(8313);
+    changing.laneChange.progress = 0.6;
+    target.z = 0;
+    changing.updateLaneChange(0.01);
+    target.z = -30;
+    changing.updateLaneChange(CONST.LANE_CHANGE_DURATION);
+
+    expect(changing.laneChange.state).toBe('none');
+    expect(changing.tryLaneChange(0)).toBe(true);
+  });
+});
+
+describe('車線変更の物理重複境界 (Issue #83)', () => {
+  test('完了直前の重複はcancelする', () => {
+    const { changing, target } = createChangingVehicleFor83(8320);
+    changing.laneChange.progress = 0.99;
+    target.z = 0;
+
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('cancel');
+  });
+
+  test('周回継ぎ目をまたぐ重複もcancelする', () => {
+    const { changing, target } = createChangingVehicleFor83(8321);
+    changing.z = -407;
+    target.z = 407;
+    changing.laneChange.progress = 0.8;
+
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('cancel');
+  });
+
+  test('相手側も車線変更中なら移動中の位置で重複を検知する', () => {
+    const world = new World({ rng: createRng(8322), spawnInterval: 1e9 });
+    const changing = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const other = new Vehicle(world, 'L', 1, -30, 'Sedan', 25);
+    world.vehicles.push(changing, other);
+    world.rebuildSectionIndex();
+    expect(other.tryLaneChange(0)).toBe(true);
+    expect(changing.tryLaneChange(0)).toBe(true);
+    other.z = 0;
+    other.laneChange.progress = 0.5;
+    changing.laneChange.progress = 0.5;
+    other.updateX();
+
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('cancel');
+  });
+
+  test('車体境界が接触するだけなら重複とは扱わない', () => {
+    const { changing, target } = createChangingVehicleFor83(8323);
+    changing.laneChange.progress = 1 - 0.01 / CONST.LANE_CHANGE_DURATION;
+    target.z = (changing.length + target.length) / 2;
+    target.x = CONST.LANE_X.L[0] + (changing.width + target.width) / 2;
+
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('none');
+    expect(changing.lane).toBe(0);
   });
 });

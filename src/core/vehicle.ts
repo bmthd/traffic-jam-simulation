@@ -10,7 +10,7 @@ import type { MergeCoordinator } from './merge-coordinator';
 import { clamp, lerp, smooth, WRAP_LENGTH } from './utils';
 import type { World } from './world';
 
-export type LaneChangeState = 'none' | 'changing' | 'holding' | 'cancel';
+export type LaneChangeState = 'none' | 'changing' | 'cancel';
 export interface LaneChange {
   state: LaneChangeState;
   from: number;
@@ -542,7 +542,7 @@ export class Vehicle {
       plan.state === 'coordinating' &&
       plan.cooperationDecel === undefined &&
       plan.rear &&
-      (plan.rear.laneChange.state === 'changing' || plan.rear.laneChange.state === 'holding') &&
+      plan.rear.laneChange.state === 'changing' &&
       plan.rear.laneChange.from === 2 &&
       plan.rear.laneChange.to === 1
     ) {
