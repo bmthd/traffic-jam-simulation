@@ -176,7 +176,14 @@ export class Vehicle {
   spawnOrder: number;
   section: Section;
   lane: number;
-  z: number;
+  private _z = 0;
+  get z(): number {
+    return this._z;
+  }
+  set z(value: number) {
+    this._z = value;
+    this.world?.reindexVehicle(this);
+  }
   previousZ: number;
   mergedFromRamp = false;
   rampMergePassPending = false;
@@ -200,6 +207,8 @@ export class Vehicle {
   emergency: boolean;
   waiting: boolean;
   exited: boolean;
+  exitIntent: boolean;
+  private exitDecisionArmed: boolean;
   waitTimer: number;
   perturbTimer: number;
   color: number;
@@ -286,7 +295,9 @@ export class Vehicle {
     this.braking = false;
     this.emergency = false;
     this.waiting = false; // 入口(ランプ)が塞がっている間の流入待ち
-    this.exited = false; // 出口まで走り切って流出した(Worldが回収する)
+    this.exited = false; // 実体のある出口から流出した(Worldが回収する)
+    this.exitIntent = false;
+    this.exitDecisionArmed = toFacilityLocalZ(z) > CONST.EXIT_DECISION_Z;
     this.waitTimer = 0;
     this.perturbTimer = 0; // よそ見ブレーキの残り時間(absorbモードでWorldが設定)
     this.color = this.type.colors[Math.floor(random() * this.type.colors.length)];
@@ -597,22 +608,7 @@ export class Vehicle {
    * リング上の一方向距離が最小の一台を選び直す (Issue #52)。
    */
   private findNeighbor(lane: number, ahead: boolean): NeighborInfo | null {
-    const vehicles = this.world.sectionVehicles[this.section];
-    let best: Vehicle | null = null;
-    let bestDistance = Infinity;
-    for (const other of vehicles) {
-      if (other === this || !other.occupies(lane)) continue;
-      const raw = ahead ? this.z - other.z : other.z - this.z;
-      // リング上の一方向距離 (0, WRAP_LENGTH]。
-      // 距離 0(完全に同じ z)は従来と同じく「一周先」として扱う。
-      const distance = ((raw % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH || WRAP_LENGTH;
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        best = other;
-      }
-    }
-    if (best === null) return null;
-    return { vehicle: best, gap: bestDistance - (this.length + best.length) / 2 };
+    return this.world.findLaneNeighbor(this, lane, ahead);
   }
 
   // 前方車探索（ahead = 進行方向側 = z が小さい側。周回路として探索）
@@ -646,6 +642,42 @@ export class Vehicle {
     return this.laneChangeController.decide(ahead, deltaTime);
   }
 
+  /** 施設ごとに退出意思を一度決め、共用lane 3へ入れた車だけを分岐で退出させる。 */
+  private updateExitBehavior(): boolean {
+    if (this.world.mode === 'absorb') return false;
+    const previousLocalZ = toFacilityLocalZ(this.previousZ);
+    const localZ = toFacilityLocalZ(this.z);
+    if (!this.exitDecisionArmed && localZ > CONST.EXIT_DECISION_Z) this.exitDecisionArmed = true;
+    if (
+      this.exitDecisionArmed &&
+      previousLocalZ > CONST.EXIT_DECISION_Z &&
+      localZ <= CONST.EXIT_DECISION_Z
+    ) {
+      this.exitIntent = this.world.rng() < CONST.EXIT_RATIO;
+      this.exitDecisionArmed = false;
+    }
+    if (!this.exitIntent) return false;
+    let exitLaneChangeStarted = false;
+    if (this.laneChange.state === 'none' && localZ > CONST.EXIT_BRANCH_Z) {
+      if (this.lane < 2) exitLaneChangeStarted = this.tryLaneChange(this.lane + 1);
+      else if (this.lane === 2 && localZ <= CONST.EXIT_LANE_START_Z) this.tryLaneChange(3);
+    }
+    if (previousLocalZ > CONST.EXIT_BRANCH_Z && localZ <= CONST.EXIT_BRANCH_Z) {
+      if (this.lane === 3) this.exited = true;
+      else {
+        if (this.laneChange.to === 3 && this.laneChange.state !== 'none') this.cancelLaneChange();
+        this.exitIntent = false;
+      }
+    }
+    // lane 0/1で出口側へ移れなかったtickは通常判断も許す。これにより退出意思が
+    // 既存の衝突回避・加速復帰を一律に止めることはない。
+    return (
+      this.lane >= 2 ||
+      exitLaneChangeStarted ||
+      (this.laneChange.state !== 'none' && this.laneChange.to === 3)
+    );
+  }
+
   update(deltaTime: number): void {
     this.previousZ = this.z;
     this.laneChangeCooldown = Math.max(0, this.laneChangeCooldown - deltaTime);
@@ -667,24 +699,14 @@ export class Vehicle {
     this.z -= this.speed * deltaTime;
 
     // --- 意思決定 ---
-    if (this.laneChange.state === 'none' && this.laneChangeCooldown <= 0)
+    const exiting = this.updateExitBehavior();
+    if (!exiting && this.laneChange.state === 'none' && this.laneChangeCooldown <= 0)
       this.decide(ahead, deltaTime);
 
     this.longitudinalController.updateHazard(deltaTime);
 
-    // --- 終端処理 ---
-    // rulesモード: 終端 = 出口。一定割合の車がここで流出する(捌けた分だけ出る)。
-    // 流出量は「出口を通過する交通量 × 割合」なので、混んでいる側ほど捌けるのが
-    // 遅くなり、同じ流入ペースでも道路上に車両が自然に滞留する(Issue #12)。
-    // 残りは都市高速の環状線のように周回を続ける(波は継ぎ目なく通過)。
-    // absorbモード: 円周実験なので全車が反対側へ連続的に回り込む
-    if (this.z < -CONST.ROAD_HALF - 8) {
-      if (this.world.mode !== 'absorb' && this.world.rng() < CONST.EXIT_RATIO) {
-        this.exited = true;
-      } else {
-        this.z += WRAP_LENGTH;
-      }
-    }
+    // 継ぎ目は全モードで周回だけを担い、流出は施設の出口分岐だけで行う。
+    if (this.z < -CONST.ROAD_HALF - 8) this.z += WRAP_LENGTH;
 
     this.updateX();
   }
