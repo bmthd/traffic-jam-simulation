@@ -99,7 +99,7 @@ export class LaneChangeController {
   }
 
   tryLaneChange(toLane: number): boolean {
-    if (toLane < 0 || toLane > 2) return false;
+    if (toLane < 0 || toLane > 3) return false;
     if (this.vehicle.world.blocksReservedLaneChange(this.vehicle, toLane)) return false;
     if (this.vehicle.checkLaneSafetyForChange(toLane) !== 'safe') return false;
     this.vehicle.laneChange.state = 'changing';

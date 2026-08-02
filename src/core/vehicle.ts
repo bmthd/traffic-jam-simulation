@@ -207,6 +207,8 @@ export class Vehicle {
   emergency: boolean;
   waiting: boolean;
   exited: boolean;
+  exitIntent: boolean;
+  private exitDecisionArmed: boolean;
   waitTimer: number;
   perturbTimer: number;
   color: number;
@@ -293,7 +295,9 @@ export class Vehicle {
     this.braking = false;
     this.emergency = false;
     this.waiting = false; // 入口(ランプ)が塞がっている間の流入待ち
-    this.exited = false; // 出口まで走り切って流出した(Worldが回収する)
+    this.exited = false; // 実体のある出口から流出した(Worldが回収する)
+    this.exitIntent = false;
+    this.exitDecisionArmed = toFacilityLocalZ(z) > CONST.EXIT_DECISION_Z;
     this.waitTimer = 0;
     this.perturbTimer = 0; // よそ見ブレーキの残り時間(absorbモードでWorldが設定)
     this.color = this.type.colors[Math.floor(random() * this.type.colors.length)];
@@ -638,6 +642,35 @@ export class Vehicle {
     return this.laneChangeController.decide(ahead, deltaTime);
   }
 
+  /** 施設ごとに退出意思を一度決め、共用lane 3へ入れた車だけを分岐で退出させる。 */
+  private updateExitBehavior(): boolean {
+    if (this.world.mode === 'absorb') return false;
+    const previousLocalZ = toFacilityLocalZ(this.previousZ);
+    const localZ = toFacilityLocalZ(this.z);
+    if (!this.exitDecisionArmed && localZ > CONST.EXIT_DECISION_Z) this.exitDecisionArmed = true;
+    if (
+      this.exitDecisionArmed &&
+      previousLocalZ > CONST.EXIT_DECISION_Z &&
+      localZ <= CONST.EXIT_DECISION_Z
+    ) {
+      this.exitIntent = this.world.rng() < CONST.EXIT_RATIO;
+      this.exitDecisionArmed = false;
+    }
+    if (!this.exitIntent) return false;
+    if (this.laneChange.state === 'none' && localZ > CONST.EXIT_BRANCH_Z) {
+      if (this.lane < 2) this.tryLaneChange(this.lane + 1);
+      else if (this.lane === 2 && localZ <= CONST.EXIT_LANE_START_Z) this.tryLaneChange(3);
+    }
+    if (previousLocalZ > CONST.EXIT_BRANCH_Z && localZ <= CONST.EXIT_BRANCH_Z) {
+      if (this.lane === 3) this.exited = true;
+      else {
+        if (this.laneChange.to === 3 && this.laneChange.state !== 'none') this.cancelLaneChange();
+        this.exitIntent = false;
+      }
+    }
+    return true;
+  }
+
   update(deltaTime: number): void {
     this.previousZ = this.z;
     this.laneChangeCooldown = Math.max(0, this.laneChangeCooldown - deltaTime);
@@ -659,24 +692,14 @@ export class Vehicle {
     this.z -= this.speed * deltaTime;
 
     // --- 意思決定 ---
-    if (this.laneChange.state === 'none' && this.laneChangeCooldown <= 0)
+    const exiting = this.updateExitBehavior();
+    if (!exiting && this.laneChange.state === 'none' && this.laneChangeCooldown <= 0)
       this.decide(ahead, deltaTime);
 
     this.longitudinalController.updateHazard(deltaTime);
 
-    // --- 終端処理 ---
-    // rulesモード: 終端 = 出口。一定割合の車がここで流出する(捌けた分だけ出る)。
-    // 流出量は「出口を通過する交通量 × 割合」なので、混んでいる側ほど捌けるのが
-    // 遅くなり、同じ流入ペースでも道路上に車両が自然に滞留する(Issue #12)。
-    // 残りは都市高速の環状線のように周回を続ける(波は継ぎ目なく通過)。
-    // absorbモード: 円周実験なので全車が反対側へ連続的に回り込む
-    if (this.z < -CONST.ROAD_HALF - 8) {
-      if (this.world.mode !== 'absorb' && this.world.rng() < CONST.EXIT_RATIO) {
-        this.exited = true;
-      } else {
-        this.z += WRAP_LENGTH;
-      }
-    }
+    // 継ぎ目は全モードで周回だけを担い、流出は施設の出口分岐だけで行う。
+    if (this.z < -CONST.ROAD_HALF - 8) this.z += WRAP_LENGTH;
 
     this.updateX();
   }

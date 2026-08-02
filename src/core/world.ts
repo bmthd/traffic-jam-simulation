@@ -508,7 +508,7 @@ export class World {
     const candidates: { vehicle: Vehicle; candidate: MergeCandidate }[] = [];
     const activeRampFacilities = new Set(
       this.vehicles
-        .filter((vehicle) => !vehicle.waiting && vehicle.lane === 3)
+        .filter((vehicle) => !vehicle.waiting && vehicle.lane === 3 && !vehicle.exitIntent)
         .map((vehicle) => `${vehicle.section}:${facilityIndexForZ(vehicle.z)}`),
     );
     for (const vehicle of heads) {
@@ -585,7 +585,7 @@ export class World {
   /** tick 境界で lane 3 の車体が導流帯へ侵入していないことを検査する。 */
   assertGoreInvariant(phase: 'start' | 'end'): void {
     for (const vehicle of this.vehicles) {
-      if (vehicle.waiting || vehicle.lane !== 3) continue;
+      if (vehicle.waiting || vehicle.lane !== 3 || vehicle.exitIntent) continue;
       const intersects = rampBodyIntersectsGore(
         sectionTrackX(vehicle.section, vehicle.x),
         vehicle.z,
@@ -1032,8 +1032,9 @@ export class World {
   rampLeaders(section: Section): Vehicle[] {
     const rampVehicles = this.sectionVehicles[section].filter(
       (vehicle) =>
-        vehicle.lane === 3 ||
-        (vehicle.laneChange.from === 3 && vehicle.laneChange.state !== 'none'),
+        !vehicle.exitIntent &&
+        (vehicle.lane === 3 ||
+          (vehicle.laneChange.from === 3 && vehicle.laneChange.state !== 'none')),
     );
     return FACILITIES.map(
       (facility) =>
@@ -1137,7 +1138,7 @@ export class World {
   step(deltaTime: number): void {
     this.assertGoreInvariant('start');
     this.spawnAccumulator += deltaTime * 1000;
-    // rulesモードの流入間隔は、終端で流出する分(EXIT_RATIO)とつり合う需要に換算する。
+    // rulesモードの流入間隔は、施設出口で流出する分(EXIT_RATIO)とつり合う需要に換算する。
     // 「間隔が短い = 交通需要が多い」の意味は従来通り(密度は間隔に反比例)
     const pace =
       this.mode === 'absorb' ? this.spawnInterval : this.spawnInterval * CONST.INFLOW_PACE;
@@ -1190,7 +1191,7 @@ export class World {
     this.time += deltaTime;
     this.assertGoreInvariant('end');
     this.recordMergePasses();
-    // rulesモード: 出口まで走り切った車は流出する(捌けた分だけ出る)
+    // rulesモード: 施設の出口分岐へ入った車を流出として回収する。
     if (this.mode !== 'absorb') this.collectExited();
     // 待機車の有効化は移動後 snapshot から証明し、この tick の運動へ混ぜない。
     if (this.mode !== 'absorb') this.admitWaiting(this.captureSnapshot(), deltaTime);
