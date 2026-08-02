@@ -56,6 +56,69 @@ export type SpectatorPresetId =
   | 'driver'
   | 'ramp';
 
+export type CameraModeId = 'auto' | 'fixed' | 'drone' | 'tracking';
+
+export interface CameraVariation {
+  id: string;
+  label: string;
+  icon: string;
+  presetId: SpectatorPresetId;
+}
+
+export interface CameraModeDef {
+  id: CameraModeId;
+  label: string;
+  icon: string;
+  variations: CameraVariation[];
+  showSectionToggle: boolean;
+  showNextVehicle: boolean;
+}
+
+export const CAMERA_MODES: CameraModeDef[] = [
+  {
+    id: 'auto',
+    label: 'オート',
+    icon: 'repeat',
+    variations: [],
+    showSectionToggle: false,
+    showNextVehicle: false,
+  },
+  {
+    id: 'fixed',
+    label: '定点',
+    icon: 'map',
+    variations: [
+      { id: 'overhead', label: '俯瞰', icon: 'map', presetId: 'overhead' },
+      { id: 'lookup', label: '見上げ', icon: 'move-up', presetId: 'lookup' },
+      { id: 'ramp', label: '合流', icon: 'merge', presetId: 'ramp' },
+    ],
+    showSectionToggle: true,
+    showNextVehicle: false,
+  },
+  {
+    id: 'drone',
+    label: 'ドローン',
+    icon: 'send',
+    variations: [
+      { id: 'drone', label: 'サークル', icon: 'send', presetId: 'drone' },
+      { id: 'flyby', label: 'フライバイ', icon: 'send', presetId: 'flyby' },
+    ],
+    showSectionToggle: false,
+    showNextVehicle: false,
+  },
+  {
+    id: 'tracking',
+    label: '追跡',
+    icon: 'car-front',
+    variations: [
+      { id: 'follow', label: '三人称', icon: 'car-front', presetId: 'follow' },
+      { id: 'driver', label: '一人称', icon: 'eye', presetId: 'driver' },
+    ],
+    showSectionToggle: true,
+    showNextVehicle: true,
+  },
+];
+
 interface Pose {
   position: THREE.Vector3;
   target: THREE.Vector3;
@@ -67,8 +130,10 @@ interface PresetContext {
 export interface SpectatorPreset {
   id: SpectatorPresetId;
   label: string;
-  icon: string; // lucide アイコン名
-  compute: (pose: Pose, ctx: PresetContext) => void; // pose を書き換える（確保を避ける）
+  icon: string;
+  mode: CameraModeId;
+  variationId: string;
+  compute: (pose: Pose, ctx: PresetContext) => void;
 }
 
 /* ---- 車に固定する視点(追尾・ドライバー)が追う車 ----
@@ -115,6 +180,8 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     id: 'drone',
     label: 'ドローン',
     icon: 'send',
+    mode: 'drone',
+    variationId: 'drone',
     // ゆっくり旋回しながら前後にも漂う空撮風の動的視点
     compute(pose, { time }) {
       const angle = time * 0.12;
@@ -132,6 +199,8 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     id: 'overhead',
     label: '俯瞰',
     icon: 'map',
+    mode: 'fixed',
+    variationId: 'overhead',
     // 端末の長辺に道路の進行方向を合わせる。横長(正方形を含む)では横から、
     // 縦長では従来どおり奥側から見下ろし、両区間の流れを比較しやすくする
     compute(pose) {
@@ -147,6 +216,8 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     id: 'lookup',
     label: '見上げ',
     icon: 'move-up',
+    mode: 'fixed',
+    variationId: 'lookup',
     // 路肩の地面すれすれから、向かってくる車列を見上げる視点。
     // 車は -Z へ進むので +Z 側(奥)から迫ってきて、目の前を大きく通り過ぎる
     compute(pose) {
@@ -159,6 +230,8 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     id: 'follow',
     label: '追尾',
     icon: 'car-front',
+    mode: 'tracking',
+    variationId: 'follow',
     // 特定の車を後方やや上から追う視点(車の全体像が見える)
     compute(pose, { world }) {
       const vehicle = pickFollowVehicle(world);
@@ -172,6 +245,8 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     id: 'flyby',
     label: 'フライバイ',
     icon: 'send',
+    mode: 'drone',
+    variationId: 'flyby',
     // 車両とは逆の +Z へ進み、車列と正面からすれ違いながら両区間を映す
     compute(pose, { time }) {
       const flyby = flybyPose(time, CENTER_X);
@@ -183,6 +258,8 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     id: 'driver',
     label: 'ドライバー',
     icon: 'eye',
+    mode: 'tracking',
+    variationId: 'driver',
     // 運転席から前方を見る一人称視点。
     // 目線の高さは車種の車高に比例させ(トラックは高く、スポーツカーは低く)、
     // 着座位置は車体中央のわずかに後ろ・右寄り(日本の右ハンドル)に置く。
@@ -201,6 +278,8 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     id: 'ramp',
     label: '合流',
     icon: 'merge',
+    mode: 'fixed',
+    variationId: 'ramp',
     // 合流ランプ(加速車線)付近を斜め上から捉え、本線への合流を眺める
     compute(pose) {
       const centerX = followSection === 'L' ? L_CENTER_X : R_CENTER_X;
@@ -211,32 +290,28 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
 ];
 
 /* ---- モード一覧 ----
-   トグルボタンを押すたびにこの順で切り替わる。
-   先頭は「マニュアルモード(自分で視点を操作する)」、次が「オートモード」、
-   以降は各プリセットの手動固定。オートモードも1つのモードとして循環に含める */
+    4 モード（オート／定点／ドローン／追跡）の定義。
+    プリセットは CAMERA_MODES に属する variation 経由で参照される。 */
 export interface SpectatorMode {
-  id: 'auto' | SpectatorPresetId;
+  id: CameraModeId;
   label: string;
   icon: string;
 }
-export const SPECTATOR_MODES: SpectatorMode[] = [
-  { id: 'auto', label: 'オートモード', icon: 'repeat' },
-  ...SPECTATOR_PRESETS.map((preset) => ({
-    id: preset.id,
-    label: preset.label,
-    icon: preset.icon,
-  })),
-];
+export const SPECTATOR_MODES: SpectatorMode[] = CAMERA_MODES.map((mode) => ({
+  id: mode.id,
+  label: mode.label,
+  icon: mode.icon,
+}));
 const AUTO_MODE_INDEX = 0;
-const FIRST_PRESET_MODE_INDEX = 1;
 
 const AUTO_CYCLE_INTERVAL = 9; // オートモードでプリセットを切り替える間隔 (s)
 const AUTO_RESUME_DELAY = 3; // 操作終了後に巡回を再開するまでの待機時間 (s)
 const TRANSITION_DURATION = 1.2; // 視点の切り替えにかける時間 (s)
 
 interface SpectatorState {
-  modeIndex: number; // SPECTATOR_MODES の添字
-  presetIndex: number; // 現在表示中のプリセット(オートモード中は時間で進む)
+  modeIndex: number; // CAMERA_MODES の添字
+  variationIndex: number; // 現在のモードのバリエーション添字
+  presetIndex: number; // オートモード中の現在のプリセット
   presetTime: number; // 現プリセットに切り替わってからの経過秒
   cycleTimer: number; // オートモードのプリセット切り替えタイマー
   transitionTime: number; // 視点切り替えの補間経過秒
@@ -251,6 +326,7 @@ interface SpectatorState {
 // マニュアルモードへ移る(モードの存在に気づいてもらうため) (Issue #43)
 const spectator: SpectatorState = {
   modeIndex: AUTO_MODE_INDEX,
+  variationIndex: 0,
   presetIndex: 0,
   presetTime: 0,
   cycleTimer: 0,
@@ -272,14 +348,18 @@ export interface SpectatorStatus {
   enabled: boolean; // カメラが自動で動いている(マニュアルモード以外)
   auto: boolean;
   mode: SpectatorMode; // トグルボタンが示す現在のモード
+  variation: CameraVariation | null; // 選択中のバリエーション(オート時は null)
   adjusted: boolean;
   section: Section;
 }
 export function getSpectatorStatus(): SpectatorStatus {
+  const mode = CAMERA_MODES[spectator.modeIndex];
+  const variation = mode.variations[spectator.variationIndex] ?? null;
   return {
     enabled: true,
     auto: spectator.modeIndex === AUTO_MODE_INDEX,
-    mode: SPECTATOR_MODES[spectator.modeIndex],
+    mode,
+    variation,
     adjusted:
       spectator.yawOffset !== 0 ||
       spectator.pitchOffset !== 0 ||
@@ -326,13 +406,14 @@ export function resetCameraAdjustment(): void {
   notify();
 }
 
-function isFixedPreset(): boolean {
-  return ['overhead', 'lookup', 'ramp'].includes(getSpectatorStatus().mode.id);
+/** 現在のモードが定点（パン操作対象）か */
+function isFixedMode(): boolean {
+  return CAMERA_MODES[spectator.modeIndex].id === 'fixed';
 }
 
 /** 固定視点を道路沿いに移動する。追尾・動的視点では安全に無視する */
 function panFixedCamera(deltaZ: number): void {
-  if (!isFixedPreset()) return;
+  if (!isFixedMode()) return;
   spectator.panOffsetZ = clamp(spectator.panOffsetZ + deltaZ, -180, 180);
   notify();
 }
@@ -360,16 +441,73 @@ export function selectNextFollowVehicle(): void {
   resetCameraAdjustment();
 }
 
+// 指定したモードに切り替える。バリエーションは先頭にリセットし、
+// オートモードならプリセット 0 から始める
+function setMode(index: number): void {
+  spectator.modeIndex = (index + CAMERA_MODES.length) % CAMERA_MODES.length;
+  spectator.variationIndex = 0;
+  if (spectator.modeIndex === AUTO_MODE_INDEX) {
+    switchPreset(0);
+  } else {
+    activateVariation(0);
+  }
+  notify();
+}
+
+// 現在モードの指定したバリエーションを活性化する。
+// 切り替えの手順はプリセット切り替えと同じなので switchPreset に委ねる
+// (追尾対象を引き継ぐかどうかの判断も1箇所にまとまる)
+function activateVariation(variationIndex: number): void {
+  const mode = CAMERA_MODES[spectator.modeIndex];
+  const variation = mode.variations[variationIndex];
+  if (!variation) return;
+  const presetIndex = SPECTATOR_PRESETS.findIndex((preset) => preset.id === variation.presetId);
+  if (presetIndex < 0) return;
+  spectator.variationIndex = variationIndex;
+  switchPreset(presetIndex);
+}
+
+// 車に固定する視点(三人称の追尾と一人称のドライバー)
+function isVehiclePreset(id: SpectatorPresetId): boolean {
+  return id === 'follow' || id === 'driver';
+}
+
 // 表示するプリセットを切り替える。今の姿勢から新しい姿勢へ補間を始める
 function switchPreset(index: number): void {
+  const previousId = SPECTATOR_PRESETS[spectator.presetIndex].id;
   spectator.presetIndex = (index + SPECTATOR_PRESETS.length) % SPECTATOR_PRESETS.length;
+  const nextId = SPECTATOR_PRESETS[spectator.presetIndex].id;
   spectator.presetTime = 0;
   spectator.cycleTimer = 0;
   progressListener?.(0);
   beginTransition();
   resetCameraAdjustment();
-  followVehicle = null; // プリセットが変わったら追尾対象は選び直す
+  // 追尾↔ドライバーの行き来では同じ車を見続ける。
+  // 「同じ車を三人称と一人称で見比べる」のが自然な操作で、
+  // ここで選び直すと視点だけでなく対象車まで変わってしまう
+  if (!(isVehiclePreset(previousId) && isVehiclePreset(nextId))) {
+    followVehicle = null; // それ以外はプリセットが変わったら追尾対象を選び直す
+  }
   followChanged = false;
+}
+
+/** トグルボタン: マニュアル → オート → 各モード → マニュアル… と1つ進める */
+export function cycleSpectatorMode(): void {
+  setMode(spectator.modeIndex + 1);
+}
+
+/** メニューやショートカットから目的のモードへ直接切り替える */
+export function selectSpectatorMode(id: CameraModeId): void {
+  const index = CAMERA_MODES.findIndex((mode) => mode.id === id);
+  if (index >= 0) setMode(index);
+}
+
+/** 現在モードのバリエーションを切り替える */
+export function selectVariation(index: number): void {
+  const mode = CAMERA_MODES[spectator.modeIndex];
+  if (mode.variations.length === 0) return;
+  activateVariation((index + mode.variations.length) % mode.variations.length);
+  notify(); // 操作バーの選択表示を更新する
 }
 
 // 現在のカメラ位置と注視点から軌道パラメータ(theta/phi/radius)を逆算する。
@@ -380,28 +518,6 @@ function syncOrbitFromCamera(): void {
   cameraController.radius = radius;
   cameraController.phi = clamp(Math.acos(clamp(relative.y / radius, -1, 1)), 0.25, 1.45);
   cameraController.theta = Math.atan2(relative.x, relative.z);
-}
-
-function setMode(index: number): void {
-  spectator.modeIndex = (index + SPECTATOR_MODES.length) % SPECTATOR_MODES.length;
-  if (spectator.modeIndex === AUTO_MODE_INDEX) {
-    // オートモードは先頭のプリセットから始める
-    switchPreset(0);
-  } else {
-    switchPreset(spectator.modeIndex - FIRST_PRESET_MODE_INDEX);
-  }
-  notify();
-}
-
-/** トグルボタン: マニュアル → オート → 各プリセット → マニュアル… と1つ進める */
-export function cycleSpectatorMode(): void {
-  setMode(spectator.modeIndex + 1);
-}
-
-/** メニューやショートカットから目的のモードへ直接切り替える */
-export function selectSpectatorMode(id: SpectatorMode['id']): void {
-  const index = SPECTATOR_MODES.findIndex((mode) => mode.id === id);
-  if (index >= 0) setMode(index);
 }
 
 /** マニュアルモードへ戻す(画面のタップ・ドラッグ・ホイール操作から呼ばれる) */
@@ -425,7 +541,7 @@ function updateSpectator(world: World, deltaTime: number): void {
     time: spectator.presetTime,
     world,
   });
-  if (isFixedPreset()) {
+  if (isFixedMode()) {
     goalPose.position.z += spectator.panOffsetZ;
     goalPose.target.z += spectator.panOffsetZ;
   }
@@ -501,7 +617,7 @@ export function setupCameraControls(): void {
     // ドラッグでもマニュアルモードへ戻す(タップを伴わないペン等の操作に備える)。
     // enterManualMode() の中で今の見え方が軌道パラメータへ引き継がれる
     if (pointers.size === 1) {
-      if (e.shiftKey && isFixedPreset()) {
+      if (e.shiftKey && isFixedMode()) {
         panFixedCamera(deltaY * 0.7);
       } else {
         spectator.yawOffset -= deltaX * 0.005;
