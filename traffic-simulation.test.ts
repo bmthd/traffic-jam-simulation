@@ -3999,6 +3999,107 @@ describe('合流経路のキャンセル後再開始防止 (Issue #83)', () => {
 });
 
 describe('合流transactionのキャンセル整合性 (Issue #83)', () => {
+  test('World.stepは開始拒否時にrampだけでなくclosure memberのtransaction motionも適用しない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const member = new Vehicle(world, 'L', 2, CONST.RAMP_Z_TOP - 70, 'Sedan', 24);
+    ramp.speed = member.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp, member);
+
+    world.step(TIME_STEP);
+    const certificate = ramp.mergePlan.certificate!;
+    expect(certificate.closure.orders).toContain(member.spawnOrder);
+    ramp.z = certificate.completionZ + ramp.speed;
+    ramp.x = CONST.LANE_X.L[3];
+    member.z = ramp.z;
+    const target = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 24);
+    target.speed = 24;
+    world.vehicles.push(target);
+    world.rebuildSectionIndex();
+    ramp.laneChangeBlockedLane = 2;
+    const before = { x: member.x, z: member.z, speed: member.speed };
+
+    world.step(TIME_STEP);
+
+    expect(member.x).toBe(before.x);
+    expect(member.z).toBeCloseTo(before.z - before.speed * TIME_STEP);
+    expect(member.speed).toBe(before.speed);
+    expect(ramp.mergePlan.certificate).toBeNull();
+  });
+
+  test('World.stepは開始拒否時にcooperatorのmerge協力予約も解除する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+
+    world.step(TIME_STEP);
+    const certificate = ramp.mergePlan.certificate!;
+    const rear = new Vehicle(world, 'L', 2, ramp.z + 70, 'Sedan', 24);
+    rear.speed = 24;
+    world.vehicles.push(rear);
+    ramp.mergePlan = {
+      ...ramp.mergePlan,
+      rear: null,
+      certificate: {
+        ...certificate,
+        cooperation: { rearOrder: rear.spawnOrder, decel: 1 },
+        closure: { ...certificate.closure, orders: [rear.spawnOrder] },
+      },
+    };
+    ramp.z = certificate.completionZ + ramp.speed;
+    ramp.x = CONST.LANE_X.L[3];
+    const blocker = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 24);
+    blocker.speed = 24;
+    world.vehicles.push(blocker);
+    world.rebuildSectionIndex();
+    rear.mergeCooperationTarget = ramp.mergePlan.targetPassTime;
+    rear.mergeCooperationDecel = 1;
+    rear.waiting = true;
+    ramp.laneChangeBlockedLane = 2;
+
+    world.step(TIME_STEP);
+
+    expect(rear.mergeCooperationTarget).toBeNull();
+    expect(rear.mergeCooperationDecel).toBe(0);
+  });
+
+  test('開始拒否後も安全になればWorld.step経路で予約合流を再試行できる', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+
+    world.step(TIME_STEP);
+    const certificate = ramp.mergePlan.certificate!;
+    ramp.z = certificate.completionZ + ramp.speed;
+    ramp.x = CONST.LANE_X.L[3];
+    const target = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 24);
+    target.speed = 24;
+    world.vehicles.push(target);
+    world.rebuildSectionIndex();
+    ramp.laneChangeBlockedLane = 2;
+
+    world.step(TIME_STEP);
+    expect(ramp.mergePlan.certificate).toBeNull();
+    target.z = ramp.z - 30;
+    world.rebuildSectionIndex();
+
+    ramp.waiting = false;
+    ramp.mergePlan = {
+      ...ramp.mergePlan,
+      certificate,
+      state: 'committed',
+      targetPassTime: world.time + 1,
+    };
+    world.step(TIME_STEP);
+
+    expect(ramp.laneChange.state).toBe('changing');
+  });
+
   test('World.stepは予約合流の開始拒否時にrampのtransaction motionを適用しない', () => {
     const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
     const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);

@@ -400,10 +400,16 @@ export class Vehicle {
 
   /** 緊急中断した予約合流を解放し、blocked laneの安全待ちへ戻す。 */
   invalidateMergeReservation(): void {
-    const rear = this.mergePlan.rear;
-    if (rear?.mergeCooperationTarget === this.mergePlan.targetPassTime) {
-      rear.mergeCooperationTarget = null;
-      rear.mergeCooperationDecel = 0;
+    const cooperationOrder = this.mergePlan.certificate?.cooperation?.rearOrder;
+    const cooperator =
+      cooperationOrder !== undefined
+        ? this.world.vehicles.find((vehicle) => vehicle.spawnOrder === cooperationOrder)
+        : null;
+    for (const rear of [this.mergePlan.rear, cooperator]) {
+      if (rear?.mergeCooperationTarget === this.mergePlan.targetPassTime) {
+        rear.mergeCooperationTarget = null;
+        rear.mergeCooperationDecel = 0;
+      }
     }
     this.mergePlan = {
       ...this.mergePlan,
