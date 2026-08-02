@@ -384,6 +384,10 @@ export class Vehicle {
   /** 証明済み transaction だけが呼ぶ、再評価も cancel も行わない合流開始。 */
   startReservedMergeLaneChange(): void {
     if (this.lane !== 3 || this.laneChange.state !== 'none') return;
+    if (this.laneChangeBlockedLane === 2) {
+      if (this.checkLaneSafetyForChange(2) !== 'safe') return;
+      this.laneChangeBlockedLane = null;
+    }
     this.laneChange.state = 'changing';
     this.laneChange.from = 3;
     this.laneChange.to = 2;
@@ -486,6 +490,10 @@ export class Vehicle {
   }
 
   applyMergePlan(plan: MergePlan): void {
+    if (plan.state === 'committed' && this.laneChangeBlockedLane === 2) {
+      if (this.checkLaneSafetyForChange(2) !== 'safe') return;
+      this.laneChangeBlockedLane = null;
+    }
     const mergeLaneChange =
       this.laneChange.from === 3 && this.laneChange.to === 2 && this.laneChange.state !== 'none';
     if (mergeLaneChange && this.laneChange.state === 'cancel') {

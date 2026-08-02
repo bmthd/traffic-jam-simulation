@@ -3944,3 +3944,56 @@ describe('車線変更の物理重複境界 (Issue #83)', () => {
     expect(changing.lane).toBe(0);
   });
 });
+
+describe('合流経路のキャンセル後再開始防止 (Issue #83)', () => {
+  test('予約合流はcancel中とblocked中に開始せず、安全になれば開始できる', () => {
+    const world = new World({ rng: createRng(8340), spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, 0, 'Sedan', 25);
+    const target = new Vehicle(world, 'L', 2, 0, 'Sedan', 25);
+    world.vehicles.push(ramp, target);
+    world.rebuildSectionIndex();
+
+    ramp.laneChange = { ...ramp.laneChange, from: 3, to: 2, state: 'cancel' };
+    ramp.startReservedMergeLaneChange();
+    expect(ramp.laneChange.state).toBe('cancel');
+
+    ramp.laneChange.state = 'none';
+    ramp.laneChangeBlockedLane = 2;
+    ramp.startReservedMergeLaneChange();
+    expect(ramp.laneChange.state).toBe('none');
+
+    ramp.laneChangeBlockedLane = null;
+    target.z = -30;
+    world.rebuildSectionIndex();
+    ramp.startReservedMergeLaneChange();
+    expect(ramp.laneChange).toMatchObject({ from: 3, to: 2, state: 'changing' });
+  });
+
+  test('確定済み合流計画はcancel後のblocked中に適用せず、安全になれば適用できる', () => {
+    const world = new World({ rng: createRng(8341), spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, 330, 'Sedan', 25);
+    const front = new Vehicle(world, 'L', 2, 280, 'Sedan', 27);
+    const rear = new Vehicle(world, 'L', 2, 390, 'Sedan', 27);
+    world.vehicles.push(front, rear);
+    world.vehicles.push(ramp);
+    world.rebuildSectionIndex();
+
+    const plan = ramp.evaluateMergePlan(TIME_STEP, null);
+    expect(plan.state).toBe('committed');
+    const target = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 25);
+    world.vehicles.push(target);
+    world.rebuildSectionIndex();
+    ramp.cancelLaneChange(true);
+    ramp.laneChange = { ...ramp.laneChange, state: 'none' };
+    ramp.laneChangeBlockedLane = 2;
+
+    ramp.applyMergePlan(plan);
+    expect(ramp.laneChange.state).toBe('none');
+
+    ramp.laneChangeBlockedLane = null;
+    world.vehicles.splice(world.vehicles.indexOf(target), 1);
+    world.rebuildSectionIndex();
+    ramp.applyMergePlan(plan);
+    expect(ramp.laneChange).toMatchObject({ from: 3, to: 2, state: 'changing' });
+  });
+});
