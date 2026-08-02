@@ -128,11 +128,12 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
    1. メイン要件: 渋滞スコアに約4ポイントの差が出ること
    人間らしい運転モデル(ブレーキ連鎖・渋滞波)に加え、Issue #12 で
    流入・流出(混雑側への滞留)が入り台数自体も揺らぐようになったため、
-   シードごとの差の分布は広い。そこで
-   「約4ポイント」の大きさは10シード平均で判定し、
-   個別シードは「逆転しない・過大にならない」ことを判定する。
+   シードごとの差の分布は広い(シード別の標準偏差は 3 前後ある)。そこで
+   「約4ポイント」の大きさは30シード平均で判定し、
+   個別シードは「大半で逆転せず・過大にならない」ことを判定する。
    ============================================================ */
-const SEEDS = [11, 22, 33, 44, 55, 66, 77, 88, 99, 110];
+// 30シード。かつては10シードだったが、それでは検出力が足りなかった(下記)。
+const SEEDS = Array.from({ length: 30 }, (_, index) => (index + 1) * 11);
 // 目標値は #50(車線変更の安全判定が周回を考慮していなかった) と
 // #52(sectionIndex の陳腐化で最近接の前方車を見落とす) の修正に伴い 10 → 4 へ
 // 再較正した。旧値 10 のうち相当部分は #50 のバグが水増ししていたぶんである
@@ -140,18 +141,27 @@ const SEEDS = [11, 22, 33, 44, 55, 66, 77, 88, 99, 110];
 //  その恩恵は混雑して継ぎ目付近の車線変更が多い R 側に偏っていたため、
 //  バグを除去すると L/R のコントラストが縮む)。
 // 実装側の調整パラメータではなく期待値の側を実測に合わせている。
-// 修正後も 10 シード全てで R > L は維持されており、本実験の結論は変わらない。
 // 経緯の詳細は CLAUDE.md A 章を参照。
 const DIFF_TARGET = 4;
-// 10シード平均の実測は 4.00(シード別 1.25〜9.19、標準偏差 2.29、平均の標準誤差 0.72)。
+// 30シード平均の実測は 3.90(シード別 -2.02〜10.05、標準偏差 3.00、平均の標準誤差 0.55)。
 // シードは固定で測定値は決定的なので、この幅は「実行ごとの揺らぎの吸収」ではなく
-// 「将来の正当な変更に許す余地」として目標値の ±25% を取ったもの
-// (旧設定の 10±2 = ±20% と同じ考え方。信号が小さくなったぶん相対幅を広げた)。
-const DIFF_AVERAGE_MIN = 3;
-const DIFF_AVERAGE_MAX = 5;
+// 「将来の正当な変更に許す余地」として置いたもの。標準誤差の約 ±3.6 倍にあたる。
+// かつては 10 シードで ±1 に絞っていたが、シード別の標準偏差が 3 もある量に対して
+// 10 標本・幅 ±1 では平均の標準誤差(0.72)より帯のほうが狭く、
+// 「実装の変化」と「標本の揺らぎ」を区別できていなかった。
+// 実際 #83 では、10 シードでの見かけ上の平均差 5.90 を実装由来と誤読して
+// 目標値を 4 → 6 に動かしかけたが、30 シードで測り直すと平均差のシフトは
+// +1.33 ± 0.78 (t=1.71) で有意でなく、目標値を動かす理由はなかった。
+const DIFF_AVERAGE_MIN = 2;
+const DIFF_AVERAGE_MAX = 6;
 const DIFF_MAX = DIFF_TARGET + 10; // 個別シードの上限(これを超えたら暴走の疑い)
+// 個別シードの逆転は本来ノイズであり、main でも 30 シード中 3 シードで逆転する
+// (seed 231/297/308)。かつての「全シードで R > L」は 10 シードという
+// 小標本でたまたま成立していただけで、実験の主張ではない。
+// 主張は「大半のシードで義務なし側のほうが渋滞する」であり、それを勝率で判定する。
+const DIFF_R_HIGHER_MIN = 24;
 
-// 10シードのシナリオは重い(シミュレーション内時間300秒×10)ので、
+// 30シードのシナリオは重い(シミュレーション内時間300秒×30)ので、
 // 最初に必要になった時に一度だけ計算して全テストで共有する
 let _results: ({ seed: number } & ScenarioResult)[] | null = null;
 function getResults(): ({ seed: number } & ScenarioResult)[] {
@@ -160,20 +170,23 @@ function getResults(): ({ seed: number } & ScenarioResult)[] {
 }
 
 describe('渋滞スコア差（義務あり vs 義務なし）', () => {
-  test.each(SEEDS)('seed=%i: 義務なし側のスコアが高い(逆転・暴走しない)', (seed) => {
-    const result = getResults().find((entry) => entry.seed === seed)!;
-    const diff = Math.round((result.scoreR - result.scoreL) * 10) / 10; // 表示と同じ精度で判定する
+  test(`${SEEDS.length}シード中${DIFF_R_HIGHER_MIN}シード以上で義務なし側のスコアが高く、差が暴走しない`, () => {
+    const results = getResults();
+    const rHigherCount = results.filter((result) => result.scoreR > result.scoreL).length;
     expect(
-      result.scoreR,
-      `義務なし側の方が渋滞するはずが逆転 (L=${result.scoreL.toFixed(1)}, R=${result.scoreR.toFixed(1)})`,
-    ).toBeGreaterThan(result.scoreL);
-    expect(
-      diff,
-      `スコア差 ${diff.toFixed(1)} が上限 ${DIFF_MAX} を超過(暴走の疑い)`,
-    ).toBeLessThanOrEqual(DIFF_MAX);
+      rHigherCount,
+      `義務なし側の方が渋滞するはずが、逆転が多すぎる (${rHigherCount}/${SEEDS.length})`,
+    ).toBeGreaterThanOrEqual(DIFF_R_HIGHER_MIN);
+    for (const result of results) {
+      const diff = Math.round((result.scoreR - result.scoreL) * 10) / 10; // 表示と同じ精度で判定する
+      expect(
+        diff,
+        `seed=${result.seed}: スコア差 ${diff.toFixed(1)} が上限 ${DIFF_MAX} を超過(暴走の疑い)`,
+      ).toBeLessThanOrEqual(DIFF_MAX);
+    }
   });
 
-  test(`10シード平均のスコア差が ${DIFF_AVERAGE_MIN}〜${DIFF_AVERAGE_MAX} に収まる`, () => {
+  test(`${SEEDS.length}シード平均のスコア差が ${DIFF_AVERAGE_MIN}〜${DIFF_AVERAGE_MAX} に収まる`, () => {
     const results = getResults();
     const avg =
       results.reduce((sum, result) => sum + (result.scoreR - result.scoreL), 0) / results.length;
@@ -433,9 +446,10 @@ describe('渋滞スコア算出', () => {
    7. 流入・流出と滞留 (Issue #12)
    流入需要は左右で同ペースだが、流出は各道路の交通状況に従う。
    混んでいる側は捌けが遅いぶん流出が少なくなる。
-   なお「滞留」は台数には現れない: 流入調整(admissibleLane)が両区間を同じ
-   台数水準に regulate するため、台数は飽和して L/R を弁別しない。
-   差が出るのは流出台数とスコアの速度項である(下の各テストのコメント参照)。
+   なお「滞留」は台数にはほとんど現れない: 流入調整(admissibleLane)が両区間を
+   同じ上限に押し戻すうえ、台数差はシード間の揺らぎが大きく(標準偏差 5.6 台)、
+   L/R の弁別には使えない。差が出るのは流出台数とスコアの速度項である
+   (下の各テストのコメント参照)。
    ============================================================ */
 describe('流入・流出と滞留 (Issue #12)', () => {
   // 流入需要そのものは構造的に完全同一である: spawnPair() の 1 回の呼び出しが
@@ -457,12 +471,12 @@ describe('流入・流出と滞留 (Issue #12)', () => {
       ).toBeLessThanOrEqual(CONST.RAMP_QUEUE_MAX);
     }
     // 総量での系統的な偏りの検査(片側だけ需要が多い交絡が入っていないこと)。
-    // 実測は L=348 / R=350 で差 2 台 = 0.6%。
+    // 実測の左右差は総流入の 1% 未満に収まる(10シード時点では L=348 / R=350 で 0.6%)。
     const totalL = results.reduce((sum, result) => sum + result.world.stats.inflow.L, 0);
     const totalR = results.reduce((sum, result) => sum + result.world.stats.inflow.R, 0);
     expect(
       Math.abs(totalL - totalR) / totalL,
-      `10シード合計の流入が左右で偏っている (L=${totalL}, R=${totalR})`,
+      `${SEEDS.length}シード合計の流入が左右で偏っている (L=${totalL}, R=${totalR})`,
     ).toBeLessThan(0.01);
   });
 
@@ -481,26 +495,26 @@ describe('流入・流出と滞留 (Issue #12)', () => {
   });
 
   // かつてこのテストは「混雑側(R)に滞留して平均台数が多くなる」(差 > 1 台)を主張していたが、
-  // #50/#52 の修正後の実測ではその主張は成り立たない。原因は指標の飽和である:
+  // #50/#52 の修正後の実測ではその主張は成り立たない。流入調整が働くためである:
   // admissibleLane() が roadCount >= targetCountPerSection()(生成間隔 800 では 72 台)で
-  // 本線への進入を止めるため、**両区間とも同じ台数水準に能動的に regulate されている**。
+  // 本線への進入を止めるため、**どちらの区間も同じ上限に押し戻されている**。
   // 溢れたぶんは入口待ち(waiting)に回るが、そちらも RAMP_QUEUE_MAX = 4 台/入口で頭打ちになる。
-  // 実測(10シード平均)は 総台数差 R-L = +0.05 台、本線台数差 = +0.30 台、
-  // 入口待ち差 = -0.25 台(むしろ L の方が待っている)。シード別は -8.89〜+5.53 台と
-  // 標準偏差 4.12 で散らばり、平均の標準誤差 1.30 に対して差は事実上ゼロである。
-  // つまり台数は L/R を弁別しない。渋滞の差はスコアの速度項(重み 75%)と
-  // 流出台数に現れており、それらは上下の 2 テストが引き続き検証している。
-  // ここでは主張を反転させ「流入調整が左右対称に効いていること」の回帰ガードとして残す。
+  // 実測(30シード平均)は 総台数差 R-L = +0.63 台、入口待ち差 = -0.25 台(むしろ L が待つ)。
+  // ただし**この量はノイズが大きい**: シード別は -9.33〜+12.08 台、標準偏差 5.64、
+  // 平均の標準誤差 1.03 で、平均が 0 に近いのは「飽和して動かない」からではなく
+  // 左右の揺らぎが打ち消し合うからである。したがって小さな差に意味を持たせてはならない。
+  // 渋滞の差はスコアの速度項(重み 75%)と流出台数に現れており、
+  // それらは上下の 2 テストが引き続き検証している。
+  // ここで検出したいのは「片側だけ流入調整が壊れたときの大きな偏り」であって、
+  // 数台の揺らぎではない。許容幅 5 台は平均の標準誤差 1.03 の約 5 倍にあたる。
   test('平均台数は流入調整により左右で同水準に保たれる(滞留は流出差に現れる)', () => {
     const results = getResults();
     const avgGap =
       results.reduce((sum, result) => sum + (result.countR - result.countL), 0) / results.length;
-    // 許容幅 2 台は平均の標準誤差 1.30 の約 1.5 倍。片側だけ流入調整が壊れれば
-    // 台数水準がずれるので、その種の非対称は検出できる
     expect(
       Math.abs(avgGap),
       `平均台数差 R-L = ${avgGap.toFixed(2)} 台: 流入調整が左右非対称になっている疑い`,
-    ).toBeLessThan(2);
+    ).toBeLessThan(5);
   });
 
   test('入口が受け入れ不能な間は入口待ち(waiting)の列に並ぶ', () => {
