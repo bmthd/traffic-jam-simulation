@@ -433,20 +433,46 @@ export class World {
         Math.max(0, certificate.targetPassTime - this.time),
       ),
     );
-    const blocks = (
-      neighbor: { vehicle: Vehicle; distance: number } | null,
-      closingSpeed: number,
-    ) =>
-      neighbor !== null &&
-      lockedOrders.has(neighbor.vehicle.spawnOrder) &&
-      neighbor.distance <=
-        (vehicle.length + neighbor.vehicle.length) / 2 +
-          CONST.MERGE_BODY_CLEARANCE +
-          Math.max(0, closingSpeed) * remaining;
-    return (
-      blocks(nearestAhead, vehicle.speed - (nearestAhead?.vehicle.speed ?? vehicle.speed)) ||
-      blocks(nearestBehind, (nearestBehind?.vehicle.speed ?? vehicle.speed) - vehicle.speed)
-    );
+    const clearance = (neighbor: { vehicle: Vehicle }) =>
+      (vehicle.length + neighbor.vehicle.length) / 2 + CONST.MERGE_BODY_CLEARANCE;
+    // 後方が locked member の場合（= locked member の前方への割り込み）。
+    // Issue #160: 以前はその瞬間の接近速度で距離を外挿していたため
+    // 「割り込んだ車がその後減速しない」ことを暗黙の前提にしていた。前提が崩れても
+    // member は運動が固定されていて追従で吸収できず、実際に貫通し得る。
+    // そこで割り込む側の将来の挙動を一切前提にせず、closure が生きている間に
+    // member が掃きうる区間（残り時間 × member の速度）への割り込みを一律に禁止する。
+    const blocksBehind =
+      nearestBehind !== null &&
+      lockedOrders.has(nearestBehind.vehicle.spawnOrder) &&
+      nearestBehind.distance <= clearance(nearestBehind) + nearestBehind.vehicle.speed * remaining;
+    // 前方が locked member の場合（= locked member の後方への割り込み）は、
+    // 割り込む側が追従モデルで自ら減速できるため上記の穴は生じない。従来判定のまま。
+    const blocksAhead =
+      nearestAhead !== null &&
+      lockedOrders.has(nearestAhead.vehicle.spawnOrder) &&
+      nearestAhead.distance <=
+        clearance(nearestAhead) +
+          Math.max(0, vehicle.speed - nearestAhead.vehicle.speed) * remaining;
+    return blocksAhead || blocksBehind;
+  }
+
+  /**
+   * lane 2 (変更中の進入も含む) で member の直前にいる車を返す。
+   * closure を組む buildMergeDependencyClosure と同じ集合・同じ距離定義を使う。
+   */
+  private nearestLaneTwoAhead(
+    snapshot: WorldSnapshot,
+    section: Section,
+    member: VehicleSnapshot,
+  ): Readonly<{ vehicle: VehicleSnapshot; distance: number }> | null {
+    let nearest: { vehicle: VehicleSnapshot; distance: number } | null = null;
+    for (const candidate of snapshot.lane2BySection[section]) {
+      if (candidate.order === member.order) continue;
+      const distance = (((member.z - candidate.z) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+      if (distance <= 0.001) continue;
+      if (!nearest || distance < nearest.distance) nearest = { vehicle: candidate, distance };
+    }
+    return nearest;
   }
 
   private certificateLocks(section: Section, certificate: MergeCertificate): string[] {
@@ -568,6 +594,22 @@ export class World {
         ? `${order}:${vehicle.lane}@${vehicle.z.toFixed(3)}/${vehicle.speed.toFixed(3)}`
         : `${order}:missing`;
     });
+    // role だけでなく、member の直前にいる closure 外の車 (割り込み車) も出す (Issue #160)。
+    // 回廊が壊れる原因が role 同士の詰まりなのか第三者の割り込みなのかを、
+    // 例外メッセージだけで切り分けられるようにする。
+    const roleSet = new Set(roleOrders);
+    const intruders: string[] = [];
+    const rampSnapshot = certificate ? snapshot.byOrder.get(certificate.rampOrder) : undefined;
+    if (certificate && rampSnapshot) {
+      for (const order of certificate.closure.orders) {
+        const member = snapshot.byOrder.get(order);
+        if (!member) continue;
+        const ahead = this.nearestLaneTwoAhead(snapshot, rampSnapshot.section, member);
+        if (!ahead || roleSet.has(ahead.vehicle.order)) continue;
+        const bodyGap = ahead.distance - (member.length + ahead.vehicle.length) / 2;
+        intruders.push(`${order}<-${ahead.vehicle.order}@${bodyGap.toFixed(3)}`);
+      }
+    }
     return new Error(
       [
         '合流予約回廊が空:',
@@ -581,6 +623,7 @@ export class World {
         `dt=${deltaTime}`,
         `envelope=[${plan.envelope?.min},${plan.envelope?.max}]`,
         `roles=[${roles.join(',')}]`,
+        `intruders=[${intruders.join(',')}]`,
         `reason=${reason}`,
       ].join(' '),
     );
@@ -621,6 +664,7 @@ export class World {
       const rampMotion = motions.get(certificate.rampOrder);
       if (!ramp || !rampMotion)
         throw this.corridorError(directive.plan, snapshot, deltaTime, 'ランプ運動なし');
+      const roleOrders = new Set([certificate.rampOrder, ...certificate.closure.orders]);
       const changing = rampMotion.laneChangeProgress !== null;
       const nextProgress = rampMotion.laneChangeProgress ?? ramp.laneChange.progress;
       const nextRampZ = rampMotion.nextZ;
@@ -684,6 +728,32 @@ export class World {
             snapshot,
             deltaTime,
             `closure車体間隔=${bodyGap}:${edge.followerOrder}->${edge.aheadOrder}`,
+          );
+      }
+      // closure の外にいる車 (割り込み車) も検証対象に含める (Issue #160)。
+      // 固定運動は割り込み車に反応できないので、role 同士だけを見ていては
+      // 貫通を検出できなかった。割り込み自体は blocksReservedLaneChange が
+      // 一律に禁止しているので、ここまで来た回廊には「期限まで到達し得ない
+      // 直前車」しか残らないはずである。この検査はその backstop であり、
+      // 通常の実行では発火しない。
+      // 割り込み車の次位置は未確定だが前進しかしないので、現在位置で評価すれば
+      // 実際の車間を下回ることはなく、判定は保守側に倒れる。
+      for (const order of certificate.closure.orders) {
+        const member = snapshots.get(order);
+        const memberMotion = motions.get(order);
+        if (!member || !memberMotion)
+          throw this.corridorError(directive.plan, snapshot, deltaTime, `closure運動なし:${order}`);
+        const ahead = this.nearestLaneTwoAhead(snapshot, ramp.section, member);
+        if (!ahead || roleOrders.has(ahead.vehicle.order)) continue;
+        const centerDistance =
+          (((memberMotion.nextZ - ahead.vehicle.z) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+        const bodyGap = centerDistance - (member.length + ahead.vehicle.length) / 2;
+        if (bodyGap < 0)
+          throw this.corridorError(
+            directive.plan,
+            snapshot,
+            deltaTime,
+            `割り込み車体間隔=${bodyGap}:${order}<-${ahead.vehicle.order}`,
           );
       }
     }
