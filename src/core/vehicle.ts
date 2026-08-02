@@ -192,6 +192,7 @@ export class Vehicle {
   laneChange: LaneChange;
   mergePlan: MergePlan;
   laneChangeCooldown: number;
+  laneChangeBlockedLane: number | null;
   returnTimer: number;
   keepLeftTimer: number;
   noOvertakeTimer: number;
@@ -279,6 +280,7 @@ export class Vehicle {
       certificate: null,
     };
     this.laneChangeCooldown = 0;
+    this.laneChangeBlockedLane = null;
     this.returnTimer = 0;
     this.keepLeftTimer = 0;
     this.noOvertakeTimer = 0; // 譲った直後の「我慢」時間(頻繁な変更による乱流防止)
@@ -634,8 +636,8 @@ export class Vehicle {
     return this.laneChangeController.tryLaneChange(toLane);
   }
 
-  cancelLaneChange(): void {
-    return this.laneChangeController.cancelLaneChange();
+  cancelLaneChange(emergency = false): void {
+    return this.laneChangeController.cancelLaneChange(emergency);
   }
 
   updateLaneChange(deltaTime: number): void {

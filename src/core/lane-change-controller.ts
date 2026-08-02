@@ -1,5 +1,5 @@
 import { CONST } from './constants';
-import { wrapDelta } from './utils';
+import { clamp, lerp, smooth, wrapDelta } from './utils';
 import type { NeighborInfo, Vehicle } from './vehicle';
 
 export class LaneChangeController {
@@ -101,7 +101,11 @@ export class LaneChangeController {
   tryLaneChange(toLane: number): boolean {
     if (toLane < 0 || toLane > 2) return false;
     if (this.vehicle.world.blocksReservedLaneChange(this.vehicle, toLane)) return false;
-    if (this.vehicle.checkLaneSafetyForChange(toLane) !== 'safe') return false;
+    const safety = this.vehicle.checkLaneSafetyForChange(toLane);
+    if (this.vehicle.laneChangeBlockedLane === toLane) {
+      if (safety !== 'safe') return false;
+      this.vehicle.laneChangeBlockedLane = null;
+    } else if (safety !== 'safe') return false;
     this.vehicle.laneChange.state = 'changing';
     this.vehicle.laneChange.from = this.vehicle.lane;
     this.vehicle.laneChange.to = toLane;
@@ -112,7 +116,7 @@ export class LaneChangeController {
     return true;
   }
 
-  cancelLaneChange(): void {
+  cancelLaneChange(emergency = false): void {
     if (this.vehicle.laneChange.from === 3 && this.vehicle.laneChange.to === 2) {
       const rear = this.vehicle.mergePlan.rear;
       if (rear?.mergeCooperationTarget === this.vehicle.mergePlan.targetPassTime) {
@@ -130,6 +134,7 @@ export class LaneChangeController {
       };
     }
     if (this.vehicle.laneChange.state !== 'cancel') {
+      if (emergency) this.vehicle.laneChangeBlockedLane = this.vehicle.laneChange.to;
       this.vehicle.laneChange.state = 'cancel';
       this.vehicle.world.stats.cancels[this.vehicle.section]++;
     }
@@ -142,18 +147,10 @@ export class LaneChangeController {
 
     if (laneChange.state === 'changing') {
       laneChange.progress += deltaTime / CONST.LANE_CHANGE_DURATION;
-      if (laneChange.checkTimer <= 0) {
-        laneChange.checkTimer = 0.15;
-        const safety = this.vehicle.checkLaneSafetyForChange(laneChange.to);
-        // 進捗30%を超えた車線変更はコミット済みとし、切り返しによる横揺れを防ぐ。
-        if (safety === 'danger' && laneChange.progress < 0.3) {
-          this.vehicle.cancelLaneChange();
-          return;
-        }
-        if (safety === 'hold' && laneChange.progress < 0.3) {
-          laneChange.state = 'holding';
-          laneChange.holdTime = 0;
-        }
+      // 開始後は通常の車間不足で切り返さず、実車体の重複だけを緊急停止する。
+      if (this.hasPhysicalOverlap(laneChange.to, laneChange.progress)) {
+        this.vehicle.cancelLaneChange(true);
+        return;
       }
       if (laneChange.progress >= 1) {
         laneChange.progress = 1;
@@ -198,6 +195,23 @@ export class LaneChangeController {
         this.vehicle.laneChangeCooldown = CONST.LANE_CHANGE_RETRY_COOLDOWN;
       }
     }
+  }
+
+  private hasPhysicalOverlap(toLane: number, progress: number): boolean {
+    const laneXs = CONST.LANE_X[this.vehicle.section];
+    const x = lerp(
+      laneXs[this.vehicle.laneChange.from],
+      laneXs[toLane],
+      smooth(clamp(progress, 0, 1)),
+    );
+    for (const other of this.vehicle.world.sectionVehicles[this.vehicle.section]) {
+      if (other === this.vehicle || !other.occupies(toLane)) continue;
+      const horizontalOverlap = Math.abs(other.x - x) < (this.vehicle.width + other.width) / 2;
+      const longitudinalOverlap =
+        Math.abs(wrapDelta(other.z - this.vehicle.z)) < (this.vehicle.length + other.length) / 2;
+      if (horizontalOverlap && longitudinalOverlap) return true;
+    }
+    return false;
   }
 
   decide(ahead: NeighborInfo | null, deltaTime: number): void {
