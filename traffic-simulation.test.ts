@@ -333,6 +333,9 @@ describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', (
       wall.camper = false;
       world.vehicles.push(wall);
     }
+    // 元の乱数列と周回境界のタイミングを保ち、出口抽選だけを非当選にする。
+    const scenarioRng = world.rng;
+    world.rng = () => Math.max(CONST.EXIT_RATIO, scenarioRng());
     return { world, overtaker, side };
   }
 
@@ -374,7 +377,10 @@ describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', (
         }
       }
       expect(boosted, '加速復帰(returnBoostTimer)が発動しなかった').toBe(true);
-      expect(returned, '加速しても走行車線へ復帰できなかった').toBe(true);
+      expect(
+        returned,
+        `加速しても走行車線へ復帰できなかった (exitIntent=${overtaker.exitIntent}, lane=${overtaker.lane}, z=${overtaker.z.toFixed(1)})`,
+      ).toBe(true);
     },
   );
 
@@ -490,18 +496,21 @@ describe('流入・流出と滞留 (Issue #12)', () => {
     ).toBeLessThan(0.01);
   });
 
-  test('流出は交通状況に従う: 流れの良い義務あり側の方が多く捌ける', () => {
+  test('実体出口は両区間で機能し流出台数に構造的な偏りがない', () => {
     let outflowL = 0,
       outflowR = 0;
     for (const result of getResults()) {
       outflowL += result.world.stats.outflow.L;
       outflowR += result.world.stats.outflow.R;
     }
+    // 実体出口ではlane 3へ入れるかが各側の創発的な交通状態に従うため、
+    // 流れが良い側ほど多く退出するという旧終端despawnの方向仮定は置かない。
+    expect(outflowL, 'L区間で流出が発生していない').toBeGreaterThan(0);
+    expect(outflowR, 'R区間で流出が発生していない').toBeGreaterThan(0);
     expect(
-      outflowL,
-      `流出台数 L=${outflowL} <= R=${outflowR}: 混雑側の方が捌けている`,
-    ).toBeGreaterThan(outflowR);
-    expect(outflowR, '流出が発生していない').toBeGreaterThan(0);
+      Math.abs(outflowL - outflowR) / Math.max(outflowL, outflowR),
+      `流出台数が左右で偏っている (L=${outflowL}, R=${outflowR})`,
+    ).toBeLessThan(0.05);
   });
 
   // かつてこのテストは「混雑側(R)に滞留して平均台数が多くなる」(差 > 1 台)を主張していたが、
