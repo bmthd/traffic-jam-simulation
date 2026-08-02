@@ -137,16 +137,16 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
    ============================================================ */
 const SEEDS = [11, 22, 33, 44, 55, 66, 77, 88, 99, 110];
 const EXPECTED_SEED_SCORES = new Map<number, readonly [number, number]>([
-  [11, [40.5532, 44.1822]],
-  [22, [38.9192, 43.7874]],
-  [33, [40.6655, 42.0787]],
-  [44, [38.1836, 42.8593]],
-  [55, [39.405, 42.4107]],
-  [66, [38.3554, 42.9721]],
-  [77, [39.3495, 43.9275]],
-  [88, [37.2173, 41.4022]],
-  [99, [40.0145, 43.494]],
-  [110, [37.8165, 42.6146]],
+  [11, [38.1422, 44.1439]],
+  [22, [38.4227, 42.7934]],
+  [33, [38.9002, 42.0461]],
+  [44, [39.3764, 44.6735]],
+  [55, [38.2921, 42.3333]],
+  [66, [40.2176, 44.1386]],
+  [77, [39.5307, 43.8827]],
+  [88, [38.4137, 41.9651]],
+  [99, [38.7198, 43.1766]],
+  [110, [37.9348, 42.4005]],
 ]);
 // 目標値は #50(車線変更の安全判定が周回を考慮していなかった) と
 // #52(sectionIndex の陳腐化で最近接の前方車を見落とす) の修正に伴い 10 → 4 へ
@@ -159,13 +159,13 @@ const EXPECTED_SEED_SCORES = new Map<number, readonly [number, number]>([
 // 経緯の詳細は CLAUDE.md A 章を参照。
 // Issue #128 の実体出口追加後も全シードで R > L を維持したため、出口追加後の
 // 実測へ期待値だけを再較正した。物理定数・車間係数は変更していない。
-const DIFF_TARGET = 3.9;
-// 10シード平均の実測は 3.9249（シード別 1.4132〜4.8682、標準偏差 1.0309、平均の標準誤差 0.3260）。
+const DIFF_TARGET = 4.4;
+// 10シード平均の実測は 4.3604（シード別 3.1459〜6.0017、標準偏差 0.7756、平均の標準誤差 0.2453）。
 // シードは固定で測定値は決定的なので、この幅は「実行ごとの揺らぎの吸収」ではなく
 // 「将来の正当な変更に許す余地」として目標値の ±25% を取ったもの
 // (旧設定の 10±2 = ±20% と同じ考え方。信号が小さくなったぶん相対幅を広げた)。
-const DIFF_AVERAGE_MIN = 2.9;
-const DIFF_AVERAGE_MAX = 4.9;
+const DIFF_AVERAGE_MIN = 3.3;
+const DIFF_AVERAGE_MAX = 5.5;
 const DIFF_MAX = DIFF_TARGET + 10; // 個別シードの上限(これを超えたら暴走の疑い)
 
 // 10シードのシナリオは重い(シミュレーション内時間300秒×10)ので、
@@ -333,6 +333,9 @@ describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', (
       wall.camper = false;
       world.vehicles.push(wall);
     }
+    // 元の乱数列と周回境界のタイミングを保ち、出口抽選だけを非当選にする。
+    const scenarioRng = world.rng;
+    world.rng = () => Math.max(CONST.EXIT_RATIO, scenarioRng());
     return { world, overtaker, side };
   }
 
@@ -374,7 +377,10 @@ describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', (
         }
       }
       expect(boosted, '加速復帰(returnBoostTimer)が発動しなかった').toBe(true);
-      expect(returned, '加速しても走行車線へ復帰できなかった').toBe(true);
+      expect(
+        returned,
+        `加速しても走行車線へ復帰できなかった (exitIntent=${overtaker.exitIntent}, lane=${overtaker.lane}, z=${overtaker.z.toFixed(1)})`,
+      ).toBe(true);
     },
   );
 
@@ -490,18 +496,21 @@ describe('流入・流出と滞留 (Issue #12)', () => {
     ).toBeLessThan(0.01);
   });
 
-  test('流出は交通状況に従う: 流れの良い義務あり側の方が多く捌ける', () => {
+  test('実体出口は両区間で機能し流出台数に構造的な偏りがない', () => {
     let outflowL = 0,
       outflowR = 0;
     for (const result of getResults()) {
       outflowL += result.world.stats.outflow.L;
       outflowR += result.world.stats.outflow.R;
     }
+    // 実体出口ではlane 3へ入れるかが各側の創発的な交通状態に従うため、
+    // 流れが良い側ほど多く退出するという旧終端despawnの方向仮定は置かない。
+    expect(outflowL, 'L区間で流出が発生していない').toBeGreaterThan(0);
+    expect(outflowR, 'R区間で流出が発生していない').toBeGreaterThan(0);
     expect(
-      outflowL,
-      `流出台数 L=${outflowL} <= R=${outflowR}: 混雑側の方が捌けている`,
-    ).toBeGreaterThan(outflowR);
-    expect(outflowR, '流出が発生していない').toBeGreaterThan(0);
+      Math.abs(outflowL - outflowR) / Math.max(outflowL, outflowR),
+      `流出台数が左右で偏っている (L=${outflowL}, R=${outflowR})`,
+    ).toBeLessThan(0.05);
   });
 
   // かつてこのテストは「混雑側(R)に滞留して平均台数が多くなる」(差 > 1 台)を主張していたが、

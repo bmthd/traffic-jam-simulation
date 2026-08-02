@@ -657,8 +657,9 @@ export class Vehicle {
       this.exitDecisionArmed = false;
     }
     if (!this.exitIntent) return false;
+    let exitLaneChangeStarted = false;
     if (this.laneChange.state === 'none' && localZ > CONST.EXIT_BRANCH_Z) {
-      if (this.lane < 2) this.tryLaneChange(this.lane + 1);
+      if (this.lane < 2) exitLaneChangeStarted = this.tryLaneChange(this.lane + 1);
       else if (this.lane === 2 && localZ <= CONST.EXIT_LANE_START_Z) this.tryLaneChange(3);
     }
     if (previousLocalZ > CONST.EXIT_BRANCH_Z && localZ <= CONST.EXIT_BRANCH_Z) {
@@ -668,7 +669,13 @@ export class Vehicle {
         this.exitIntent = false;
       }
     }
-    return true;
+    // lane 0/1で出口側へ移れなかったtickは通常判断も許す。これにより退出意思が
+    // 既存の衝突回避・加速復帰を一律に止めることはない。
+    return (
+      this.lane >= 2 ||
+      exitLaneChangeStarted ||
+      (this.laneChange.state !== 'none' && this.laneChange.to === 3)
+    );
   }
 
   update(deltaTime: number): void {
