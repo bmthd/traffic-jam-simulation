@@ -48,7 +48,6 @@ export function setupSpectator(): void {
     const title = 'カメラ: ' + status.mode.label + '(押して切替)';
     button.title = title;
     button.setAttribute('aria-label', title);
-    renderIcons();
     menu.querySelectorAll<HTMLButtonElement>('[data-camera-mode]').forEach((item) => {
       item.classList.toggle('selected', item.dataset.cameraMode === status.mode.id);
     });
@@ -60,6 +59,9 @@ export function setupSpectator(): void {
       item.classList.toggle('selected', item.dataset.section === status.section);
     });
     renderVariations(status);
+    // アイコンの SVG 化は、バリエーションの差し替えまで終えてからまとめて行う
+    // (先に呼ぶと後から挿入したプレースホルダが変換されずアイコンが消える)
+    renderIcons();
   }
 
   function renderVariations(status: SpectatorStatus): void {

@@ -30,7 +30,9 @@ input {
 /* 白地のボタンは外側が緑のパネルなので、リングをボタンの内側に描いて濃い緑で示す */
 #resetBtn:focus-visible,
 #paramsBtn:focus-visible,
-#paramApply:focus-visible {
+#paramApply:focus-visible,
+#cameraResetBtn:focus-visible,
+.camera-operation-bar button:focus-visible {
   outline-color: #05613b;
   outline-offset: -4px;
 }
@@ -520,15 +522,31 @@ body.night #nightBtn {
   }
 }
 
-/* ---- カメラモード切替(右上・カラーモード切替の下) ----
-   専用パネルではなく丸ボタン1つに集約しているため、
-   画面が狭くても他のパネル(スコア比較・コントロール)と干渉しない */
-#spectatorBtn {
-  --auto-cycle-progress: 0;
+/* ---- カメラ操作(右上・カラーモード切替の下) ----
+   モード切替の丸ボタンと、その視点でだけ意味を持つ詳細操作(区間切替・次の車・
+   視点を戻す・操作ヒント)を1つの縦並びにまとめる。
+   詳細操作を画面の反対側に置くと切替のたびに視線と指が往復するため、
+   出どころのボタンの真下に生やす。位置指定はこのラッパー1箇所に集約し、
+   画面サイズごとの調整もここだけで済ませる */
+#cameraControls {
   position: fixed;
   top: 78px;
   right: 14px;
   z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  /* ラッパーの余白でカメラのドラッグ操作を奪わないよう、当たり判定は子だけに持たせる */
+  pointer-events: none;
+}
+#cameraControls > * {
+  pointer-events: auto;
+}
+#spectatorBtn {
+  --auto-cycle-progress: 0;
+  position: relative;
+  flex: none;
   width: 56px;
   height: 56px;
   padding: 0;
@@ -594,12 +612,10 @@ body.night #nightBtn {
     inset 0 1px 0 rgba(255, 255, 255, 0.35),
     0 0 20px rgba(255, 213, 74, 0.55);
 }
-/* 現在のモード名。モード変更時だけボタンの下に右揃えで出す */
+/* 現在のモード名。モード変更時だけボタンの下に出す。
+   消えている間も場所を空けたままにして(不透明度だけを変える)、
+   下に続く詳細操作が出入りのたびに上下しないようにする */
 #spectatorLabel {
-  position: fixed;
-  top: 138px;
-  right: 14px;
-  z-index: 30;
   max-width: 45vw;
   padding: 3px 10px;
   border-radius: 999px;
@@ -621,18 +637,16 @@ body.night #nightBtn {
   opacity: 1;
   transform: translateY(0);
 }
+/* モード一覧はボタンの左隣に開く(下に開くと詳細操作を覆ってしまう)。
+   見た目は他のパネルと同じ案内標識風(.sign)に揃える */
 #spectatorMenu {
   display: none;
-  position: fixed;
-  top: 78px;
-  right: 78px;
+  position: absolute;
+  top: 0;
+  right: calc(100% + 8px);
   z-index: 31;
   width: 210px;
-  padding: 10px;
-  border-radius: 12px;
-  color: #fff;
-  background: rgba(3, 38, 27, 0.94);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  padding: 8px;
 }
 #spectatorMenu.open {
   display: flex;
@@ -649,111 +663,104 @@ body.night #nightBtn {
   border-radius: 8px;
   color: inherit;
   background: transparent;
-  text-align: left;
   font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: left;
   cursor: pointer;
 }
-#spectatorMenu button:hover,
+#spectatorMenu button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+/* 選択中は他のパネルと同じ強調色(黄)で塗る */
 #spectatorMenu button.selected {
-  background: rgba(255, 213, 74, 0.2);
+  color: #05613b;
+  background: #ffd54a;
 }
 #spectatorMenu .lucide {
   width: 18px;
   height: 18px;
 }
-#variationBar {
-  position: fixed;
-  right: 14px;
-  bottom: 52px;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border-radius: 10px;
-  background: rgba(3, 38, 27, 0.9);
-}
+/* バリエーション切替(定点なら俯瞰/見上げ/合流、追跡なら三人称/一人称)も
+   同じ操作バーとして扱い、モード切替ボタンの真下に並べる */
 #variationBar button {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 9px;
-  border: 0;
-  border-radius: 7px;
-  color: inherit;
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
-}
-#variationBar button:hover,
-#variationBar button.selected {
-  background: rgba(255, 213, 74, 0.2);
 }
 #variationBar .lucide {
   width: 16px;
   height: 16px;
 }
-#cameraResetBtn {
-  position: fixed;
-  top: 148px;
-  right: 14px;
-  z-index: 30;
+/* 詳細操作のボタンは、コントロールパネルの白ボタン(#resetBtn)と同じ質感に揃える */
+#cameraResetBtn,
+.camera-operation-bar button {
   padding: 7px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  border-radius: 999px;
-  color: #fff;
-  background: rgba(3, 38, 27, 0.88);
+  border: none;
+  border-radius: 9px;
+  color: #05613b;
+  background: #fff;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 3px 0 #c8d6cd;
+  transition:
+    transform 0.08s,
+    box-shadow 0.08s;
+}
+#cameraResetBtn:active,
+.camera-operation-bar button:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 #c8d6cd;
 }
 #cameraPanHint {
-  position: fixed;
-  right: 14px;
-  bottom: 18px;
-  z-index: 29;
+  max-width: 210px;
   padding: 5px 9px;
-  border-radius: 7px;
-  color: #fff;
-  background: rgba(3, 38, 27, 0.75);
+  border-width: 2px;
+  border-radius: 9px;
   font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: right;
   pointer-events: none;
 }
 .camera-operation-bar {
-  position: fixed;
-  right: 14px;
-  bottom: 18px;
-  z-index: 30;
   display: flex;
-  gap: 5px;
+  gap: 6px;
   padding: 6px;
-  border-radius: 10px;
-  background: rgba(3, 38, 27, 0.9);
+  border-width: 2px;
+  border-radius: 12px;
 }
 .camera-operation-bar[hidden] {
   display: none;
 }
-.camera-operation-bar button {
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 7px;
-}
+/* 選択中の区間は、案内標識の強調色(黄)で塗って現在地を示す */
 .camera-operation-bar button.selected {
-  color: #173b20;
+  color: #05613b;
   background: #ffd54a;
+  box-shadow: 0 3px 0 #c39a13;
+}
+.camera-operation-bar button.selected:active {
+  box-shadow: 0 1px 0 #c39a13;
 }
 @media (max-width: 700px) {
+  #cameraControls {
+    top: 68px;
+    right: 10px;
+  }
   #spectatorBtn {
     width: 50px;
     height: 50px;
-    top: 68px;
-    right: 10px;
   }
   #spectatorBtn .lucide {
     width: 23px;
     height: 23px;
   }
   #spectatorLabel {
-    top: 122px;
-    right: 10px;
     font-size: 10.5px;
+  }
+  #cameraPanHint {
+    max-width: 44vw;
   }
 }
 /* 横持ちで高さが足りない時は丸ボタンを小さく詰めて縦の占有を減らす */
@@ -768,19 +775,20 @@ body.night #nightBtn {
     width: 21px;
     height: 21px;
   }
+  #cameraControls {
+    top: 60px;
+    right: 10px;
+    gap: 6px;
+  }
   #spectatorBtn {
     width: 44px;
     height: 44px;
-    top: 60px;
-    right: 10px;
   }
   #spectatorBtn .lucide {
     width: 21px;
     height: 21px;
   }
   #spectatorLabel {
-    top: 108px;
-    right: 10px;
     font-size: 10px;
     padding: 2px 8px;
   }

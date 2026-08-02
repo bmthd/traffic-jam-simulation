@@ -454,32 +454,40 @@ function setMode(index: number): void {
   notify();
 }
 
-// 現在モードの指定したバリエーションを活性化する
+// 現在モードの指定したバリエーションを活性化する。
+// 切り替えの手順はプリセット切り替えと同じなので switchPreset に委ねる
+// (追尾対象を引き継ぐかどうかの判断も1箇所にまとまる)
 function activateVariation(variationIndex: number): void {
   const mode = CAMERA_MODES[spectator.modeIndex];
   const variation = mode.variations[variationIndex];
   if (!variation) return;
-  const presetIndex = SPECTATOR_PRESETS.findIndex((p) => p.id === variation.presetId);
+  const presetIndex = SPECTATOR_PRESETS.findIndex((preset) => preset.id === variation.presetId);
   if (presetIndex < 0) return;
-  spectator.presetIndex = presetIndex;
-  spectator.presetTime = 0;
-  spectator.cycleTimer = 0;
-  progressListener?.(0);
-  beginTransition();
-  resetCameraAdjustment();
-  followVehicle = null;
-  followChanged = false;
+  spectator.variationIndex = variationIndex;
+  switchPreset(presetIndex);
+}
+
+// 車に固定する視点(三人称の追尾と一人称のドライバー)
+function isVehiclePreset(id: SpectatorPresetId): boolean {
+  return id === 'follow' || id === 'driver';
 }
 
 // 表示するプリセットを切り替える。今の姿勢から新しい姿勢へ補間を始める
 function switchPreset(index: number): void {
+  const previousId = SPECTATOR_PRESETS[spectator.presetIndex].id;
   spectator.presetIndex = (index + SPECTATOR_PRESETS.length) % SPECTATOR_PRESETS.length;
+  const nextId = SPECTATOR_PRESETS[spectator.presetIndex].id;
   spectator.presetTime = 0;
   spectator.cycleTimer = 0;
   progressListener?.(0);
   beginTransition();
   resetCameraAdjustment();
-  followVehicle = null; // プリセットが変わったら追尾対象は選び直す
+  // 追尾↔ドライバーの行き来では同じ車を見続ける。
+  // 「同じ車を三人称と一人称で見比べる」のが自然な操作で、
+  // ここで選び直すと視点だけでなく対象車まで変わってしまう
+  if (!(isVehiclePreset(previousId) && isVehiclePreset(nextId))) {
+    followVehicle = null; // それ以外はプリセットが変わったら追尾対象を選び直す
+  }
   followChanged = false;
 }
 
@@ -499,6 +507,7 @@ export function selectVariation(index: number): void {
   const mode = CAMERA_MODES[spectator.modeIndex];
   if (mode.variations.length === 0) return;
   activateVariation((index + mode.variations.length) % mode.variations.length);
+  notify(); // 操作バーの選択表示を更新する
 }
 
 // 現在のカメラ位置と注視点から軌道パラメータ(theta/phi/radius)を逆算する。
