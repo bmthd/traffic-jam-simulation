@@ -1,6 +1,7 @@
 /* ================= 道路・標識などの静的な情景 ================= */
 import * as THREE from 'three';
-import { CONST, RAMP_GEOMETRY, WRAP_LENGTH } from '../core';
+import { CONST, FACILITIES, FACILITY_SPACING, RAMP_GEOMETRY, WRAP_LENGTH } from '../core';
+import type { FacilityKind } from '../core';
 import type { Section } from '../core';
 import { scene } from './scene';
 import { asphaltTexture, delineatorMaterial, frontageAsphaltTexture } from './materials';
@@ -126,8 +127,15 @@ function dashedLines(xPositions: number[]): void {
 solidLines(SECTIONS.map((section) => sectionX(section, -1)));
 // 合流開放区間は実線を切り、既存の破線だけで本線と加速車線を区切る。
 const mainOuterEdgeXs = SECTIONS.map((section) => sectionX(section, -13));
-solidLines(mainOuterEdgeXs, -WRAP_LENGTH / 2, MERGE_OPEN_START_Z);
-solidLines(mainOuterEdgeXs, MERGE_OPEN_END_Z, WRAP_LENGTH / 2);
+// 施設ローカルでは「次施設の開放部上流端〜現在施設の開放部下流端」が閉鎖区間になる。
+// この1区間を施設オフセットで反復し、各施設の合流部だけ実線を切る。
+for (const facility of FACILITIES) {
+  solidLines(
+    mainOuterEdgeXs,
+    MERGE_OPEN_END_Z - FACILITY_SPACING + facility.offsetZ,
+    MERGE_OPEN_START_Z + facility.offsetZ,
+  );
+}
 // 加速車線と路側帯の境界(外側線)は全長にわたって実線
 solidLines(SECTIONS.map((section) => sectionX(section, FRONTAGE_EDGE_LINE_X)));
 for (const section of SECTIONS) {
@@ -156,27 +164,36 @@ dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, 
   const length = Math.hypot(dx, dz);
   const angle = Math.atan2(-dz, dx); // +X 方向の棒をテーパーの向きへ倒す角
   const geometry = new THREE.BoxGeometry(length, 0.02, 0.16);
-  const matrices = SECTIONS.map((section) =>
-    new THREE.Matrix4()
-      .makeRotationY(angle)
-      .setPosition(
-        sectionX(section, (gore.outerX + gore.mainX) / 2),
-        0.012,
-        (gore.startZ + gore.endZ) / 2,
+  const matrices = FACILITIES.flatMap((facility) =>
+    SECTIONS.flatMap((section) =>
+      loopCopies((gore.startZ + gore.endZ) / 2 + facility.offsetZ).map((z) =>
+        new THREE.Matrix4()
+          .makeRotationY(angle)
+          .setPosition(sectionX(section, (gore.outerX + gore.mainX) / 2), 0.012, z),
       ),
+    ),
   );
   scene.add(instancedWith(geometry, whiteLineMaterial, matrices));
 })();
 
 /* ---- 合流部マーキング ---- */
-for (const section of SECTIONS) {
+{
   const { gore } = RAMP_GEOMETRY;
-  const zTop = MERGE_OPEN_END_Z;
-  // 本線との境界は破線(合流可)
+  // 本線との境界は破線(合流可)。施設0のローカル座標で1セットだけ定義する。
   const dashGeometry = new THREE.BoxGeometry(0.15, 0.02, 3);
-  const dashPositions: [number, number, number][] = [];
-  for (let z = gore.startZ + 6; z < zTop - 6; z += 9)
-    dashPositions.push([sectionX(section, gore.mainX), 0.012, z]);
+  const localDashZ: number[] = [];
+  for (let z = gore.startZ + 6; z < MERGE_OPEN_END_Z - 6; z += 9) localDashZ.push(z);
+  const dashPositions = FACILITIES.flatMap((facility) =>
+    SECTIONS.flatMap((section) =>
+      localDashZ.flatMap((localZ) =>
+        loopCopies(localZ + facility.offsetZ).map((z): [number, number, number] => [
+          sectionX(section, gore.mainX),
+          0.012,
+          z,
+        ]),
+      ),
+    ),
+  );
   scene.add(instancedAt(dashGeometry, whiteLineMaterial, dashPositions));
 }
 
@@ -281,7 +298,16 @@ roadText('ゆずりあい', sectionX('L', -7), 60);
 roadText('マイペース', sectionX('R', -7), 60);
 
 /* ---- 頭上標識ゲート(カメラをどう回しても区間が分かるように両面・両端に設置) ---- */
-export const GANTRY_Z = [-300, -100, 100, 300];
+const FACILITY_SIGN_LOCAL_Z = CONST.RAMP_Z_TOP + 72;
+const FACILITY_GANTRIES = FACILITIES.flatMap((facility) =>
+  loopCopies(FACILITY_SIGN_LOCAL_Z + facility.offsetZ).map((z) => ({ facility, z })),
+);
+export const GANTRY_Z = FACILITY_GANTRIES.map(({ z }) => z);
+const FACILITY_SIGN: Record<FacilityKind, { background: string; subtitle: string }> = {
+  IC: { background: '#168447', subtitle: '出口' },
+  PA: { background: '#2369a8', subtitle: 'P 休憩施設' },
+};
+const FACILITY_NAMES = ['青葉IC', 'みどりPA', '朝日IC', 'こもれびPA'] as const;
 function makeSignTexture(title: string, subtitle: string, background: string): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
@@ -300,8 +326,9 @@ function makeSignTexture(title: string, subtitle: string, background: string): T
   ctx.fillText(subtitle, 256, 126);
   return new THREE.CanvasTexture(canvas);
 }
-function buildGantry(section: Section, z: number): void {
-  const theme = SECTION_THEME[section];
+function buildGantry(section: Section, facilityIndex: number, z: number): void {
+  const facility = FACILITIES[facilityIndex];
+  const sign = FACILITY_SIGN[facility.kind];
   const centerX = sectionX(section, -7);
   const outerPostX = sectionX(section, -17.4);
   const innerPostX = sectionX(section, -0.1);
@@ -320,7 +347,7 @@ function buildGantry(section: Section, z: number): void {
   beam.position.set((outerPostX + innerPostX) / 2, 6.4, z);
   beam.castShadow = true;
   group.add(beam);
-  const texture = makeSignTexture(theme.title, theme.subtitle, theme.signBackground);
+  const texture = makeSignTexture(FACILITY_NAMES[facilityIndex], sign.subtitle, sign.background);
   const boardGeometry = new THREE.PlaneGeometry(10.5, 3.3);
   const boardMaterial = new THREE.MeshBasicMaterial({ map: texture });
   for (const dir of [1, -1]) {
@@ -335,5 +362,5 @@ function buildGantry(section: Section, z: number): void {
   scene.add(group);
 }
 for (const section of SECTIONS) {
-  for (const gantryZ of GANTRY_Z) buildGantry(section, gantryZ);
+  for (const { facility, z } of FACILITY_GANTRIES) buildGantry(section, facility.index, z);
 }

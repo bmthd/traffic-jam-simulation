@@ -1,10 +1,10 @@
 /* ================= カメラ操作（回転・ズーム・カメラモード） ================= */
 import * as THREE from 'three';
-import { CONST, clamp, smooth } from '../core';
+import { CONST, FACILITIES, WRAP_LENGTH, clamp, smooth } from '../core';
 import type { Vehicle, World } from '../core';
 import { isLandscapeViewport } from './camera-layout';
 import { flybyPose } from './flyby';
-import { camera, renderer, syncBackgroundAnchor } from './scene';
+import { camera, renderer, syncBackgroundAnchor, syncShadowCamera } from './scene';
 import { cameraWrapOffset } from './looping';
 
 export interface CameraController {
@@ -26,7 +26,7 @@ const L_CENTER_X = CONST.LANE_X.L[1]; // 義務あり区間の中心
 const R_CENTER_X = CONST.LANE_X.R[1]; // 義務なし区間の中心
 const CENTER_X = (L_CENTER_X + R_CENTER_X) / 2; // 全体の中心
 const L_SHOULDER_X = CONST.LANE_X.L[2] - 2.9; // 義務あり区間の左路肩(見上げ視点の立ち位置)
-const RAMP_Z_MID = (CONST.RAMP_Z_TOP + CONST.RAMP_Z_END) / 2; // 合流帯の中央
+const RAMP_LOCAL_Z_MID = (CONST.RAMP_Z_TOP + CONST.RAMP_Z_END) / 2; // 合流帯の施設ローカル中央
 
 /* ================= マニュアルモードの視点操作（従来どおりの軌道カメラ） ================= */
 function applyOrbit(): void {
@@ -197,8 +197,11 @@ export const SPECTATOR_PRESETS: SpectatorPreset[] = [
     icon: 'merge',
     // 合流ランプ(加速車線)付近を斜め上から捉え、本線への合流を眺める
     compute(pose) {
-      pose.position.set(L_CENTER_X - 30, 17, RAMP_Z_MID + 55);
-      pose.target.set(L_CENTER_X - 9, 1.5, RAMP_Z_MID);
+      let rampZ = RAMP_LOCAL_Z_MID + FACILITIES[spectator.facilityIndex].offsetZ;
+      // 施設3は定義上の座標が周回境界外なので、車両がいる正規周回側へ写す。
+      if (rampZ < -CONST.ROAD_HALF) rampZ += WRAP_LENGTH;
+      pose.position.set(L_CENTER_X - 30, 17, rampZ + 55);
+      pose.target.set(L_CENTER_X - 9, 1.5, rampZ);
     },
   },
 ];
@@ -234,6 +237,7 @@ interface SpectatorState {
   presetTime: number; // 現プリセットに切り替わってからの経過秒
   cycleTimer: number; // オートモードのプリセット切り替えタイマー
   transitionTime: number; // 視点切り替えの補間経過秒
+  facilityIndex: number; // 合流プリセットで表示する施設
 }
 // 起動直後はオートモード。まず自動で動く画を見せ、画面に触れた時点で
 // マニュアルモードへ移る(モードの存在に気づいてもらうため) (Issue #43)
@@ -243,6 +247,7 @@ const spectator: SpectatorState = {
   presetTime: 0,
   cycleTimer: 0,
   transitionTime: TRANSITION_DURATION,
+  facilityIndex: 0,
 };
 
 // 補間の開始姿勢・現在姿勢・各プリセットが書き込む目標姿勢
@@ -254,12 +259,14 @@ export interface SpectatorStatus {
   enabled: boolean; // カメラが自動で動いている(マニュアルモード以外)
   auto: boolean;
   mode: SpectatorMode; // トグルボタンが示す現在のモード
+  facilityIndex: number;
 }
 export function getSpectatorStatus(): SpectatorStatus {
   return {
     enabled: spectator.modeIndex !== MANUAL_MODE_INDEX,
     auto: spectator.modeIndex === AUTO_MODE_INDEX,
     mode: SPECTATOR_MODES[spectator.modeIndex],
+    facilityIndex: spectator.facilityIndex,
   };
 }
 
@@ -336,6 +343,13 @@ function setMode(index: number): void {
 
 /** トグルボタン: マニュアル → オート → 各プリセット → マニュアル… と1つ進める */
 export function cycleSpectatorMode(): void {
+  if (getSpectatorStatus().mode.id === 'ramp' && spectator.facilityIndex < FACILITIES.length - 1) {
+    spectator.facilityIndex += 1;
+    beginTransition();
+    notify();
+    return;
+  }
+  spectator.facilityIndex = 0;
   setMode(spectator.modeIndex + 1);
 }
 
@@ -392,12 +406,15 @@ function updateSpectator(world: World, deltaTime: number): void {
    マニュアルモードなら従来の軌道カメラ、それ以外はプリセットで描く。
    world/deltaTime はプリセット描画のときだけ使う(初期化時の引数なし呼び出しも許容) */
 export function updateCamera(world?: World, deltaTime = 0): void {
+  let shadowTarget = cameraController.target;
   if (spectator.modeIndex !== MANUAL_MODE_INDEX && world) {
     updateSpectator(world, deltaTime);
+    shadowTarget = currentPose.target;
   } else {
     applyOrbit();
   }
   syncBackgroundAnchor();
+  syncShadowCamera(shadowTarget);
 }
 
 export function setupCameraControls(): void {
