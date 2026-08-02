@@ -695,6 +695,7 @@ export class World {
     const motionByOrder = new Map(
       transaction.motions.map((motion) => [motion.vehicleOrder, motion]),
     );
+    const rejectedOrders = new Set<number>();
     for (const vehicle of this.vehicles) {
       vehicle.reservedMotion = null;
       vehicle.mergeDirective = null;
@@ -716,9 +717,13 @@ export class World {
           rear.mergeCooperationDecel = directive.cooperation.decel;
         }
       }
-      if (directive.startLaneChange) ramp.startReservedMergeLaneChange();
+      if (directive.startLaneChange && !ramp.startReservedMergeLaneChange()) {
+        ramp.invalidateMergeReservation();
+        rejectedOrders.add(ramp.spawnOrder);
+        for (const order of certificate?.closure.orders ?? []) rejectedOrders.add(order);
+      }
     }
-    return motionByOrder;
+    return new Map([...motionByOrder].filter(([order]) => !rejectedOrders.has(order)));
   }
 
   // 入口待ちの車を、受け入れ可能になり次第(各側1台/ステップ)流入させる。

@@ -382,10 +382,10 @@ export class Vehicle {
   }
 
   /** 証明済み transaction だけが呼ぶ、再評価も cancel も行わない合流開始。 */
-  startReservedMergeLaneChange(): void {
-    if (this.lane !== 3 || this.laneChange.state !== 'none') return;
+  startReservedMergeLaneChange(): boolean {
+    if (this.lane !== 3 || this.laneChange.state !== 'none') return false;
     if (this.laneChangeBlockedLane === 2) {
-      if (this.checkLaneSafetyForChange(2) !== 'safe') return;
+      if (this.checkLaneSafetyForChange(2) !== 'safe') return false;
       this.laneChangeBlockedLane = null;
     }
     this.laneChange.state = 'changing';
@@ -395,6 +395,28 @@ export class Vehicle {
     this.laneChange.holdTime = 0;
     this.laneChange.checkTimer = 0;
     this.world.stats.changes[this.section]++;
+    return true;
+  }
+
+  /** 緊急中断した予約合流を解放し、blocked laneの安全待ちへ戻す。 */
+  invalidateMergeReservation(): void {
+    const rear = this.mergePlan.rear;
+    if (rear?.mergeCooperationTarget === this.mergePlan.targetPassTime) {
+      rear.mergeCooperationTarget = null;
+      rear.mergeCooperationDecel = 0;
+    }
+    this.mergePlan = {
+      ...this.mergePlan,
+      state: 'seeking',
+      front: null,
+      rear: null,
+      targetPassTime: 0,
+      nextSource: null,
+      cooperationDecel: undefined,
+      certificate: null,
+      envelope: undefined,
+      completionZ: undefined,
+    };
   }
 
   /** transaction が証明した横移動を、mutable な周囲状態を読み直さず進める。 */
@@ -497,15 +519,8 @@ export class Vehicle {
     const mergeLaneChange =
       this.laneChange.from === 3 && this.laneChange.to === 2 && this.laneChange.state !== 'none';
     if (mergeLaneChange && this.laneChange.state === 'cancel') {
-      this.mergePlan = {
-        ...plan,
-        state: 'seeking',
-        front: null,
-        rear: null,
-        targetPassTime: 0,
-        nextSource: null,
-        cooperationDecel: undefined,
-      };
+      this.mergePlan = plan;
+      this.invalidateMergeReservation();
       return;
     }
     if (mergeLaneChange && plan.state === 'committed') {

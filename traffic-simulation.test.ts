@@ -3997,3 +3997,64 @@ describe('合流経路のキャンセル後再開始防止 (Issue #83)', () => {
     expect(ramp.laneChange).toMatchObject({ from: 3, to: 2, state: 'changing' });
   });
 });
+
+describe('合流transactionのキャンセル整合性 (Issue #83)', () => {
+  test('World.stepは予約合流の開始拒否時にrampのtransaction motionを適用しない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+
+    world.step(TIME_STEP);
+    const certificate = ramp.mergePlan.certificate!;
+    ramp.z = certificate.completionZ + ramp.speed;
+    ramp.x = CONST.LANE_X.L[3];
+    const target = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 24);
+    target.speed = 24;
+    world.vehicles.push(target);
+    world.rebuildSectionIndex();
+    ramp.laneChangeBlockedLane = 2;
+    const transaction = world.evaluateTick(world.captureSnapshot(), TIME_STEP);
+    expect(transaction.directives[0].startLaneChange).toBe(true);
+    expect(transaction.motions.some((motion) => motion.vehicleOrder === ramp.spawnOrder)).toBe(
+      true,
+    );
+    const position = { x: ramp.x, z: ramp.z };
+
+    world.step(TIME_STEP);
+
+    expect(ramp.x).toBe(position.x);
+    expect(ramp.mergePlan.certificate).toBeNull();
+    expect(ramp.lane).toBe(3);
+  });
+
+  test('World.stepは緊急キャンセル後に古いcertificateからtransactionを再生成しない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+
+    world.step(TIME_STEP);
+    const target = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 24);
+    target.speed = 24;
+    world.vehicles.push(target);
+    world.rebuildSectionIndex();
+    ramp.laneChange = {
+      ...ramp.laneChange,
+      from: 3,
+      to: 2,
+      state: 'changing',
+      progress: 0.5,
+    };
+    ramp.updateX();
+    ramp.cancelLaneChange(true);
+
+    world.step(TIME_STEP);
+
+    expect(ramp.mergePlan.certificate).toBeNull();
+    expect(ramp.laneChangeBlockedLane).toBe(2);
+    expect(ramp.lane).toBe(3);
+  });
+});

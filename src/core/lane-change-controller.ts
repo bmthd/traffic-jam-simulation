@@ -119,20 +119,7 @@ export class LaneChangeController {
 
   cancelLaneChange(emergency = false): void {
     if (this.vehicle.laneChange.from === 3 && this.vehicle.laneChange.to === 2) {
-      const rear = this.vehicle.mergePlan.rear;
-      if (rear?.mergeCooperationTarget === this.vehicle.mergePlan.targetPassTime) {
-        rear.mergeCooperationTarget = null;
-        rear.mergeCooperationDecel = 0;
-      }
-      this.vehicle.mergePlan = {
-        ...this.vehicle.mergePlan,
-        state: 'seeking',
-        front: null,
-        rear: null,
-        targetPassTime: 0,
-        nextSource: null,
-        cooperationDecel: undefined,
-      };
+      this.vehicle.invalidateMergeReservation();
     }
     if (this.vehicle.laneChange.state !== 'cancel') {
       if (emergency) this.vehicle.laneChangeBlockedLane = this.vehicle.laneChange.to;
