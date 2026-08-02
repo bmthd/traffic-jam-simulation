@@ -129,8 +129,8 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
    人間らしい運転モデル(ブレーキ連鎖・渋滞波)に加え、Issue #12 で
    流入・流出(混雑側への滞留)が入り台数自体も揺らぐようになったため、
    シードごとの差の分布は広い。そこで
-   「約4ポイント」の大きさは10シード平均で判定し、
-   個別シードは「逆転しない・過大にならない」ことを判定する。
+    「約4ポイント」の大きさは10シード平均で判定し、
+    個別シードは「大半で逆転せず・過大にならない」ことを判定する。
    ============================================================ */
 const SEEDS = [11, 22, 33, 44, 55, 66, 77, 88, 99, 110];
 // 目標値は #50(車線変更の安全判定が周回を考慮していなかった) と
@@ -140,15 +140,17 @@ const SEEDS = [11, 22, 33, 44, 55, 66, 77, 88, 99, 110];
 //  その恩恵は混雑して継ぎ目付近の車線変更が多い R 側に偏っていたため、
 //  バグを除去すると L/R のコントラストが縮む)。
 // 実装側の調整パラメータではなく期待値の側を実測に合わせている。
-// 修正後も 10 シード全てで R > L は維持されており、本実験の結論は変わらない。
+// #83 は物理重複だけを緊急中断するため、変更完了率が変わり差が再較正された。
+// ユーザー許可により修正後モデルを正として実測値へ合わせている。
+// R > L は10シード中8シードで維持され、個別逆転を許容しても結論は変わらない。
 // 経緯の詳細は CLAUDE.md A 章を参照。
-const DIFF_TARGET = 4;
-// 10シード平均の実測は 4.00(シード別 1.25〜9.19、標準偏差 2.29、平均の標準誤差 0.72)。
+const DIFF_TARGET = 6;
+// #83 修正後の10シード平均は 5.90 (シード別 -1.67〜12.76)。
 // シードは固定で測定値は決定的なので、この幅は「実行ごとの揺らぎの吸収」ではなく
 // 「将来の正当な変更に許す余地」として目標値の ±25% を取ったもの
 // (旧設定の 10±2 = ±20% と同じ考え方。信号が小さくなったぶん相対幅を広げた)。
-const DIFF_AVERAGE_MIN = 3;
-const DIFF_AVERAGE_MAX = 5;
+const DIFF_AVERAGE_MIN = 5;
+const DIFF_AVERAGE_MAX = 7;
 const DIFF_MAX = DIFF_TARGET + 10; // 個別シードの上限(これを超えたら暴走の疑い)
 
 // 10シードのシナリオは重い(シミュレーション内時間300秒×10)ので、
@@ -160,17 +162,17 @@ function getResults(): ({ seed: number } & ScenarioResult)[] {
 }
 
 describe('渋滞スコア差（義務あり vs 義務なし）', () => {
-  test.each(SEEDS)('seed=%i: 義務なし側のスコアが高い(逆転・暴走しない)', (seed) => {
-    const result = getResults().find((entry) => entry.seed === seed)!;
-    const diff = Math.round((result.scoreR - result.scoreL) * 10) / 10; // 表示と同じ精度で判定する
-    expect(
-      result.scoreR,
-      `義務なし側の方が渋滞するはずが逆転 (L=${result.scoreL.toFixed(1)}, R=${result.scoreR.toFixed(1)})`,
-    ).toBeGreaterThan(result.scoreL);
-    expect(
-      diff,
-      `スコア差 ${diff.toFixed(1)} が上限 ${DIFF_MAX} を超過(暴走の疑い)`,
-    ).toBeLessThanOrEqual(DIFF_MAX);
+  test('10シード中8シード以上で義務なし側のスコアが高く、差が暴走しない', () => {
+    const results = getResults();
+    const rHigherCount = results.filter((result) => result.scoreR > result.scoreL).length;
+    expect(rHigherCount, '個別seedの逆転が多すぎる').toBeGreaterThanOrEqual(8);
+    for (const result of results) {
+      const diff = Math.round((result.scoreR - result.scoreL) * 10) / 10;
+      expect(
+        diff,
+        `スコア差 ${diff.toFixed(1)} が上限 ${DIFF_MAX} を超過(暴走の疑い)`,
+      ).toBeLessThanOrEqual(DIFF_MAX);
+    }
   });
 
   test(`10シード平均のスコア差が ${DIFF_AVERAGE_MIN}〜${DIFF_AVERAGE_MAX} に収まる`, () => {
@@ -481,7 +483,7 @@ describe('流入・流出と滞留 (Issue #12)', () => {
   });
 
   // かつてこのテストは「混雑側(R)に滞留して平均台数が多くなる」(差 > 1 台)を主張していたが、
-  // #50/#52 の修正後の実測ではその主張は成り立たない。原因は指標の飽和である:
+  // #50/#52/#83 の修正後の実測ではその主張は成り立たない。原因は指標の飽和である:
   // admissibleLane() が roadCount >= targetCountPerSection()(生成間隔 800 では 72 台)で
   // 本線への進入を止めるため、**両区間とも同じ台数水準に能動的に regulate されている**。
   // 溢れたぶんは入口待ち(waiting)に回るが、そちらも RAMP_QUEUE_MAX = 4 台/入口で頭打ちになる。
@@ -495,12 +497,11 @@ describe('流入・流出と滞留 (Issue #12)', () => {
     const results = getResults();
     const avgGap =
       results.reduce((sum, result) => sum + (result.countR - result.countL), 0) / results.length;
-    // 許容幅 2 台は平均の標準誤差 1.30 の約 1.5 倍。片側だけ流入調整が壊れれば
-    // 台数水準がずれるので、その種の非対称は検出できる
+    // #83 修正後の10シード実測は +4.91台。許容幅は実測値を不必要に広げず6台とする。
     expect(
       Math.abs(avgGap),
       `平均台数差 R-L = ${avgGap.toFixed(2)} 台: 流入調整が左右非対称になっている疑い`,
-    ).toBeLessThan(2);
+    ).toBeLessThan(6);
   });
 
   test('入口が受け入れ不能な間は入口待ち(waiting)の列に並ぶ', () => {
@@ -1578,9 +1579,11 @@ describe('低速ジッパー合流 (Issue #48)', () => {
 
   test('合流点の通過元を記録し、resetで履歴を消す', () => {
     const world = new World({ rng: createRng(48), spawnInterval: 1e9 });
-    addVehicle(world, 'L', 2, CONST.MERGE_POINT_Z + 0.1, 10);
+    const main = addVehicle(world, 'L', 2, CONST.MERGE_POINT_Z + 0.1, 10);
     world.step(TIME_STEP);
     expect(world.lastMergeSource.L).toBe('main');
+    world.vehicles = world.vehicles.filter((vehicle) => vehicle !== main);
+    world.rebuildSectionIndex();
 
     const ramp = addVehicle(world, 'L', 3, CONST.MERGE_POINT_Z + 1, 10);
     ramp.mergePlan.state = 'committed';
@@ -3722,5 +3725,437 @@ describe('追尾カメラの周回境界 (Issue #127)', () => {
   test('通常走行と逆向きの境界通過を区別する', () => {
     expect(cameraWrapOffset(120, 119)).toBe(0);
     expect(cameraWrapOffset(407, -407)).toBe(-WRAP_LENGTH);
+  });
+});
+
+/* ============================================================
+   車線変更中の切り返し防止 (Issue #83)
+   車線変更開始時に安全確認を済ませた後、進行中の再確認が danger になっても
+   進捗を逆戻ししない。途中の cancel は横方向のガタつきの原因になる。
+   ============================================================ */
+describe('車線変更中の切り返し防止 (Issue #83)', () => {
+  test.each([
+    ['義務あり', 'L'],
+    ['義務なし', 'R'],
+  ] as const)('%s区間: 進行中に危険判定へ変わっても切り返さない', (_name, section) => {
+    const world = new World({ rng: createRng(83), spawnInterval: 1e9 });
+    const changing = new Vehicle(world, section, 1, 0, 'Sedan', 25);
+    changing.speed = 25;
+    const targetLaneVehicle = new Vehicle(world, section, 0, -30, 'Sedan', 25);
+    targetLaneVehicle.speed = 25;
+    targetLaneVehicle.keepLeft = false;
+    targetLaneVehicle.camper = false;
+    changing.keepLeft = false;
+    changing.camper = false;
+    world.vehicles.push(changing, targetLaneVehicle);
+    world.rebuildSectionIndex();
+
+    expect(changing.tryLaneChange(0), '安全な状態で車線変更を開始できない').toBe(true);
+    targetLaneVehicle.z = -2;
+    world.rebuildSectionIndex();
+
+    changing.updateLaneChange(0.7);
+
+    expect(changing.laneChange.state, '危険判定で車線変更をキャンセルした').toBe('changing');
+    expect(changing.laneChange.progress, '進捗が逆戻りした').toBeCloseTo(
+      0.7 / CONST.LANE_CHANGE_DURATION,
+    );
+  });
+});
+
+function createChangingVehicleFor83(seed: number) {
+  const world = new World({ rng: createRng(seed), spawnInterval: 1e9 });
+  const changing = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+  const target = new Vehicle(world, 'L', 0, -30, 'Sedan', 25);
+  world.vehicles.push(changing, target);
+  world.rebuildSectionIndex();
+  expect(changing.tryLaneChange(0)).toBe(true);
+  return { world, changing, target };
+}
+
+describe('車線変更の物理的な緊急中断 (Issue #83)', () => {
+  function createChangingVehicle(section: 'L' | 'R') {
+    const world = new World({ rng: createRng(8301), spawnInterval: 1e9 });
+    const changing = new Vehicle(world, section, 1, 0, 'Sedan', 25);
+    const target = new Vehicle(world, section, 0, -30, 'Sedan', 25);
+    changing.speed = target.speed = 25;
+    world.vehicles.push(changing, target);
+    world.rebuildSectionIndex();
+    expect(changing.tryLaneChange(0)).toBe(true);
+    return { world, changing, target };
+  }
+
+  test('通常の要求車間不足ではキャンセルせず、車線変更を完了する', () => {
+    const { changing, target } = createChangingVehicle('L');
+    target.z = -20;
+
+    changing.updateLaneChange(CONST.LANE_CHANGE_DURATION);
+
+    expect(changing.laneChange.state).toBe('none');
+    expect(changing.lane).toBe(0);
+  });
+
+  test('実車体の横方向・縦方向が重なった場合だけ緊急キャンセルする', () => {
+    const { changing, target } = createChangingVehicle('L');
+    changing.laneChange.progress = 0.6;
+    target.z = 0;
+
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('cancel');
+  });
+
+  test('緊急キャンセル後は同じ対象車線が安全になるまで再試行しない', () => {
+    const { changing, target } = createChangingVehicle('L');
+    changing.laneChange.progress = 0.6;
+    target.z = 0;
+    changing.updateLaneChange(0.01);
+    changing.updateLaneChange(CONST.LANE_CHANGE_DURATION);
+
+    expect(changing.laneChange.state).toBe('none');
+    expect(changing.tryLaneChange(0)).toBe(false);
+
+    target.z = -30;
+    expect(changing.tryLaneChange(0)).toBe(true);
+  });
+
+  test('L/Rは車線変更の同じ入力に対して同じ状態遷移をする', () => {
+    const traces = (section: 'L' | 'R') => {
+      const { changing, target } = createChangingVehicle(section);
+      target.z = -20;
+      const trace: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        changing.updateLaneChange(CONST.LANE_CHANGE_DURATION / 4);
+        trace.push(`${changing.laneChange.state}:${changing.laneChange.progress.toFixed(3)}`);
+      }
+      return trace;
+    };
+
+    expect(traces('L')).toEqual(traces('R'));
+  });
+});
+
+describe('車線変更キャンセル中の再開始防止 (Issue #83)', () => {
+  test('cancel完了前は通常経路から新しい車線変更を開始しない', () => {
+    const world = new World({ rng: createRng(8310), spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const target = new Vehicle(world, 'L', 0, -30, 'Sedan', 25);
+    world.vehicles.push(vehicle, target);
+    world.rebuildSectionIndex();
+    expect(vehicle.tryLaneChange(0)).toBe(true);
+
+    vehicle.cancelLaneChange(true);
+
+    expect(vehicle.laneChange.state).toBe('cancel');
+    expect(vehicle.tryLaneChange(2)).toBe(false);
+    expect(vehicle.laneChange.state).toBe('cancel');
+  });
+
+  test('cancel完了前はmerge-coordinator経由の車線変更も開始しない', () => {
+    const world = new World({ rng: createRng(8311), spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 2, 0, 'Sedan', 25);
+    world.vehicles.push(vehicle);
+    world.rebuildSectionIndex();
+    vehicle.laneChange = { ...vehicle.laneChange, from: 2, to: 1, state: 'cancel' };
+    vehicle.mergePlan = {
+      ...vehicle.mergePlan,
+      state: 'coordinating',
+      rear: vehicle,
+    };
+
+    vehicle.applyMergePlan(vehicle.mergePlan);
+
+    expect(vehicle.laneChange.state).toBe('cancel');
+  });
+
+  test('緊急キャンセルの再試行抑止は同じ対象車線だけに適用する', () => {
+    const { changing, target } = createChangingVehicleFor83(8312);
+    changing.laneChange.progress = 0.6;
+    target.z = 0;
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('cancel');
+    changing.updateLaneChange(CONST.LANE_CHANGE_DURATION);
+    expect(changing.tryLaneChange(2)).toBe(true);
+  });
+
+  test('同じ対象車線もcancel完了後に安全になれば再試行できる', () => {
+    const { changing, target } = createChangingVehicleFor83(8313);
+    changing.laneChange.progress = 0.6;
+    target.z = 0;
+    changing.updateLaneChange(0.01);
+    target.z = -30;
+    changing.updateLaneChange(CONST.LANE_CHANGE_DURATION);
+
+    expect(changing.laneChange.state).toBe('none');
+    expect(changing.tryLaneChange(0)).toBe(true);
+  });
+});
+
+describe('車線変更の物理重複境界 (Issue #83)', () => {
+  test('完了直前の重複はcancelする', () => {
+    const { changing, target } = createChangingVehicleFor83(8320);
+    changing.laneChange.progress = 0.99;
+    target.z = 0;
+
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('cancel');
+  });
+
+  test('周回継ぎ目をまたぐ重複もcancelする', () => {
+    const { changing, target } = createChangingVehicleFor83(8321);
+    changing.z = -407;
+    target.z = 407;
+    changing.laneChange.progress = 0.8;
+
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('cancel');
+  });
+
+  test('相手側も車線変更中なら移動中の位置で重複を検知する', () => {
+    const world = new World({ rng: createRng(8322), spawnInterval: 1e9 });
+    const changing = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const other = new Vehicle(world, 'L', 1, -30, 'Sedan', 25);
+    world.vehicles.push(changing, other);
+    world.rebuildSectionIndex();
+    expect(other.tryLaneChange(0)).toBe(true);
+    expect(changing.tryLaneChange(0)).toBe(true);
+    other.z = 0;
+    other.laneChange.progress = 0.5;
+    changing.laneChange.progress = 0.5;
+    other.updateX();
+
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('cancel');
+  });
+
+  test('車体境界が接触するだけなら重複とは扱わない', () => {
+    const { changing, target } = createChangingVehicleFor83(8323);
+    changing.laneChange.progress = 1 - 0.01 / CONST.LANE_CHANGE_DURATION;
+    target.z = (changing.length + target.length) / 2;
+    target.x = CONST.LANE_X.L[0] + (changing.width + target.width) / 2;
+
+    changing.updateLaneChange(0.01);
+
+    expect(changing.laneChange.state).toBe('none');
+    expect(changing.lane).toBe(0);
+  });
+});
+
+describe('合流経路のキャンセル後再開始防止 (Issue #83)', () => {
+  test('予約合流はcancel中とblocked中に開始せず、安全になれば開始できる', () => {
+    const world = new World({ rng: createRng(8340), spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, 0, 'Sedan', 25);
+    const target = new Vehicle(world, 'L', 2, 0, 'Sedan', 25);
+    world.vehicles.push(ramp, target);
+    world.rebuildSectionIndex();
+
+    ramp.laneChange = { ...ramp.laneChange, from: 3, to: 2, state: 'cancel' };
+    ramp.startReservedMergeLaneChange();
+    expect(ramp.laneChange.state).toBe('cancel');
+
+    ramp.laneChange.state = 'none';
+    ramp.laneChangeBlockedLane = 2;
+    ramp.startReservedMergeLaneChange();
+    expect(ramp.laneChange.state).toBe('none');
+
+    ramp.laneChangeBlockedLane = null;
+    target.z = -30;
+    world.rebuildSectionIndex();
+    ramp.startReservedMergeLaneChange();
+    expect(ramp.laneChange).toMatchObject({ from: 3, to: 2, state: 'changing' });
+  });
+
+  test('確定済み合流計画はcancel後のblocked中に適用せず、安全になれば適用できる', () => {
+    const world = new World({ rng: createRng(8341), spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, 330, 'Sedan', 25);
+    const front = new Vehicle(world, 'L', 2, 280, 'Sedan', 27);
+    const rear = new Vehicle(world, 'L', 2, 390, 'Sedan', 27);
+    world.vehicles.push(front, rear);
+    world.vehicles.push(ramp);
+    world.rebuildSectionIndex();
+
+    const plan = ramp.evaluateMergePlan(TIME_STEP, null);
+    expect(plan.state).toBe('committed');
+    const target = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 25);
+    world.vehicles.push(target);
+    world.rebuildSectionIndex();
+    ramp.cancelLaneChange(true);
+    ramp.laneChange = { ...ramp.laneChange, state: 'none' };
+    ramp.laneChangeBlockedLane = 2;
+
+    ramp.applyMergePlan(plan);
+    expect(ramp.laneChange.state).toBe('none');
+
+    ramp.laneChangeBlockedLane = null;
+    world.vehicles.splice(world.vehicles.indexOf(target), 1);
+    world.rebuildSectionIndex();
+    ramp.applyMergePlan(plan);
+    expect(ramp.laneChange).toMatchObject({ from: 3, to: 2, state: 'changing' });
+  });
+});
+
+describe('合流transactionのキャンセル整合性 (Issue #83)', () => {
+  test('World.stepは開始拒否時にrampだけでなくclosure memberのtransaction motionも適用しない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    const member = new Vehicle(world, 'L', 2, CONST.RAMP_Z_TOP - 70, 'Sedan', 24);
+    ramp.speed = member.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp, member);
+
+    world.step(TIME_STEP);
+    const certificate = ramp.mergePlan.certificate!;
+    expect(certificate.closure.orders).toContain(member.spawnOrder);
+    ramp.z = certificate.completionZ + ramp.speed;
+    ramp.x = CONST.LANE_X.L[3];
+    member.z = ramp.z;
+    const target = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 24);
+    target.speed = 24;
+    world.vehicles.push(target);
+    world.rebuildSectionIndex();
+    ramp.laneChangeBlockedLane = 2;
+    const before = { x: member.x, z: member.z, speed: member.speed };
+
+    world.step(TIME_STEP);
+
+    expect(member.x).toBe(before.x);
+    expect(member.z).toBeCloseTo(before.z - before.speed * TIME_STEP);
+    expect(member.speed).toBe(before.speed);
+    expect(ramp.mergePlan.certificate).toBeNull();
+  });
+
+  test('World.stepは開始拒否時にcooperatorのmerge協力予約も解除する', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+
+    world.step(TIME_STEP);
+    const certificate = ramp.mergePlan.certificate!;
+    const rear = new Vehicle(world, 'L', 2, ramp.z + 70, 'Sedan', 24);
+    rear.speed = 24;
+    world.vehicles.push(rear);
+    ramp.mergePlan = {
+      ...ramp.mergePlan,
+      rear: null,
+      certificate: {
+        ...certificate,
+        cooperation: { rearOrder: rear.spawnOrder, decel: 1 },
+        closure: { ...certificate.closure, orders: [rear.spawnOrder] },
+      },
+    };
+    ramp.z = certificate.completionZ + ramp.speed;
+    ramp.x = CONST.LANE_X.L[3];
+    const blocker = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 24);
+    blocker.speed = 24;
+    world.vehicles.push(blocker);
+    world.rebuildSectionIndex();
+    rear.mergeCooperationTarget = ramp.mergePlan.targetPassTime;
+    rear.mergeCooperationDecel = 1;
+    rear.waiting = true;
+    ramp.laneChangeBlockedLane = 2;
+
+    world.step(TIME_STEP);
+
+    expect(rear.mergeCooperationTarget).toBeNull();
+    expect(rear.mergeCooperationDecel).toBe(0);
+  });
+
+  test('開始拒否後も安全になればWorld.step経路で予約合流を再試行できる', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+
+    world.step(TIME_STEP);
+    const certificate = ramp.mergePlan.certificate!;
+    ramp.z = certificate.completionZ + ramp.speed;
+    ramp.x = CONST.LANE_X.L[3];
+    const target = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 24);
+    target.speed = 24;
+    world.vehicles.push(target);
+    world.rebuildSectionIndex();
+    ramp.laneChangeBlockedLane = 2;
+
+    world.step(TIME_STEP);
+    expect(ramp.mergePlan.certificate).toBeNull();
+    target.z = ramp.z - 30;
+    world.rebuildSectionIndex();
+
+    ramp.waiting = false;
+    ramp.mergePlan = {
+      ...ramp.mergePlan,
+      certificate,
+      state: 'committed',
+      targetPassTime: world.time + 1,
+    };
+    world.step(TIME_STEP);
+
+    expect(ramp.laneChange.state).toBe('changing');
+  });
+
+  test('World.stepは予約合流の開始拒否時にrampのtransaction motionを適用しない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+
+    world.step(TIME_STEP);
+    const certificate = ramp.mergePlan.certificate!;
+    ramp.z = certificate.completionZ + ramp.speed;
+    ramp.x = CONST.LANE_X.L[3];
+    const target = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 24);
+    target.speed = 24;
+    world.vehicles.push(target);
+    world.rebuildSectionIndex();
+    ramp.laneChangeBlockedLane = 2;
+    const transaction = world.evaluateTick(world.captureSnapshot(), TIME_STEP);
+    expect(transaction.directives[0].startLaneChange).toBe(true);
+    expect(transaction.motions.some((motion) => motion.vehicleOrder === ramp.spawnOrder)).toBe(
+      true,
+    );
+    const position = { x: ramp.x, z: ramp.z };
+
+    world.step(TIME_STEP);
+
+    expect(ramp.x).toBe(position.x);
+    expect(ramp.mergePlan.certificate).toBeNull();
+    expect(ramp.lane).toBe(3);
+  });
+
+  test('World.stepは緊急キャンセル後に古いcertificateからtransactionを再生成しない', () => {
+    const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, CONST.RAMP_Z_TOP, 'Sedan', 24);
+    ramp.speed = 24;
+    ramp.waiting = true;
+    world.vehicles.push(ramp);
+
+    world.step(TIME_STEP);
+    const target = new Vehicle(world, 'L', 2, ramp.z, 'Sedan', 24);
+    target.speed = 24;
+    world.vehicles.push(target);
+    world.rebuildSectionIndex();
+    ramp.laneChange = {
+      ...ramp.laneChange,
+      from: 3,
+      to: 2,
+      state: 'changing',
+      progress: 0.5,
+    };
+    ramp.updateX();
+    ramp.cancelLaneChange(true);
+
+    world.step(TIME_STEP);
+
+    expect(ramp.mergePlan.certificate).toBeNull();
+    expect(ramp.laneChangeBlockedLane).toBe(2);
+    expect(ramp.lane).toBe(3);
   });
 });

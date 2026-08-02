@@ -10,7 +10,7 @@ import type { MergeCoordinator } from './merge-coordinator';
 import { clamp, lerp, smooth, WRAP_LENGTH } from './utils';
 import type { World } from './world';
 
-export type LaneChangeState = 'none' | 'changing' | 'holding' | 'cancel';
+export type LaneChangeState = 'none' | 'changing' | 'cancel';
 export interface LaneChange {
   state: LaneChangeState;
   from: number;
@@ -192,6 +192,7 @@ export class Vehicle {
   laneChange: LaneChange;
   mergePlan: MergePlan;
   laneChangeCooldown: number;
+  laneChangeBlockedLane: number | null;
   returnTimer: number;
   keepLeftTimer: number;
   noOvertakeTimer: number;
@@ -279,6 +280,7 @@ export class Vehicle {
       certificate: null,
     };
     this.laneChangeCooldown = 0;
+    this.laneChangeBlockedLane = null;
     this.returnTimer = 0;
     this.keepLeftTimer = 0;
     this.noOvertakeTimer = 0; // 譲った直後の「我慢」時間(頻繁な変更による乱流防止)
@@ -380,8 +382,12 @@ export class Vehicle {
   }
 
   /** 証明済み transaction だけが呼ぶ、再評価も cancel も行わない合流開始。 */
-  startReservedMergeLaneChange(): void {
-    if (this.lane !== 3 || this.laneChange.state !== 'none') return;
+  startReservedMergeLaneChange(): boolean {
+    if (this.lane !== 3 || this.laneChange.state !== 'none') return false;
+    if (this.laneChangeBlockedLane === 2) {
+      if (this.checkLaneSafetyForChange(2) !== 'safe') return false;
+      this.laneChangeBlockedLane = null;
+    }
     this.laneChange.state = 'changing';
     this.laneChange.from = 3;
     this.laneChange.to = 2;
@@ -389,6 +395,34 @@ export class Vehicle {
     this.laneChange.holdTime = 0;
     this.laneChange.checkTimer = 0;
     this.world.stats.changes[this.section]++;
+    return true;
+  }
+
+  /** 緊急中断した予約合流を解放し、blocked laneの安全待ちへ戻す。 */
+  invalidateMergeReservation(): void {
+    const cooperationOrder = this.mergePlan.certificate?.cooperation?.rearOrder;
+    const cooperator =
+      cooperationOrder !== undefined
+        ? this.world.vehicles.find((vehicle) => vehicle.spawnOrder === cooperationOrder)
+        : null;
+    for (const rear of [this.mergePlan.rear, cooperator]) {
+      if (rear?.mergeCooperationTarget === this.mergePlan.targetPassTime) {
+        rear.mergeCooperationTarget = null;
+        rear.mergeCooperationDecel = 0;
+      }
+    }
+    this.mergePlan = {
+      ...this.mergePlan,
+      state: 'seeking',
+      front: null,
+      rear: null,
+      targetPassTime: 0,
+      nextSource: null,
+      cooperationDecel: undefined,
+      certificate: null,
+      envelope: undefined,
+      completionZ: undefined,
+    };
   }
 
   /** transaction が証明した横移動を、mutable な周囲状態を読み直さず進める。 */
@@ -484,18 +518,15 @@ export class Vehicle {
   }
 
   applyMergePlan(plan: MergePlan): void {
+    if (plan.state === 'committed' && this.laneChangeBlockedLane === 2) {
+      if (this.checkLaneSafetyForChange(2) !== 'safe') return;
+      this.laneChangeBlockedLane = null;
+    }
     const mergeLaneChange =
       this.laneChange.from === 3 && this.laneChange.to === 2 && this.laneChange.state !== 'none';
     if (mergeLaneChange && this.laneChange.state === 'cancel') {
-      this.mergePlan = {
-        ...plan,
-        state: 'seeking',
-        front: null,
-        rear: null,
-        targetPassTime: 0,
-        nextSource: null,
-        cooperationDecel: undefined,
-      };
+      this.mergePlan = plan;
+      this.invalidateMergeReservation();
       return;
     }
     if (mergeLaneChange && plan.state === 'committed') {
@@ -540,7 +571,7 @@ export class Vehicle {
       plan.state === 'coordinating' &&
       plan.cooperationDecel === undefined &&
       plan.rear &&
-      (plan.rear.laneChange.state === 'changing' || plan.rear.laneChange.state === 'holding') &&
+      plan.rear.laneChange.state === 'changing' &&
       plan.rear.laneChange.from === 2 &&
       plan.rear.laneChange.to === 1
     ) {
@@ -634,8 +665,8 @@ export class Vehicle {
     return this.laneChangeController.tryLaneChange(toLane);
   }
 
-  cancelLaneChange(): void {
-    return this.laneChangeController.cancelLaneChange();
+  cancelLaneChange(emergency = false): void {
+    return this.laneChangeController.cancelLaneChange(emergency);
   }
 
   updateLaneChange(deltaTime: number): void {

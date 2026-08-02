@@ -1,5 +1,5 @@
 import { CONST } from './constants';
-import { wrapDelta } from './utils';
+import { clamp, lerp, smooth, wrapDelta } from './utils';
 import type { NeighborInfo, Vehicle } from './vehicle';
 
 export class LaneChangeController {
@@ -100,8 +100,13 @@ export class LaneChangeController {
 
   tryLaneChange(toLane: number): boolean {
     if (toLane < 0 || toLane > 2) return false;
+    if (this.vehicle.laneChange.state !== 'none') return false;
     if (this.vehicle.world.blocksReservedLaneChange(this.vehicle, toLane)) return false;
-    if (this.vehicle.checkLaneSafetyForChange(toLane) !== 'safe') return false;
+    const safety = this.vehicle.checkLaneSafetyForChange(toLane);
+    if (this.vehicle.laneChangeBlockedLane === toLane) {
+      if (safety !== 'safe') return false;
+      this.vehicle.laneChangeBlockedLane = null;
+    } else if (safety !== 'safe') return false;
     this.vehicle.laneChange.state = 'changing';
     this.vehicle.laneChange.from = this.vehicle.lane;
     this.vehicle.laneChange.to = toLane;
@@ -112,24 +117,12 @@ export class LaneChangeController {
     return true;
   }
 
-  cancelLaneChange(): void {
+  cancelLaneChange(emergency = false): void {
     if (this.vehicle.laneChange.from === 3 && this.vehicle.laneChange.to === 2) {
-      const rear = this.vehicle.mergePlan.rear;
-      if (rear?.mergeCooperationTarget === this.vehicle.mergePlan.targetPassTime) {
-        rear.mergeCooperationTarget = null;
-        rear.mergeCooperationDecel = 0;
-      }
-      this.vehicle.mergePlan = {
-        ...this.vehicle.mergePlan,
-        state: 'seeking',
-        front: null,
-        rear: null,
-        targetPassTime: 0,
-        nextSource: null,
-        cooperationDecel: undefined,
-      };
+      this.vehicle.invalidateMergeReservation();
     }
     if (this.vehicle.laneChange.state !== 'cancel') {
+      if (emergency) this.vehicle.laneChangeBlockedLane = this.vehicle.laneChange.to;
       this.vehicle.laneChange.state = 'cancel';
       this.vehicle.world.stats.cancels[this.vehicle.section]++;
     }
@@ -142,17 +135,10 @@ export class LaneChangeController {
 
     if (laneChange.state === 'changing') {
       laneChange.progress += deltaTime / CONST.LANE_CHANGE_DURATION;
-      if (laneChange.checkTimer <= 0) {
-        laneChange.checkTimer = 0.15;
-        const safety = this.vehicle.checkLaneSafetyForChange(laneChange.to);
-        if (safety === 'danger') {
-          this.vehicle.cancelLaneChange();
-          return;
-        }
-        if (safety === 'hold' && laneChange.progress < 0.3) {
-          laneChange.state = 'holding';
-          laneChange.holdTime = 0;
-        }
+      // 開始後は通常の車間不足で切り返さず、実車体の重複だけを緊急停止する。
+      if (this.hasPhysicalOverlap(laneChange.to, laneChange.progress)) {
+        this.vehicle.cancelLaneChange(true);
+        return;
       }
       if (laneChange.progress >= 1) {
         laneChange.progress = 1;
@@ -179,15 +165,6 @@ export class LaneChangeController {
         }
         this.vehicle.laneChangeCooldown = 4.0 + this.vehicle.world.rng() * 5; // 変更直後は当分しない(面倒・疲れる)
       }
-    } else if (laneChange.state === 'holding') {
-      laneChange.holdTime += deltaTime;
-      if (laneChange.checkTimer <= 0) {
-        laneChange.checkTimer = 0.15;
-        const safety = this.vehicle.checkLaneSafetyForChange(laneChange.to);
-        if (safety === 'safe') laneChange.state = 'changing';
-        else if (safety === 'danger' || laneChange.holdTime > CONST.LANE_CHANGE_WAIT_MAX_DURATION)
-          this.vehicle.cancelLaneChange();
-      }
     } else if (laneChange.state === 'cancel') {
       laneChange.progress -= deltaTime / (CONST.LANE_CHANGE_DURATION * 0.8);
       if (laneChange.progress <= 0) {
@@ -197,6 +174,23 @@ export class LaneChangeController {
         this.vehicle.laneChangeCooldown = CONST.LANE_CHANGE_RETRY_COOLDOWN;
       }
     }
+  }
+
+  private hasPhysicalOverlap(toLane: number, progress: number): boolean {
+    const laneXs = CONST.LANE_X[this.vehicle.section];
+    const x = lerp(
+      laneXs[this.vehicle.laneChange.from],
+      laneXs[toLane],
+      smooth(clamp(progress, 0, 1)),
+    );
+    for (const other of this.vehicle.world.sectionVehicles[this.vehicle.section]) {
+      if (other === this.vehicle || !other.occupies(toLane)) continue;
+      const horizontalOverlap = Math.abs(other.x - x) < (this.vehicle.width + other.width) / 2;
+      const longitudinalOverlap =
+        Math.abs(wrapDelta(other.z - this.vehicle.z)) < (this.vehicle.length + other.length) / 2;
+      if (horizontalOverlap && longitudinalOverlap) return true;
+    }
+    return false;
   }
 
   decide(ahead: NeighborInfo | null, deltaTime: number): void {
