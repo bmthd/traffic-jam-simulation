@@ -204,27 +204,20 @@ dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, 
   scene.add(instancedAt(dashGeometry, whiteLineMaterial, dashPositions));
 }
 
-/* ---- 導流帯(入口は収束、出口は進行方向へ拡幅) ---- */
-(function buildGoreTriangles() {
+/* ---- 出口(分流部)の導流帯 ---- */
+(function buildExitGoreTriangle() {
   const { gore } = RAMP_GEOMETRY;
   const exitGoreTipZ = EXIT_OPEN_START_Z + (gore.startZ - gore.endZ);
-  const localTriangles = [
-    [
-      [gore.outerX, gore.startZ],
-      [gore.mainX, gore.startZ],
-      [gore.mainX, gore.endZ],
-    ],
-    [
-      [gore.mainX, exitGoreTipZ],
-      [gore.mainX, EXIT_OPEN_START_Z],
-      [gore.outerX, EXIT_OPEN_START_Z],
-    ],
+  const localTriangle = [
+    [gore.mainX, exitGoreTipZ],
+    [gore.mainX, EXIT_OPEN_START_Z],
+    [gore.outerX, EXIT_OPEN_START_Z],
   ] as const;
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute(
     'position',
     new THREE.Float32BufferAttribute(
-      localTriangles.flatMap((triangle) => triangle.flatMap(([x, z]) => [x, 0.013, z])),
+      localTriangle.flatMap(([x, z]) => [x, 0.013, z]),
       3,
     ),
   );
