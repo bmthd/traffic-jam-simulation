@@ -1,6 +1,5 @@
 /* ================= Three.js セットアップ(シーン・カメラ・ライト) ================= */
 import * as THREE from 'three';
-import { CONST } from '../core';
 import { makeGrassTexture } from './materials';
 
 export const SKY_COLOR = 0xcfe2ee;
@@ -53,9 +52,9 @@ const shadowAxisX = new THREE.Vector3()
   .normalize();
 const shadowAxisY = sun.shadow.camera.up.clone();
 const shadowAxisZ = sunDirection.clone();
-// 並木は scenery.ts で x = ±(22 + rand^1.6 * 70) なので最大 ±92m。
-// 樹冠と端部の余裕を含め、道路全体を覆う直方体として扱う。
-const shadowBoundsHalfSize = new THREE.Vector3(100, 14, CONST.ROAD_HALF + 24);
+// 周回全長ではなく、カメラ周辺で見える範囲だけを覆う固定寸法にする。
+// 道路延長後も影マップのテクセル密度を維持できる。
+const shadowBoundsHalfSize = new THREE.Vector3(100, 18, 240);
 function shadowHalfExtent(axis: THREE.Vector3): number {
   return (
     Math.abs(axis.x) * shadowBoundsHalfSize.x +
@@ -80,6 +79,14 @@ sun.shadow.camera.updateProjectionMatrix();
 sun.shadow.bias = -0.00035;
 sun.shadow.normalBias = 0.025;
 scene.add(sun);
+scene.add(sun.target);
+
+/** 太陽の向きを保ったまま、影を落とす固定範囲をカメラの注視位置へ追従させる。 */
+export function syncShadowCamera(target: THREE.Vector3): void {
+  sun.target.position.set(target.x, 0, target.z);
+  sun.position.copy(sun.target.position).addScaledVector(sunDirection, 420);
+  sun.target.updateMatrixWorld();
+}
 
 /* ---- 地面（草地。背景の透け防止のため広く・低く配置） ---- */
 const ground = new THREE.Mesh(

@@ -11,7 +11,7 @@ import {
   bulbMaterial,
   signGlowMaterial,
 } from './materials';
-import { GANTRY_Z, SECTIONS, sectionX } from './track';
+import { SIGN_GLOW_SPECS } from './track';
 import { instancedAt, instancedWith } from './instancing';
 import { loopCopies } from './looping';
 
@@ -129,6 +129,7 @@ const LAMP_GLOW_OFFSET_X = 3.6;
   const headPositions: [number, number, number][] = [];
   const glowMatrices: THREE.Matrix4[] = [];
   const glowRotation = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
+  // 総延長4倍と前後周回の複製で負荷が増えるため、延長前と同じ総数に制限する。
   const lampSpacing = WRAP_LENGTH / 24;
   for (let z = -WRAP_LENGTH / 2 + lampSpacing / 2; z < WRAP_LENGTH / 2; z += lampSpacing) {
     for (const copyZ of loopCopies(z)) {
@@ -162,13 +163,13 @@ const LAMP_GLOW_OFFSET_X = 3.6;
   nightGroup.add(instancedWith(glowGeometry, lampGlowMaterial, glowMatrices));
 })();
 
-// 標識ゲートの投光(夜は案内標識が照明で浮かび上がる)
+// 案内標識の投光(夜は標識が照明で浮かび上がる)
 // 夜のみ表示する発光表現が影を落とすと不自然なため castShadow は設定しない
 {
-  const signGlowPositions: [number, number, number][] = [];
-  for (const z of GANTRY_Z)
-    for (const section of SECTIONS) signGlowPositions.push([sectionX(section, -7), 8.3, z]);
-  nightGroup.add(
-    instancedAt(new THREE.PlaneGeometry(13.5, 5.6), signGlowMaterial, signGlowPositions),
-  );
+  for (const spec of SIGN_GLOW_SPECS)
+    nightGroup.add(
+      instancedAt(new THREE.PlaneGeometry(spec.width, spec.height), signGlowMaterial, [
+        [spec.x, spec.y, spec.z],
+      ]),
+    );
 }

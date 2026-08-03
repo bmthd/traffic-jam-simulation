@@ -24,24 +24,28 @@ const LANE_X_L = [-3, -7, -11, -15];
 /* 片側の物理収容台数を、平均的な停止車列として見積もる。
    平均車長 = 4.6×0.46 + 5.4×0.25 + 9.2×0.11 + 4.2×0.18 = 5.234 m
    停止時の車頭間隔 = 車長 + (車長×1.2 + 2.5) = 14.0148 m
-   本線 = floor((816 m×3車線) / 14.0148 m) = 174台
-   加速車線 = floor((380 - 258) m / 14.0148 m) = 8台
-   入口待ち = 4台×(本線・ランプの2入口) = 8台
-   合計 174 + 8 + 8 = 190台を片側上限とする。 */
-const MAX_VEHICLES_PER_SECTION = 190;
+   本線 = floor((3264 m×3車線) / 14.0148 m) = 698台
+   加速車線 = 8台×4施設 = 32台
+   入口待ち = 4台×(本線1入口・ランプ4入口) = 20台
+   合計 698 + 32 + 20 = 750台を片側上限とする。 */
+const MAX_VEHICLES_PER_SECTION = 750;
 
 /* ---------------- 定数 ---------------- */
 export const CONST = {
-  ROAD_HALF: 400, // 道路は Z = -400 ～ +400
+  ROAD_HALF: 1624, // 道路は Z = -1624 ～ +1624
   RAMP_Z_TOP: 380, // 合流ランプ(加速車線)の始点
   RAMP_Z_END: 250, // 加速車線の終端(ここまでに本線へ合流)
+  // 施設上流の出口。進行方向(-Z)に減速車線→分岐→空き→次施設入口と並ぶ。
+  EXIT_DECISION_Z: -40, // 分岐200m手前で次施設から退出するか一度だけ決める
+  EXIT_LANE_START_Z: -60, // lane 2から共用lane 3へ移り始める減速車線の始点
+  EXIT_BRANCH_Z: -240, // lane 3に入れた車だけが退出する分岐
   DEMAND_FACTOR: 115000, // 交通需要(生成間隔あたりの基準台数係数)
   MAX_VEHICLES_PER_SECTION,
   // HUD が表示する両区間の総上限。生成の上限判定には使わない。
   MAX_VEHICLES: MAX_VEHICLES_PER_SECTION * 2,
   RAMP_QUEUE_MAX: 4, // 入口で流入待ちできる台数の上限(片側)
   RAMP_SHARE: 0.1, // 流入需要のうち合流ランプ経由の割合(残りは上流本線から)
-  EXIT_RATIO: 0.08, // 終端の出口で流出する車の割合(残りは環状線のように周回)
+  EXIT_RATIO: 0.08, // 施設ごとに次の出口から流出する意思を決める確率
   INFLOW_PACE: 10.4, // 生成間隔→流入間隔の換算係数(流出率とつり合う需要に換算)
   MAX_PER_SECTION: 140, // 車両上限ではなく、渋滞スコアの密度項を正規化・飽和させる基準台数
   // 区間の横方向オフセット(R区間はL区間の鏡像ではなく平行移動コピー)
@@ -114,8 +118,54 @@ export const CONST = {
   PERTURB_INTERVAL: 45, // 渋滞のきっかけ(よそ見ブレーキ)の発生間隔 (s)
   PERTURB_DURATION: 2.5, // きっかけブレーキの長さ (s)
   PERTURB_FACTOR: 0.3, // きっかけブレーキの強さ(希望速度比) — 左右ミラーで同時注入
-  ABSORB_DENSITY_FACTOR: 62400, // absorbモードは準安定領域(約13台/車線)に合わせる
+  ABSORB_DENSITY_FACTOR: 249600, // 4倍の周長でも準安定領域(約13台/車線)の密度を保つ
 };
+
+// 周回路(リング)の全長。車両の終端判定にある前後8mを含む。
+// 施設間隔などの定数から参照するため、循環を避けてこのモジュールを定義元にする。
+export const WRAP_LENGTH = CONST.ROAD_HALF * 2 + 16;
+export const FACILITY_SPACING = WRAP_LENGTH / 4;
+export type FacilityKind = 'IC' | 'PA';
+export const FACILITIES: ReadonlyArray<{
+  readonly index: number;
+  readonly kind: FacilityKind;
+  readonly offsetZ: number;
+}> = Object.freeze(
+  [0, 1, 2, 3].map((index) =>
+    Object.freeze({
+      index,
+      kind: index % 2 === 0 ? ('IC' as const) : ('PA' as const),
+      offsetZ: index === 0 ? 0 : -index * FACILITY_SPACING,
+    }),
+  ),
+);
+
+/** 周回上のzを、直前の施設を基準にした施設0互換のローカルzへ写す。 */
+export function toFacilityLocalZ(z: number): number {
+  const distanceFromEntry = CONST.RAMP_Z_TOP - z;
+  return (
+    CONST.RAMP_Z_TOP -
+    (((distanceFromEntry % FACILITY_SPACING) + FACILITY_SPACING) % FACILITY_SPACING)
+  );
+}
+
+/** 参照位置と同じ施設にあるローカルzを、周回上の実zへ戻す。 */
+export function facilityWorldZ(localZ: number, referenceZ: number): number {
+  return referenceZ - toFacilityLocalZ(referenceZ) + localZ;
+}
+
+/** 進行方向(-Z)で次に到達する施設のローカルzを、周回上の実zで返す。 */
+export function nextFacilityWorldZ(localZ: number, z: number): number {
+  const currentFacilityZ = facilityWorldZ(localZ, z);
+  return currentFacilityZ < z ? currentFacilityZ : currentFacilityZ - FACILITY_SPACING;
+}
+
+/** 周回上の位置が属する施設番号を返す。 */
+export function facilityIndexForZ(z: number): number {
+  const offset = z - toFacilityLocalZ(z);
+  const rawIndex = Math.round(-offset / FACILITY_SPACING);
+  return ((rawIndex % FACILITIES.length) + FACILITIES.length) % FACILITIES.length;
+}
 
 /** 加速車線終端の導流帯。座標はL区間を基準にする。 */
 export interface GoreGeometry {
@@ -181,6 +231,7 @@ export function rampBodyIntersectsGore(
   length: number,
 ): boolean {
   const { gore } = RAMP_GEOMETRY;
+  centerZ = toFacilityLocalZ(centerZ);
   const halfWidth = width / 2;
   const halfLength = length / 2;
   const body = [

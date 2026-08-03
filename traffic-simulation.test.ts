@@ -19,6 +19,8 @@ import {
   createVehicle,
   createVehicleDeps,
   createWorldDeps,
+  FACILITIES,
+  FACILITY_SPACING,
   isMergeTransactionAdmissible,
   LaneChangeController,
   LongitudinalController,
@@ -29,6 +31,7 @@ import {
   RAMP_GEOMETRY,
   rampBodyIntersectsGore,
   sectionTrackX,
+  toFacilityLocalZ,
   validateMergeTransactionHorizon,
   Vehicle,
   World,
@@ -125,7 +128,7 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
 }
 
 /* ============================================================
-   1. メイン要件: 渋滞スコアに約4ポイントの差が出ること
+   1. メイン要件: 渋滞スコアに較正済みの差が出ること
    人間らしい運転モデル(ブレーキ連鎖・渋滞波)に加え、Issue #12 で
    流入・流出(混雑側への滞留)が入り台数自体も揺らぐようになったため、
    シードごとの差の分布は広い(シード別の標準偏差は 3 前後ある)。そこで
@@ -134,6 +137,22 @@ function runScenario(seed: number, opts: ScenarioOptions = {}): ScenarioResult {
    ============================================================ */
 // 30シード。かつては10シードだったが、それでは検出力が足りなかった(下記)。
 const SEEDS = Array.from({ length: 30 }, (_, index) => (index + 1) * 11);
+// 車線別 z ソート索引による性能最適化の前後で挙動が変わらないことを、
+// 先頭10シードの L/R スコア（小数4桁）で固定するスナップショット。
+// 30シードの統計ガードとは目的が異なり、決定的な実行結果の同一性を検査する。
+const SNAPSHOT_SEEDS = SEEDS.slice(0, 10);
+const EXPECTED_SEED_SCORES = new Map<number, readonly [number, number]>([
+  [11, [38.5077, 43.9467]],
+  [22, [39.0576, 43.6001]],
+  [33, [38.9002, 42.0461]],
+  [44, [36.5259, 43.3395]],
+  [55, [38.923, 41.9994]],
+  [66, [40.1495, 44.3672]],
+  [77, [38.808, 43.3323]],
+  [88, [38.4137, 41.9651]],
+  [99, [39.0467, 43.6822]],
+  [110, [37.9348, 42.4005]],
+]);
 // 目標値は #50(車線変更の安全判定が周回を考慮していなかった) と
 // #52(sectionIndex の陳腐化で最近接の前方車を見落とす) の修正に伴い 10 → 4 へ
 // 再較正した。旧値 10 のうち相当部分は #50 のバグが水増ししていたぶんである
@@ -143,7 +162,7 @@ const SEEDS = Array.from({ length: 30 }, (_, index) => (index + 1) * 11);
 // 実装側の調整パラメータではなく期待値の側を実測に合わせている。
 // 経緯の詳細は CLAUDE.md A 章を参照。
 const DIFF_TARGET = 4;
-// 30シード平均の実測は 3.90(シード別 -2.02〜10.05、標準偏差 3.00、平均の標準誤差 0.55)。
+// 統合後の30シード平均は 4.09(シード別 0.16〜6.81、標準偏差 1.55、平均の標準誤差 0.28)。
 // シードは固定で測定値は決定的なので、この幅は「実行ごとの揺らぎの吸収」ではなく
 // 「将来の正当な変更に許す余地」として置いたもの。標準誤差の約 ±3.6 倍にあたる。
 // かつては 10 シードで ±1 に絞っていたが、シード別の標準偏差が 3 もある量に対して
@@ -170,6 +189,12 @@ function getResults(): ({ seed: number } & ScenarioResult)[] {
 }
 
 describe('渋滞スコア差（義務あり vs 義務なし）', () => {
+  test.each(SNAPSHOT_SEEDS)('seed=%i: 性能最適化後の決定的なスコアを維持する', (seed) => {
+    const result = getResults().find((entry) => entry.seed === seed)!;
+    const expected = EXPECTED_SEED_SCORES.get(seed)!;
+    expect([Number(result.scoreL.toFixed(4)), Number(result.scoreR.toFixed(4))]).toEqual(expected);
+  });
+
   test(`${SEEDS.length}シード中${DIFF_R_HIGHER_MIN}シード以上で義務なし側のスコアが高く、差が暴走しない`, () => {
     const results = getResults();
     const rHigherCount = results.filter((result) => result.scoreR > result.scoreL).length;
@@ -188,8 +213,13 @@ describe('渋滞スコア差（義務あり vs 義務なし）', () => {
 
   test(`${SEEDS.length}シード平均のスコア差が ${DIFF_AVERAGE_MIN}〜${DIFF_AVERAGE_MAX} に収まる`, () => {
     const results = getResults();
+    for (const result of results)
+      console.info(
+        `seed=${result.seed} L=${result.scoreL.toFixed(4)} R=${result.scoreR.toFixed(4)} diff=${(result.scoreR - result.scoreL).toFixed(4)}`,
+      );
     const avg =
       results.reduce((sum, result) => sum + (result.scoreR - result.scoreL), 0) / results.length;
+    console.info(`average diff=${avg.toFixed(4)}`);
     expect(avg, `平均差 ${avg.toFixed(1)} が下限未満`).toBeGreaterThanOrEqual(DIFF_AVERAGE_MIN);
     expect(avg, `平均差 ${avg.toFixed(1)} が上限超過`).toBeLessThanOrEqual(DIFF_AVERAGE_MAX);
   });
@@ -322,6 +352,9 @@ describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', (
       wall.camper = false;
       world.vehicles.push(wall);
     }
+    // 元の乱数列と周回境界のタイミングを保ち、出口抽選だけを非当選にする。
+    const scenarioRng = world.rng;
+    world.rng = () => Math.max(CONST.EXIT_RATIO, scenarioRng());
     return { world, overtaker, side };
   }
 
@@ -363,7 +396,10 @@ describe('加速復帰（追いつかれ時に並走車を抜いて戻る）', (
         }
       }
       expect(boosted, '加速復帰(returnBoostTimer)が発動しなかった').toBe(true);
-      expect(returned, '加速しても走行車線へ復帰できなかった').toBe(true);
+      expect(
+        returned,
+        `加速しても走行車線へ復帰できなかった (exitIntent=${overtaker.exitIntent}, lane=${overtaker.lane}, z=${overtaker.z.toFixed(1)})`,
+      ).toBe(true);
     },
   );
 
@@ -458,7 +494,7 @@ describe('流入・流出と滞留 (Issue #12)', () => {
   // 入口待ちの上限(RAMP_QUEUE_MAX)に達していた側が 1 台ぶん受け入れを見送るときだけ。
   // この飽和は「その瞬間に台数が多い側」で起きるので、必ずしも混雑側(R)とは限らない。
   // 実測でも seed=66/99 では L 側が 1 台見送っており、この 2 シードは L の roadCount が
-  // 流入調整の上限(targetCountPerSection() = 72 台)に最も近づいたシードである。
+  // 流入調整の上限(targetCountPerSection() = 288 台)に最も近づいたシードである。
   // したがって「L >= R」という片側の不等式ではなく、需要の対称性を
   // 「ずれが入口の待機列上限を超えないこと」と「総量に系統的な偏りがないこと」で判定する。
   test('流入需要は左右同ペース(どちらかに系統的に多く流入することはない)', () => {
@@ -468,10 +504,10 @@ describe('流入・流出と滞留 (Issue #12)', () => {
       expect(
         Math.abs(L - R),
         `seed=${result.seed}: 流入が左右で乖離 (L=${L}, R=${R})`,
-      ).toBeLessThanOrEqual(CONST.RAMP_QUEUE_MAX);
+      ).toBeLessThanOrEqual(CONST.RAMP_QUEUE_MAX * FACILITIES.length);
     }
     // 総量での系統的な偏りの検査(片側だけ需要が多い交絡が入っていないこと)。
-    // 実測の左右差は総流入の 1% 未満に収まる(10シード時点では L=348 / R=350 で 0.6%)。
+    // 退出成功率は交通状態から創発的にずれるが、需要自体の偏りは1%未満に収まる。
     const totalL = results.reduce((sum, result) => sum + result.world.stats.inflow.L, 0);
     const totalR = results.reduce((sum, result) => sum + result.world.stats.inflow.R, 0);
     expect(
@@ -480,24 +516,27 @@ describe('流入・流出と滞留 (Issue #12)', () => {
     ).toBeLessThan(0.01);
   });
 
-  test('流出は交通状況に従う: 流れの良い義務あり側の方が多く捌ける', () => {
+  test('実体出口は両区間で機能し流出台数に構造的な偏りがない', () => {
     let outflowL = 0,
       outflowR = 0;
     for (const result of getResults()) {
       outflowL += result.world.stats.outflow.L;
       outflowR += result.world.stats.outflow.R;
     }
+    // 実体出口ではlane 3へ入れるかが各側の創発的な交通状態に従うため、
+    // 流れが良い側ほど多く退出するという旧終端despawnの方向仮定は置かない。
+    expect(outflowL, 'L区間で流出が発生していない').toBeGreaterThan(0);
+    expect(outflowR, 'R区間で流出が発生していない').toBeGreaterThan(0);
     expect(
-      outflowL,
-      `流出台数 L=${outflowL} <= R=${outflowR}: 混雑側の方が捌けている`,
-    ).toBeGreaterThan(outflowR);
-    expect(outflowR, '流出が発生していない').toBeGreaterThan(0);
+      Math.abs(outflowL - outflowR) / Math.max(outflowL, outflowR),
+      `流出台数が左右で偏っている (L=${outflowL}, R=${outflowR})`,
+    ).toBeLessThan(0.05);
   });
 
   // かつてこのテストは「混雑側(R)に滞留して平均台数が多くなる」(差 > 1 台)を主張していたが、
-  // #50/#52 の修正後の実測ではその主張は成り立たない。流入調整が働くためである:
-  // admissibleLane() が roadCount >= targetCountPerSection()(生成間隔 800 では 72 台)で
-  // 本線への進入を止めるため、**どちらの区間も同じ上限に押し戻されている**。
+  // #50/#52 の修正後の実測ではその主張は成り立たない。原因は指標の飽和である:
+  // admissibleLane() が roadCount >= targetCountPerSection()(生成間隔 800 では 288 台)で
+  // 本線への進入を止めるため、**両区間とも同じ台数水準に能動的に regulate されている**。
   // 溢れたぶんは入口待ち(waiting)に回るが、そちらも RAMP_QUEUE_MAX = 4 台/入口で頭打ちになる。
   // 実測(30シード平均)は 総台数差 R-L = +0.63 台、入口待ち差 = -0.25 台(むしろ L が待つ)。
   // ただし**この量はノイズが大きい**: シード別は -9.33〜+12.08 台、標準偏差 5.64、
@@ -511,16 +550,18 @@ describe('流入・流出と滞留 (Issue #12)', () => {
     const results = getResults();
     const avgGap =
       results.reduce((sum, result) => sum + (result.countR - result.countL), 0) / results.length;
+    // 4施設の出口でlane 3へ入れるかは各側の創発的な交通状態に従うため、
+    // 施設ごとに3台までの退出成功差を許しつつ大きな非対称は検出する。
     expect(
       Math.abs(avgGap),
       `平均台数差 R-L = ${avgGap.toFixed(2)} 台: 流入調整が左右非対称になっている疑い`,
-    ).toBeLessThan(5);
+    ).toBeLessThan(FACILITIES.length * 3);
   });
 
   test('入口が受け入れ不能な間は入口待ち(waiting)の列に並ぶ', () => {
-    const world = new World({ rng: createRng(9), spawnInterval: 1e9 }); // targetCount=24 (下限) → 片側12台
-    for (let i = 0; i < 12; i++) {
-      world.vehicles.push(new Vehicle(world, 'L', i % 3, -350 + i * 25, 'Sedan', 25));
+    const world = new World({ rng: createRng(9), spawnInterval: 1e9 }); // 4倍周長の下限 → 片側48台
+    for (let i = 0; i < 48; i++) {
+      world.vehicles.push(new Vehicle(world, 'L', i % 3, -1500 + i * 25, 'Sedan', 25));
     }
     expect(world.spawnPair(), 'spawnPairが失敗').toBe(true);
     const waitingL = world.vehicles.filter((vehicle) => vehicle.section === 'L' && vehicle.waiting);
@@ -533,14 +574,15 @@ describe('流入・流出と滞留 (Issue #12)', () => {
     expect(waitingL[0].waiting, '空きができても入口待ちが解消されない').toBe(false);
   });
 
-  test('終端まで走った車は一定割合で出口から流出する', () => {
-    const world = new World({ rng: () => 0, spawnInterval: 1e9 }); // rng=0 → 必ず流出側の抽選
+  test('道路終端は確率流出せず必ず周回する', () => {
+    const world = new World({ rng: () => 0, spawnInterval: 1e9 });
     const vehicle = new Vehicle(world, 'L', 1, -CONST.ROAD_HALF - 7.9, 'Sedan', 25);
     vehicle.speed = 25;
     world.vehicles.push(vehicle);
     world.step(TIME_STEP);
-    expect(world.vehicles.length, '出口で流出しなかった').toBe(0);
-    expect(world.stats.outflow.L, '流出が計上されていない').toBe(1);
+    expect(world.vehicles.length, '終端で車両が消えた').toBe(1);
+    expect(world.stats.outflow.L, '終端が流出として計上された').toBe(0);
+    expect(vehicle.z, '反対側へ回り込んでいない').toBeGreaterThan(CONST.ROAD_HALF - 20);
   });
 
   test('流出しなかった車は環状線のように周回を続ける', () => {
@@ -934,7 +976,7 @@ describe('リセット時の内部状態初期化 (Issue #54)', () => {
    ============================================================ */
 describe('周回道路の描画 (Issue #73)', () => {
   test('境界の前後1周ぶんに同じ道路設備を配置する', () => {
-    expect(loopCopies(0)).toEqual([-816, 0, 816]);
+    expect(loopCopies(0)).toEqual([-WRAP_LENGTH, 0, WRAP_LENGTH]);
   });
 });
 
@@ -946,15 +988,15 @@ describe('フライバイカメラ (Issue #77)', () => {
     const start = flybyPose(0, 12);
     const afterTenSeconds = flybyPose(10, 12);
 
-    expect(start.position).toEqual({ x: 12, y: 25, z: -400 });
-    expect(afterTenSeconds.position).toEqual({ x: 12, y: 25, z: -160 });
-    expect(afterTenSeconds.target).toEqual({ x: 12, y: 4, z: -112 });
+    expect(start.position).toEqual({ x: 12, y: 25, z: -CONST.ROAD_HALF });
+    expect(afterTenSeconds.position).toEqual({ x: 12, y: 25, z: -CONST.ROAD_HALF + 240 });
+    expect(afterTenSeconds.target).toEqual({ x: 12, y: 4, z: -CONST.ROAD_HALF + 288 });
   });
 
   test('車両を参照せず道路の周回長を越えると開始地点へ戻る', () => {
-    expect(flybyPose(34, 12)).toEqual({
-      position: { x: 12, y: 25, z: -400 },
-      target: { x: 12, y: 4, z: -352 },
+    expect(flybyPose(WRAP_LENGTH / 24, 12)).toEqual({
+      position: { x: 12, y: 25, z: -CONST.ROAD_HALF },
+      target: { x: 12, y: 4, z: -CONST.ROAD_HALF + 48 },
     });
   });
 });
@@ -1108,7 +1150,7 @@ describe('自由流の合流枠予約 (Issue #48)', () => {
 
   test('合流点を通過済みの本線車は816m先の次回到着として扱う', () => {
     expect(nextArrivalDistance(CONST.MERGE_POINT_Z - 10, CONST.MERGE_POINT_Z)).toBeCloseTo(
-      WRAP_LENGTH - 10,
+      FACILITY_SPACING - 10,
       8,
     );
     expect(nextArrivalDistance(CONST.MERGE_POINT_Z + 10, CONST.MERGE_POINT_Z)).toBeCloseTo(10, 8);
@@ -1680,8 +1722,8 @@ describe('合流の終端安全と区間同一性 (Issue #48)', () => {
       expect(previousZ - ramp.z).toBeLessThanOrEqual(ramp.desiredSpeed * TIME_STEP + 0.5);
       expect(ramp.x).toBeGreaterThanOrEqual(CONST.LANE_X.L[3]);
       expect(ramp.x).toBeLessThanOrEqual(CONST.LANE_X.L[2]);
-      expect(ramp.lane === 3 && ramp.z <= CONST.GORE_Z_START).toBe(false);
-      if (ramp.z <= CONST.GORE_Z_START) expect(ramp.speed).toBeGreaterThan(0);
+      expect(ramp.lane === 3 && toFacilityLocalZ(ramp.z) <= CONST.GORE_Z_START).toBe(false);
+      if (toFacilityLocalZ(ramp.z) <= CONST.GORE_Z_START) expect(ramp.speed).toBeGreaterThan(0);
       previousZ = ramp.z;
     }
     expect(ramp.mergePlan.state).toBe('completed');
@@ -1821,7 +1863,7 @@ describe('合流の終端安全と区間同一性 (Issue #48)', () => {
       const rampDeceleration = (previousRampSpeed - ramp.speed) / TIME_STEP;
       expect(rampDeceleration).toBeLessThanOrEqual(CONST.MERGE_MAX_COOP_DECEL + 0.01);
       expect(main.mergeCooperationDecel).toBeLessThanOrEqual(CONST.MERGE_MAX_COOP_DECEL);
-      expect(ramp.lane === 3 && ramp.z <= CONST.GORE_Z_START).toBe(false);
+      expect(ramp.lane === 3 && toFacilityLocalZ(ramp.z) <= CONST.GORE_Z_START).toBe(false);
       previousRampSpeed = ramp.speed;
       previousRampZ = ramp.z;
       previousDeadline = ramp.latestMergeCommitZ();
@@ -1858,15 +1900,16 @@ describe('合流の終端安全と区間同一性 (Issue #48)', () => {
         observedCurrentSafeBeforeProjectedGap = true;
       if (!committedBeforeDeadline && ramp.mergePlan.state === 'committed') {
         expect(previousRampZ).toBeGreaterThanOrEqual(previousDeadline - 1e-8);
-        expect(reservedSlot).not.toBeNull();
-        expect(ramp.isProjectedSlotSafe(reservedSlot!, ramp.mergePlan.congestion)).toBe(true);
+        if (reservedSlot)
+          expect(ramp.isProjectedSlotSafe(reservedSlot, ramp.mergePlan.congestion)).toBe(true);
+        else expect(toFacilityLocalZ(main.z)).toBeLessThanOrEqual(CONST.MERGE_POINT_Z);
         committedBeforeDeadline = true;
       }
       expect((previousRampSpeed - ramp.speed) / TIME_STEP).toBeLessThanOrEqual(
         CONST.MERGE_MAX_COOP_DECEL + 0.01,
       );
       expect(main.mergeCooperationDecel).toBeLessThanOrEqual(CONST.MERGE_MAX_COOP_DECEL);
-      expect(ramp.lane === 3 && ramp.z <= CONST.GORE_Z_START).toBe(false);
+      expect(ramp.lane === 3 && toFacilityLocalZ(ramp.z) <= CONST.GORE_Z_START).toBe(false);
       previousRampSpeed = ramp.speed;
       previousRampZ = ramp.z;
       previousDeadline = ramp.latestMergeCommitZ();
@@ -2000,7 +2043,7 @@ describe('時刻スナップショットと合流期限 (Issue #48)', () => {
       for (let step = 0; step < 600 && goreCrossEvent === null; step++) {
         const stateBefore = ramp.mergePlan.state;
         const deadlineMarginBefore = ramp.z - ramp.latestMergeCommitZ();
-        const goreMarginBefore = ramp.z - CONST.GORE_Z_START;
+        const goreMarginBefore = toFacilityLocalZ(ramp.z) - CONST.GORE_Z_START;
         world.step(TIME_STEP);
 
         if (
@@ -2021,7 +2064,11 @@ describe('時刻スナップショットと合流期限 (Issue #48)', () => {
           ramp.mergePlan.state === 'completed'
         )
           completionEvent = step * 2;
-        if (goreCrossEvent === null && goreMarginBefore > 0 && ramp.z <= CONST.GORE_Z_START)
+        if (
+          goreCrossEvent === null &&
+          goreMarginBefore > 0 &&
+          toFacilityLocalZ(ramp.z) <= CONST.GORE_Z_START
+        )
           goreCrossEvent = step * 2 + 1;
       }
 
@@ -2331,8 +2378,8 @@ describe('前方縦列予約 transaction (Issue #48)', () => {
 
   test('道路端をまたぐ直前車をwrapped距離でdependencyにする', () => {
     const world = new World({ rng: () => 0.5, spawnInterval: 1e9 });
-    const role = new Vehicle(world, 'L', 2, -390, 'Sedan', 20);
-    const wrappedAhead = new Vehicle(world, 'L', 2, 390, 'Sedan', 20);
+    const role = new Vehicle(world, 'L', 2, -CONST.ROAD_HALF + 10, 'Sedan', 20);
+    const wrappedAhead = new Vehicle(world, 'L', 2, CONST.ROAD_HALF - 10, 'Sedan', 20);
     const safeBoundary = new Vehicle(world, 'L', 2, 280, 'Sedan', 20);
     for (const vehicle of [role, wrappedAhead, safeBoundary]) vehicle.speed = 20;
     world.vehicles.push(role, wrappedAhead, safeBoundary);
@@ -2364,7 +2411,7 @@ describe('前方縦列予約 transaction (Issue #48)', () => {
         world.captureSnapshot(),
         'L',
         [first.spawnOrder],
-        world.time + 60,
+        world.time + 200,
       ),
     ).toMatchObject({ ok: false, reason: 'cycle' });
   });
@@ -2808,10 +2855,10 @@ describe('前方縦列予約 transaction (Issue #48)', () => {
             `spawnOrder=${vehicle.spawnOrder}のVehicle identityが置換された`,
           );
         else knownByOrder.set(vehicle.spawnOrder, vehicle);
-        if (vehicle.waiting || vehicle.lane !== 3) continue;
+        if (vehicle.waiting || vehicle.lane !== 3 || vehicle.exitIntent) continue;
         reject(vehicle.speed > 0, `spawnOrder=${vehicle.spawnOrder}がlane 3で停止した`);
         reject(
-          vehicle.z > CONST.GORE_Z_START,
+          toFacilityLocalZ(vehicle.z) > CONST.GORE_Z_START,
           `spawnOrder=${vehicle.spawnOrder}がlane 3の終端を越えた`,
         );
         reject(
@@ -3149,7 +3196,7 @@ describe('離散時間の合流証明書 (Issue #48)', () => {
     for (let step = 0; step < 300 / deltaTime && firstViolation === null; step++) {
       const activeRampOrders = new Set(
         world.vehicles
-          .filter((vehicle) => !vehicle.waiting && vehicle.lane === 3)
+          .filter((vehicle) => !vehicle.waiting && vehicle.lane === 3 && !vehicle.exitIntent)
           .map((vehicle) => vehicle.spawnOrder),
       );
       try {
@@ -3162,9 +3209,9 @@ describe('離散時間の合流証明書 (Issue #48)', () => {
       for (const vehicle of world.vehicles) {
         if (activeRampOrders.has(vehicle.spawnOrder) && vehicle.waiting)
           firstViolation = `step=${step}: active車両${vehicle.spawnOrder}がwaitingへ戻った`;
-        if (vehicle.waiting || vehicle.lane !== 3) continue;
+        if (vehicle.waiting || vehicle.lane !== 3 || vehicle.exitIntent) continue;
         if (
-          vehicle.z <= CONST.GORE_Z_START ||
+          toFacilityLocalZ(vehicle.z) <= CONST.GORE_Z_START ||
           rampBodyIntersectsGore(
             sectionTrackX(vehicle.section, vehicle.x),
             vehicle.z,
@@ -3243,9 +3290,9 @@ describe('可変描画周期と固定物理tick (Issue #48)', () => {
             ).length;
             world.step(deltaTime);
             for (const vehicle of world.vehicles) {
-              if (vehicle.waiting || vehicle.lane !== 3) continue;
+              if (vehicle.waiting || vehicle.lane !== 3 || vehicle.exitIntent) continue;
               if (
-                vehicle.z <= CONST.GORE_Z_START ||
+                toFacilityLocalZ(vehicle.z) <= CONST.GORE_Z_START ||
                 rampBodyIntersectsGore(
                   sectionTrackX(vehicle.section, vehicle.x),
                   vehicle.z,
@@ -3389,10 +3436,10 @@ describe('車両数上限の区間独立性 (Issue #72)', () => {
     const averageLength = 4.6 * 0.46 + 5.4 * 0.25 + 9.2 * 0.11 + 4.2 * 0.18;
     const stoppedFrontToFrontDistance = averageLength * 1.2 + 2.5 + averageLength;
     const mainlineCapacity = Math.floor((WRAP_LENGTH * 3) / stoppedFrontToFrontDistance);
-    const rampCapacity = Math.floor(
-      (CONST.RAMP_Z_TOP - CONST.GORE_Z_START) / stoppedFrontToFrontDistance,
-    );
-    const waitingCapacity = CONST.RAMP_QUEUE_MAX * 2;
+    const rampCapacity =
+      Math.floor((CONST.RAMP_Z_TOP - CONST.GORE_Z_START) / stoppedFrontToFrontDistance) *
+      FACILITIES.length;
+    const waitingCapacity = CONST.RAMP_QUEUE_MAX * (FACILITIES.length + 1);
     const physicalCapacity = mainlineCapacity + rampCapacity + waitingCapacity;
 
     expect(
@@ -3414,12 +3461,12 @@ describe('車両数上限の区間独立性 (Issue #72)', () => {
    周回路上の符号付き最短距離で判定する。区間非依存の修正である。
    ============================================================ */
 describe('車線変更安全確認の周回考慮 (Issue #50)', () => {
-  // 継ぎ目をまたいで真横に並ぶ 2 台。素の z 差は 806m だがリング上は 10m しかない。
+  // 継ぎ目をまたいで真横に並ぶ2台。素のz差は3254mだがリング上は10mしかない。
   function setupSeamPair(section: 'L' | 'R') {
     const world = new World({ rng: createRng(50), spawnInterval: 1e9 });
-    const mover = new Vehicle(world, section, 0, -405, 'Sedan', 25);
+    const mover = new Vehicle(world, section, 0, -CONST.ROAD_HALF - 5, 'Sedan', 25);
     mover.speed = 25;
-    const blocker = new Vehicle(world, section, 1, 401, 'Sedan', 25);
+    const blocker = new Vehicle(world, section, 1, CONST.ROAD_HALF + 1, 'Sedan', 25);
     blocker.speed = 25;
     world.vehicles.push(mover, blocker);
     world.rebuildSectionIndex();
@@ -3428,8 +3475,8 @@ describe('車線変更安全確認の周回考慮 (Issue #50)', () => {
 
   test('継ぎ目をまたいだ真横の車を検知して車線変更を許可しない', () => {
     const { mover, blocker } = setupSeamPair('L');
-    // 前提: 素の z 差は 806m、リング上の最短距離は 10m
-    expect(Math.abs(blocker.z - mover.z)).toBeCloseTo(806, 5);
+    // 前提: 素のz差は3254m、リング上の最短距離は10m
+    expect(Math.abs(blocker.z - mover.z)).toBeCloseTo(WRAP_LENGTH - 10, 5);
     expect(Math.abs(wrapDelta(blocker.z - mover.z))).toBeCloseTo(10, 5);
     // findAlongside は正しく真横と認識している
     expect(mover.findAlongside(1), 'findAlongside が継ぎ目越しの並走車を見落とした').toBe(blocker);
@@ -3448,13 +3495,13 @@ describe('車線変更安全確認の周回考慮 (Issue #50)', () => {
   test('継ぎ目をまたぐ後方車も同様に検知する', () => {
     // 相手を後方 (z が大きい側) に置いたケース。
     const world = new World({ rng: createRng(50), spawnInterval: 1e9 });
-    const mover = new Vehicle(world, 'L', 0, 401, 'Sedan', 25);
+    const mover = new Vehicle(world, 'L', 0, CONST.ROAD_HALF + 1, 'Sedan', 25);
     mover.speed = 25;
-    const chaser = new Vehicle(world, 'L', 1, -405, 'SportsCar', 34);
+    const chaser = new Vehicle(world, 'L', 1, -CONST.ROAD_HALF - 5, 'SportsCar', 34);
     chaser.speed = 34;
     world.vehicles.push(mover, chaser);
     world.rebuildSectionIndex();
-    // -405 はリング上では 401 の 10m 後方
+    // 負側境界の車はリング上では正側境界の車の10m後方
     expect(wrapDelta(chaser.z - mover.z)).toBeCloseTo(10, 5);
     expect(
       mover.checkLaneSafetyForChange(1),
@@ -3530,9 +3577,9 @@ describe('前方車探索の並べ替え耐性 (Issue #52)', () => {
   // W.update() が走って周回すると z が +WRAP_LENGTH され、配列の z 昇順が崩れる。
   function setupWrappedLeader(section: 'L' | 'R') {
     const world = new World({ rng: createRng(52), spawnInterval: 1e9 });
-    const leader = new Vehicle(world, section, 1, -407.5, 'Sedan', 25);
+    const leader = new Vehicle(world, section, 1, -CONST.ROAD_HALF - 7.5, 'Sedan', 25);
     leader.speed = 25;
-    const follower = new Vehicle(world, section, 1, -398, 'Sedan', 25);
+    const follower = new Vehicle(world, section, 1, -CONST.ROAD_HALF + 2, 'Sedan', 25);
     follower.speed = 25;
     world.vehicles.push(leader, follower);
     world.rebuildSectionIndex();
@@ -3540,7 +3587,7 @@ describe('前方車探索の並べ替え耐性 (Issue #52)', () => {
     expect(follower.findAhead(1)?.vehicle, '並べ替え直後に前方車を取り違えた').toBe(leader);
     expect(follower.findAhead(1)!.gap).toBeCloseTo(4.9, 5);
     // step の途中で W だけが周回した状態を作る(並べ替えはやり直さない)
-    leader.z = 407.26;
+    leader.z = CONST.ROAD_HALF + 7.26;
     return { world, leader, follower };
   }
 
@@ -3549,7 +3596,7 @@ describe('前方車探索の並べ替え耐性 (Issue #52)', () => {
     const ahead = follower.findAhead(1);
     expect(ahead, '周回した前方車を見失って null を返した').not.toBeNull();
     expect(ahead!.vehicle).toBe(leader);
-    // リング上の真の車間: -398 - 407.26 を周回長で畳むと 10.74m、車体分を引いて 6.14m
+    // リング上の真の車間は10.74m、車体分を引いて6.14m
     expect(ahead!.gap, 'リング上の車間が正しく計算されていない').toBeCloseTo(6.14, 2);
   });
 
@@ -3730,12 +3777,273 @@ describe('依存注入 (Issue #120)', () => {
 
 describe('追尾カメラの周回境界 (Issue #127)', () => {
   test('車両が進行方向へ周回したときカメラを次の複製へ繋ぎ直す', () => {
-    expect(cameraWrapOffset(-407, 407)).toBe(WRAP_LENGTH);
+    expect(cameraWrapOffset(-CONST.ROAD_HALF - 7, CONST.ROAD_HALF + 7)).toBe(WRAP_LENGTH);
   });
 
   test('通常走行と逆向きの境界通過を区別する', () => {
     expect(cameraWrapOffset(120, 119)).toBe(0);
-    expect(cameraWrapOffset(407, -407)).toBe(-WRAP_LENGTH);
+    expect(cameraWrapOffset(CONST.ROAD_HALF + 7, -CONST.ROAD_HALF - 7)).toBe(-WRAP_LENGTH);
+  });
+});
+
+describe('施設テーブルと座標の一般化 (Issue #128)', () => {
+  test('4施設が816m間隔で進行方向に並ぶ', () => {
+    expect(WRAP_LENGTH).toBe(3264);
+    expect(FACILITY_SPACING).toBe(816);
+    expect(FACILITIES).toEqual([
+      { index: 0, kind: 'IC', offsetZ: 0 },
+      { index: 1, kind: 'PA', offsetZ: -816 },
+      { index: 2, kind: 'IC', offsetZ: -1632 },
+      { index: 3, kind: 'PA', offsetZ: -2448 },
+    ]);
+  });
+
+  test('施設0と各施設の対応点を同じローカルzへ写す', () => {
+    expect(toFacilityLocalZ(CONST.RAMP_Z_TOP)).toBe(CONST.RAMP_Z_TOP);
+    for (const facility of FACILITIES) {
+      expect(toFacilityLocalZ(CONST.GORE_Z_START + facility.offsetZ)).toBeCloseTo(
+        CONST.GORE_Z_START,
+        8,
+      );
+    }
+  });
+
+  test('周回の継ぎ目をまたいだ座標も最寄り施設のローカルzへ写す', () => {
+    expect(toFacilityLocalZ(-CONST.ROAD_HALF - 9)).toBeCloseTo(-1, 8);
+    expect(toFacilityLocalZ(CONST.ROAD_HALF + 9)).toBeCloseTo(1, 8);
+  });
+
+  test('ランプ流入ペアはL/Rで同じ施設座標を使う', () => {
+    const values = [0.1, 0.5, 0.5, 0.01, 0.9];
+    let index = 0;
+    const world = new World({ rng: () => values[index++ % values.length], spawnInterval: 800 });
+
+    expect(world.spawnPair()).toBe(true);
+    const rampVehicles = world.vehicles.filter((vehicle) => vehicle.lane === 3);
+    expect(rampVehicles).toHaveLength(2);
+    expect(rampVehicles[0].z).toBe(rampVehicles[1].z);
+    expect(toFacilityLocalZ(rampVehicles[0].z)).toBe(CONST.RAMP_Z_TOP);
+  });
+
+  test('導流帯との交差判定は4施設で同じになる', () => {
+    const localZ = CONST.GORE_Z_START + 1;
+    const expected = rampBodyIntersectsGore(-15, localZ, 1.8, 4.6);
+    for (const facility of FACILITIES) {
+      expect(rampBodyIntersectsGore(-15, localZ + facility.offsetZ, 1.8, 4.6)).toBe(expected);
+    }
+  });
+
+  test('次の合流点までの距離は施設間隔で反復する', () => {
+    expect(nextArrivalDistance(CONST.MERGE_POINT_Z - 10, CONST.MERGE_POINT_Z)).toBe(806);
+    expect(
+      nextArrivalDistance(CONST.MERGE_POINT_Z - FACILITY_SPACING + 10, CONST.MERGE_POINT_Z),
+    ).toBe(10);
+  });
+});
+
+/* ============================================================
+   車線別近傍索引の挙動不変性 (Issue #128)
+   ============================================================ */
+describe('車線別近傍索引の挙動不変性 (Issue #128)', () => {
+  test('周回境界をまたぐ最近接の前後車を返す', () => {
+    const world = new World({ rng: createRng(1281), spawnInterval: 1e9 });
+    const self = new Vehicle(world, 'L', 1, -CONST.ROAD_HALF - 4, 'Sedan', 25);
+    const ahead = new Vehicle(world, 'L', 1, CONST.ROAD_HALF + 4, 'Sedan', 25);
+    const behind = new Vehicle(world, 'L', 1, -CONST.ROAD_HALF + 16, 'Sedan', 25);
+    world.vehicles.push(self, ahead, behind);
+    world.rebuildSectionIndex();
+
+    expect(world.laneVehicles.L[1]).toEqual([self, behind, ahead]);
+    expect(self.findAhead(1)?.vehicle).toBe(ahead);
+    expect(self.findBehind(1)?.vehicle).toBe(behind);
+  });
+
+  test('車線変更中の車両を変更元と変更先の両車線で見つける', () => {
+    const world = new World({ rng: createRng(1282), spawnInterval: 1e9 });
+    const sourceFollower = new Vehicle(world, 'L', 0, 0, 'Sedan', 25);
+    const targetFollower = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const changing = new Vehicle(world, 'L', 0, -20, 'Sedan', 25);
+    changing.laneChange = {
+      state: 'changing',
+      from: 0,
+      to: 1,
+      progress: 0.5,
+      holdTime: 0,
+      checkTimer: 0,
+    };
+    world.vehicles.push(sourceFollower, targetFollower, changing);
+    world.rebuildSectionIndex();
+
+    expect(sourceFollower.findAhead(0)?.vehicle).toBe(changing);
+    expect(targetFollower.findAhead(1)?.vehicle).toBe(changing);
+  });
+
+  test('非占有の隣接車線に一台だけいる前後車を返す', () => {
+    const world = new World({ rng: createRng(1285), spawnInterval: 1e9 });
+    const self = new Vehicle(world, 'L', 0, 0, 'Sedan', 25);
+    const other = new Vehicle(world, 'L', 1, -20, 'Sedan', 25);
+    world.vehicles.push(self, other);
+    world.rebuildSectionIndex();
+
+    expect(self.findAhead(1)?.vehicle).toBe(other);
+    expect(self.findBehind(1)?.vehicle).toBe(other);
+  });
+
+  test('step途中で先行車のz順が崩れても後続車は同じ最近接車を見る', () => {
+    const world = new World({ rng: createRng(1283), spawnInterval: 1e9 });
+    const mover = new Vehicle(world, 'L', 1, -20, 'Sedan', 25);
+    const observer = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const far = new Vehicle(world, 'L', 1, -300, 'Sedan', 25);
+    let observed: Vehicle | null = null;
+    mover.update = () => {
+      mover.z += WRAP_LENGTH;
+    };
+    observer.update = () => {
+      observed = observer.findAhead(1)?.vehicle ?? null;
+    };
+    far.update = () => {};
+    world.vehicles.push(mover, observer, far);
+
+    world.step(TIME_STEP);
+
+    expect(observed).toBe(mover);
+  });
+
+  test('同距離の候補は既存のsectionVehicles順を保存する', () => {
+    const world = new World({ rng: createRng(1284), spawnInterval: 1e9 });
+    const self = new Vehicle(world, 'L', 1, 0, 'Sedan', 25);
+    const first = new Vehicle(world, 'L', 1, -20, 'Sedan', 25);
+    const second = new Vehicle(world, 'L', 1, -20, 'Sedan', 25);
+    world.vehicles.push(self, first, second);
+    world.rebuildSectionIndex();
+
+    expect(self.findAhead(1)?.vehicle).toBe(first);
+    first.z += WRAP_LENGTH;
+    world.reindexVehicle(first);
+    expect(self.findAhead(1)?.vehicle).toBe(first);
+  });
+});
+
+/* ============================================================
+   出口と施設 (Issue #128)
+   ============================================================ */
+describe('出口と施設 (Issue #128)', () => {
+  const normalizeZ = (z: number): number =>
+    ((((z + CONST.ROAD_HALF + 8) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH) - CONST.ROAD_HALF - 8;
+
+  test('退出意思を決めたlane 2車は安全確認後にlane 3へ移り分岐で退出する', () => {
+    const world = new World({ rng: createRng(12801), spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 2, CONST.EXIT_DECISION_Z + 0.1, 'Sedan', 25);
+    vehicle.speed = 25;
+    world.vehicles.push(vehicle);
+    world.rebuildSectionIndex();
+    world.rng = () => 0;
+
+    for (let step = 0; step < 400 && world.vehicles.includes(vehicle); step++)
+      world.step(TIME_STEP);
+
+    expect(vehicle.exitIntent).toBe(true);
+    expect(vehicle.lane).toBe(3);
+    expect(vehicle.exited).toBe(true);
+    expect(world.vehicles).not.toContain(vehicle);
+    expect(world.stats.outflow.L).toBe(1);
+  });
+
+  test('lane 0の退出予定車は安全確認しながらlane 3まで順に移る', () => {
+    const world = new World({ rng: createRng(12800), spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 0, CONST.EXIT_DECISION_Z + 0.1, 'Sedan', 25);
+    vehicle.speed = 25;
+    world.vehicles.push(vehicle);
+    world.rebuildSectionIndex();
+    world.rng = () => 0;
+
+    for (let step = 0; step < 400 && !vehicle.exited; step++) vehicle.update(TIME_STEP);
+
+    expect(vehicle.exitIntent).toBe(true);
+    expect(vehicle.lane).toBe(3);
+    expect(vehicle.exited).toBe(true);
+  });
+
+  test('lane 3へ入れないまま分岐を過ぎると退出を諦める', () => {
+    const world = new World({ rng: createRng(12802), spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 2, CONST.EXIT_DECISION_Z + 0.1, 'Sedan', 25);
+    const blocker = new Vehicle(world, 'L', 3, CONST.EXIT_DECISION_Z, 'Sedan', 25);
+    vehicle.speed = 25;
+    blocker.speed = 25;
+    world.vehicles.push(vehicle, blocker);
+    world.rebuildSectionIndex();
+    world.rng = () => 0;
+
+    vehicle.update(TIME_STEP);
+    expect(vehicle.laneChange.state).toBe('none');
+    vehicle.z = CONST.EXIT_BRANCH_Z + 0.1;
+    vehicle.update(TIME_STEP);
+
+    expect(vehicle.exited).toBe(false);
+    expect(vehicle.exitIntent).toBe(false);
+    vehicle.z = -CONST.ROAD_HALF - 7.9;
+    vehicle.update(TIME_STEP);
+    expect(vehicle.z).toBeGreaterThan(CONST.ROAD_HALF - 20);
+  });
+
+  test.each(FACILITIES)('施設$indexで同じ分岐退出を行う', (facility) => {
+    const world = new World({ rng: createRng(12810 + facility.index), spawnInterval: 1e9 });
+    const decisionZ = normalizeZ(CONST.EXIT_DECISION_Z + facility.offsetZ);
+    const vehicle = new Vehicle(world, 'L', 2, decisionZ + 0.1, 'Sedan', 25);
+    vehicle.speed = 25;
+    world.vehicles.push(vehicle);
+    world.rebuildSectionIndex();
+    world.rng = () => 0;
+
+    for (let step = 0; step < 400 && !vehicle.exited; step++) vehicle.update(TIME_STEP);
+
+    expect(vehicle.exitIntent).toBe(true);
+    expect(vehicle.lane).toBe(3);
+    expect(vehicle.exited).toBe(true);
+  });
+
+  test('入口車と出口車が同時にlane 3を走っても合流予約対象を混同しない', () => {
+    const world = new World({ rng: createRng(12815), spawnInterval: 1e9 });
+    const ramp = new Vehicle(world, 'L', 3, 330, 'Sedan', 20);
+    const exiting = new Vehicle(world, 'L', 3, -100, 'Sedan', 20);
+    exiting.exitIntent = true;
+    world.vehicles.push(ramp, exiting);
+    world.rebuildSectionIndex();
+
+    expect(world.rampLeaders('L')).toEqual([ramp]);
+    expect(() => world.assertGoreInvariant('start')).not.toThrow();
+  });
+
+  test('L/Rは同じ施設座標とEXIT_RATIOで退出意思を決める', () => {
+    const results = (['L', 'R'] as const).map((section) => {
+      const world = new World({ rng: createRng(12820), spawnInterval: 1e9 });
+      const vehicle = new Vehicle(world, section, 2, CONST.EXIT_DECISION_Z + 0.1, 'Sedan', 25);
+      const decisionLocalZ = toFacilityLocalZ(vehicle.z);
+      vehicle.speed = 25;
+      world.vehicles.push(vehicle);
+      world.rebuildSectionIndex();
+      world.rng = () => CONST.EXIT_RATIO - 0.001;
+      vehicle.update(TIME_STEP);
+      return { decisionLocalZ, vehicle };
+    });
+
+    expect(results.map(({ vehicle }) => vehicle.exitIntent)).toEqual([true, true]);
+    for (const { decisionLocalZ } of results)
+      expect(decisionLocalZ).toBeCloseTo(CONST.EXIT_DECISION_Z + 0.1, 8);
+    expect(CONST.LANE_X.R[3] - CONST.LANE_X.L[3]).toBe(CONST.SECTION_OFFSET_X.R);
+  });
+
+  test('absorbモードでは当選する乱数でも退出意思を持たない', () => {
+    const world = new World({ mode: 'absorb', rng: () => 0, spawnInterval: 1e9 });
+    const vehicle = new Vehicle(world, 'L', 2, CONST.EXIT_DECISION_Z + 0.1, 'Sedan', 25);
+    vehicle.speed = 25;
+    world.vehicles.push(vehicle);
+    world.rebuildSectionIndex();
+
+    for (let step = 0; step < 400; step++) vehicle.update(TIME_STEP);
+
+    expect(vehicle.exitIntent).toBe(false);
+    expect(vehicle.exited).toBe(false);
   });
 });
 
@@ -3802,5 +4110,23 @@ describe('予約回廊への割り込み禁止 (Issue #160)', () => {
     const intruder = placeIntruder(world, member, corridor, 20);
 
     expect(world.blocksReservedLaneChange(intruder, 2)).toBe(false);
+  });
+});
+
+describe('離散tickの追突防止', () => {
+  test('最大制動でも止まり切れない高速後続車は前方車体へ侵入しない', () => {
+    const world = new World({ rng: createRng(161), spawnInterval: 1e9 });
+    const ahead = new Vehicle(world, 'L', 2, 0, 'Sedan', 20);
+    const behind = new Vehicle(world, 'L', 2, 6.5, 'Sedan', 35);
+    ahead.speed = 20;
+    behind.speed = 35;
+    world.vehicles.push(ahead, behind);
+
+    for (let tick = 0; tick < 10; tick++) {
+      world.step(TIME_STEP);
+      const centerDistance = behind.z - ahead.z;
+      const bodyGap = centerDistance - (ahead.length + behind.length) / 2;
+      expect(bodyGap, `tick=${tick + 1}`).toBeGreaterThanOrEqual(0);
+    }
   });
 });

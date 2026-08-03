@@ -1,4 +1,4 @@
-import { CONST } from './constants';
+import { CONST, toFacilityLocalZ } from './constants';
 import { wrapDelta } from './utils';
 import type { NeighborInfo, Vehicle } from './vehicle';
 
@@ -99,7 +99,7 @@ export class LaneChangeController {
   }
 
   tryLaneChange(toLane: number): boolean {
-    if (toLane < 0 || toLane > 2) return false;
+    if (toLane < 0 || toLane > 3) return false;
     if (this.vehicle.world.blocksReservedLaneChange(this.vehicle, toLane)) return false;
     if (this.vehicle.checkLaneSafetyForChange(toLane) !== 'safe') return false;
     this.vehicle.laneChange.state = 'changing';
@@ -174,7 +174,7 @@ export class LaneChangeController {
             nextSource: null,
             cooperationDecel: undefined,
           };
-          this.vehicle.mergedFromRamp = this.vehicle.z >= CONST.MERGE_POINT_Z;
+          this.vehicle.mergedFromRamp = toFacilityLocalZ(this.vehicle.z) >= CONST.MERGE_POINT_Z;
           this.vehicle.rampMergePassPending = true;
         }
         this.vehicle.laneChangeCooldown = 4.0 + this.vehicle.world.rng() * 5; // 変更直後は当分しない(面倒・疲れる)

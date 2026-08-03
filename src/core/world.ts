@@ -2,7 +2,16 @@
    シミュレーションコア: ワールド（車両生成・時間発展・スコア）
    （DOM / THREE 非依存・テスト対象）
    ============================================================ */
-import { CONST, rampBodyIntersectsGore, sectionTrackX, TYPES, TYPE_WEIGHTS } from './constants';
+import {
+  CONST,
+  FACILITIES,
+  facilityIndexForZ,
+  rampBodyIntersectsGore,
+  sectionTrackX,
+  toFacilityLocalZ,
+  TYPES,
+  TYPE_WEIGHTS,
+} from './constants';
 import type { Section, SimMode, VehicleTypeName } from './constants';
 import { clamp, wrapDelta, WRAP_LENGTH } from './utils';
 import type { Rng } from './utils';
@@ -16,6 +25,7 @@ import type {
   MergeCandidate,
   MergeCertificate,
   MergeDirective,
+  NeighborInfo,
   MergePlan,
   MergeSource,
   MergeTransaction,
@@ -68,7 +78,14 @@ export class World {
   spawnAccumulator: number;
   time: number;
   sectionVehicles: Record<Section, Vehicle[]>;
+  laneVehicles: Record<Section, Vehicle[][]>;
+  private laneVehicleOrder = new Map<Vehicle, number>();
+  private laneMemberships = new Map<Vehicle, number[]>();
   lastMergeSource: Record<Section, MergeSource | null> = { L: null, R: null };
+  private lastMergeSourceByFacility: Record<Section, (MergeSource | null)[]> = {
+    L: FACILITIES.map(() => null),
+    R: FACILITIES.map(() => null),
+  };
   nextVehicleOrder = 0;
   nextMergePlanId = 0;
   stats: {
@@ -92,6 +109,7 @@ export class World {
     this.spawnAccumulator = 0;
     this.time = 0;
     this.sectionVehicles = { L: [], R: [] };
+    this.laneVehicles = { L: [[], [], [], []], R: [[], [], [], []] };
     this.stats = {
       changes: { L: 0, R: 0 },
       yields: { L: 0, R: 0 },
@@ -143,8 +161,16 @@ export class World {
   // absorbモード: 円周実験(車両は退出しない)なので、この値を上限として
   // 間隔に応じた密度を維持する。
   targetCountPerSection(): number {
-    const factor = this.mode === 'absorb' ? CONST.ABSORB_DENSITY_FACTOR : CONST.DEMAND_FACTOR;
-    return clamp(Math.round(factor / this.spawnInterval / 2), 12, CONST.MAX_VEHICLES_PER_SECTION);
+    const absorbMode = this.mode === 'absorb';
+    const factor = absorbMode ? CONST.ABSORB_DENSITY_FACTOR : CONST.DEMAND_FACTOR;
+    // rules需要係数の意味を維持し、将来の道路延長にも同じ台数密度で追従させる。
+    // absorb係数は準安定密度そのものとして周長変更時に再較正する。
+    const lengthRatio = WRAP_LENGTH / 816;
+    return clamp(
+      Math.round((factor * (absorbMode ? 1 : lengthRatio)) / this.spawnInterval / 2),
+      12 * lengthRatio,
+      CONST.MAX_VEHICLES_PER_SECTION,
+    );
   }
 
   // HUDなど両区間合計を扱う呼び出し元向けの基準台数。
@@ -276,15 +302,32 @@ export class World {
       speed = Math.max(speed, 32 + this.rng() * 4); // 希望速度 ≒ 115〜130km/h
     }
     const viaRamp = this.rng() < CONST.RAMP_SHARE;
+    // 施設番号はペアにつき一度だけ抽選し、L/Rへ同じ入口座標を渡す。
+    const facility = viaRamp ? FACILITIES[Math.floor(this.rng() * FACILITIES.length)] : null;
     const preferredLane = viaRamp ? 3 : Math.floor(this.rng() * 3);
     // 本線流入は空いているレーンを選んで入る(上流から来る車は自然に分散する)。
     // 候補の優先順は左右で同一にし、どのレーンに入れるかだけ各道路の状況に従う
     const lanes = viaRamp ? [3] : [preferredLane, (preferredLane + 1) % 3, (preferredLane + 2) % 3];
-    const z = viaRamp ? CONST.RAMP_Z_TOP : CONST.ROAD_HALF + spec.length;
+    const rawZ = viaRamp ? CONST.RAMP_Z_TOP + facility!.offsetZ : CONST.ROAD_HALF + spec.length;
+    const z = viaRamp
+      ? ((((rawZ + CONST.ROAD_HALF + 8) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH) -
+        CONST.ROAD_HALF -
+        8
+      : rawZ;
     let added = false;
     for (const section of ['L', 'R'] as const) {
       if (this.sectionCount(section) >= CONST.MAX_VEHICLES_PER_SECTION) continue;
-      if (this.waitingCount(section, viaRamp ? 'ramp' : 'mainline') >= CONST.RAMP_QUEUE_MAX)
+      if (
+        (viaRamp
+          ? this.vehicles.filter(
+              (vehicle) =>
+                vehicle.waiting &&
+                vehicle.section === section &&
+                vehicle.lane === 3 &&
+                facilityIndexForZ(vehicle.z) === facility!.index,
+            ).length
+          : this.waitingCount(section, 'mainline')) >= CONST.RAMP_QUEUE_MAX
+      )
         continue;
       // ランプ需要は入口の lane 3 が空いていても、lane 2 の将来枠を証明するまで
       // 有効道路状態へ入れない。本線需要は従来通り入口判定だけで扱う。
@@ -489,14 +532,14 @@ export class World {
     deltaTime: number,
   ): void {
     const candidates: { vehicle: Vehicle; candidate: MergeCandidate }[] = [];
-    const activeRampSections = new Set(
+    const activeRampFacilities = new Set(
       this.vehicles
-        .filter((vehicle) => !vehicle.waiting && vehicle.lane === 3)
-        .map((vehicle) => vehicle.section),
+        .filter((vehicle) => !vehicle.waiting && vehicle.lane === 3 && !vehicle.exitIntent)
+        .map((vehicle) => `${vehicle.section}:${facilityIndexForZ(vehicle.z)}`),
     );
     for (const vehicle of heads) {
       if (!vehicle.waiting || vehicle.lane !== 3) continue;
-      if (activeRampSections.has(vehicle.section)) continue;
+      if (activeRampFacilities.has(`${vehicle.section}:${facilityIndexForZ(vehicle.z)}`)) continue;
       const certificate = vehicle.evaluateEntryCertificate(snapshot, deltaTime);
       if (!certificate) continue;
       const provisionalPlan: MergePlan = {
@@ -568,14 +611,14 @@ export class World {
   /** tick 境界で lane 3 の車体が導流帯へ侵入していないことを検査する。 */
   assertGoreInvariant(phase: 'start' | 'end'): void {
     for (const vehicle of this.vehicles) {
-      if (vehicle.waiting || vehicle.lane !== 3) continue;
+      if (vehicle.waiting || vehicle.lane !== 3 || vehicle.exitIntent) continue;
       const intersects = rampBodyIntersectsGore(
         sectionTrackX(vehicle.section, vehicle.x),
         vehicle.z,
         vehicle.width,
         vehicle.length,
       );
-      if (vehicle.z <= CONST.GORE_Z_START || intersects)
+      if (toFacilityLocalZ(vehicle.z) <= CONST.GORE_Z_START || intersects)
         throw new Error(`導流帯不変条件違反(${phase}): vehicle=${vehicle.spawnOrder}`);
     }
   }
@@ -671,7 +714,7 @@ export class World {
       const nextRampX = rampMotion.nextX;
       if (
         nextProgress < 1 &&
-        (nextRampZ <= CONST.GORE_Z_START ||
+        (toFacilityLocalZ(nextRampZ) <= CONST.GORE_Z_START ||
           rampBodyIntersectsGore(
             sectionTrackX(ramp.section, nextRampX),
             nextRampZ,
@@ -786,7 +829,10 @@ export class World {
           rear.mergeCooperationDecel = directive.cooperation.decel;
         }
       }
-      if (directive.startLaneChange) ramp.startReservedMergeLaneChange();
+      if (directive.startLaneChange) {
+        ramp.startReservedMergeLaneChange();
+        this.syncLaneMembership(ramp);
+      }
     }
     return motionByOrder;
   }
@@ -801,9 +847,13 @@ export class World {
       const waiting = this.vehicles
         .filter((candidate) => candidate.waiting && candidate.section === section)
         .sort((left, right) => left.spawnOrder - right.spawnOrder);
-      const rampHead = waiting.find((vehicle) => vehicle.lane === 3);
+      const rampHeadsByFacility = FACILITIES.map((facility) =>
+        waiting.find(
+          (vehicle) => vehicle.lane === 3 && facilityIndexForZ(vehicle.z) === facility.index,
+        ),
+      );
       const mainlineHead = waiting.find((vehicle) => vehicle.lane !== 3);
-      if (rampHead) rampHeads.push(rampHead);
+      for (const rampHead of rampHeadsByFacility) if (rampHead) rampHeads.push(rampHead);
       if (mainlineHead) mainlineHeads.push(mainlineHead);
     }
     for (const vehicle of mainlineHeads) {
@@ -874,6 +924,9 @@ export class World {
     this.spawnAccumulator = 0;
     this.time = 0;
     this.sectionVehicles = { L: [], R: [] };
+    this.laneVehicles = { L: [[], [], [], []], R: [[], [], [], []] };
+    this.laneVehicleOrder.clear();
+    this.laneMemberships.clear();
     this.stats = {
       changes: { L: 0, R: 0 },
       yields: { L: 0, R: 0 },
@@ -882,6 +935,10 @@ export class World {
       outflow: { L: 0, R: 0 },
     };
     this.lastMergeSource = { L: null, R: null };
+    this.lastMergeSourceByFacility = {
+      L: FACILITIES.map(() => null),
+      R: FACILITIES.map(() => null),
+    };
     this.smoothTime = { L: 0, R: 0, draw: 0 }; // 累積の比較もやり直す
     this.absorberRoundRobin = null;
     this.laneRoundRobin = 0;
@@ -907,15 +964,127 @@ export class World {
     vehiclesR.sort((a, b) => a.z - b.z);
     this.sectionVehicles.L = vehiclesL;
     this.sectionVehicles.R = vehiclesR;
+    this.rebuildLaneIndex();
+  }
+
+  /** 現在の車線占有状態から車線別索引を作り直す。 */
+  private rebuildLaneIndex(): void {
+    this.laneVehicleOrder.clear();
+    this.laneMemberships.clear();
+    this.laneVehicles = { L: [[], [], [], []], R: [[], [], [], []] };
+    for (const section of ['L', 'R'] as const) {
+      const sectionVehicles = this.sectionVehicles[section];
+      sectionVehicles.forEach((vehicle, index) => this.laneVehicleOrder.set(vehicle, index));
+      for (const vehicle of sectionVehicles) {
+        const lanes: number[] = [];
+        for (let lane = 0; lane < 4; lane++) {
+          if (!vehicle.occupies(lane)) continue;
+          this.laneVehicles[section][lane].push(vehicle);
+          lanes.push(lane);
+        }
+        this.laneMemberships.set(vehicle, lanes);
+      }
+      for (const laneVehicles of this.laneVehicles[section])
+        laneVehicles.sort((left, right) => this.compareLaneVehicles(left, right));
+    }
+  }
+
+  /** 周回上で同値なzを同じ索引位置へ写す。 */
+  private laneIndexZ(z: number): number {
+    const roadStart = -CONST.ROAD_HALF - 8;
+    return (((z - roadStart) % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH;
+  }
+
+  private compareLaneVehicles(left: Vehicle, right: Vehicle): number {
+    return (
+      this.laneIndexZ(left.z) - this.laneIndexZ(right.z) ||
+      this.laneVehicleOrder.get(left)! - this.laneVehicleOrder.get(right)!
+    );
+  }
+
+  /** 逐次更新された1台だけを車線別索引へ挿入し直す。 */
+  reindexVehicle(vehicle: Vehicle): void {
+    const order = this.laneVehicleOrder.get(vehicle);
+    if (order === undefined) return;
+    for (const lane of this.laneMemberships.get(vehicle) ?? []) {
+      const vehicles = this.laneVehicles[vehicle.section][lane];
+      const index = vehicles.indexOf(vehicle);
+      if (index >= 0) vehicles.splice(index, 1);
+    }
+    const lanes: number[] = [];
+    for (let lane = 0; lane < 4; lane++) {
+      if (!vehicle.occupies(lane)) continue;
+      const vehicles = this.laneVehicles[vehicle.section][lane];
+      let low = 0,
+        high = vehicles.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (this.compareLaneVehicles(vehicles[middle], vehicle) <= 0) low = middle + 1;
+        else high = middle;
+      }
+      vehicles.splice(low, 0, vehicle);
+      lanes.push(lane);
+    }
+    this.laneMemberships.set(vehicle, lanes);
+  }
+
+  /** zを変えずに変化した車線占有だけを索引へ同期する。 */
+  private syncLaneMembership(vehicle: Vehicle): void {
+    if (!this.laneVehicleOrder.has(vehicle)) return;
+    const lanes: number[] = [];
+    for (let lane = 0; lane < 4; lane++) if (vehicle.occupies(lane)) lanes.push(lane);
+    const indexed = this.laneMemberships.get(vehicle) ?? [];
+    if (lanes.length !== indexed.length || lanes.some((lane, index) => lane !== indexed[index]))
+      this.reindexVehicle(vehicle);
+  }
+
+  /** zソート済み車線索引から周回上の最近接車を二分探索する。 */
+  findLaneNeighbor(vehicle: Vehicle, lane: number, ahead: boolean): NeighborInfo | null {
+    const vehicles = this.laneVehicles[vehicle.section][lane];
+    if (vehicles.length === 0 || (vehicles.length === 1 && vehicles[0] === vehicle)) return null;
+    const key = this.laneIndexZ(vehicle.z);
+    let low = 0,
+      high = vehicles.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      const middleKey = this.laneIndexZ(vehicles[middle].z);
+      if (middleKey < key || (!ahead && middleKey === key)) low = middle + 1;
+      else high = middle;
+    }
+    let index = ahead ? low - 1 : low;
+    if (index < 0) index = vehicles.length - 1;
+    if (index >= vehicles.length) index = 0;
+    const candidateKey = this.laneIndexZ(vehicles[index].z);
+    let first = index;
+    while (first > 0 && this.laneIndexZ(vehicles[first - 1].z) === candidateKey) first--;
+    let best: Vehicle | null = null;
+    for (
+      let cursor = first;
+      cursor < vehicles.length && this.laneIndexZ(vehicles[cursor].z) === candidateKey;
+      cursor++
+    ) {
+      const candidate = vehicles[cursor];
+      if (
+        candidate !== vehicle &&
+        (best === null || this.laneVehicleOrder.get(candidate)! < this.laneVehicleOrder.get(best)!)
+      )
+        best = candidate;
+    }
+    if (best === null) return null;
+    const raw = ahead ? vehicle.z - best.z : best.z - vehicle.z;
+    const distance = ((raw % WRAP_LENGTH) + WRAP_LENGTH) % WRAP_LENGTH || WRAP_LENGTH;
+    return { vehicle: best, gap: distance - (vehicle.length + best.length) / 2 };
   }
 
   recordMergePasses(): void {
     for (const vehicle of this.vehicles) {
       if (vehicle.waiting) continue;
       const crossedMergePoint =
-        vehicle.previousZ >= CONST.MERGE_POINT_Z && vehicle.z < CONST.MERGE_POINT_Z;
+        toFacilityLocalZ(vehicle.previousZ) >= CONST.MERGE_POINT_Z &&
+        toFacilityLocalZ(vehicle.z) < CONST.MERGE_POINT_Z;
       if (vehicle.rampMergePassPending) {
         this.lastMergeSource[vehicle.section] = 'ramp';
+        this.lastMergeSourceByFacility[vehicle.section][facilityIndexForZ(vehicle.z)] = 'ramp';
         vehicle.rampMergePassPending = false;
         if (crossedMergePoint) vehicle.mergedFromRamp = false;
         continue;
@@ -925,19 +1094,34 @@ export class World {
         vehicle.mergedFromRamp = false;
       } else {
         this.lastMergeSource[vehicle.section] = 'main';
+        this.lastMergeSourceByFacility[vehicle.section][facilityIndexForZ(vehicle.z)] = 'main';
       }
     }
   }
 
+  rampLeaders(section: Section): Vehicle[] {
+    const rampVehicles = this.sectionVehicles[section].filter(
+      (vehicle) =>
+        !vehicle.exitIntent &&
+        (vehicle.lane === 3 ||
+          (vehicle.laneChange.from === 3 && vehicle.laneChange.state !== 'none')),
+    );
+    return FACILITIES.map(
+      (facility) =>
+        rampVehicles
+          .filter((vehicle) => facilityIndexForZ(vehicle.z) === facility.index)
+          .sort(
+            (a, b) => toFacilityLocalZ(a.z) - toFacilityLocalZ(b.z) || a.spawnOrder - b.spawnOrder,
+          )[0] ?? null,
+    ).filter((vehicle): vehicle is Vehicle => vehicle !== null);
+  }
+
+  /** 単一施設時代の呼び出し互換。進行上もっとも先頭のランプ車を返す。 */
   rampLeader(section: Section): Vehicle | null {
     return (
-      this.sectionVehicles[section]
-        .filter(
-          (vehicle) =>
-            vehicle.lane === 3 ||
-            (vehicle.laneChange.from === 3 && vehicle.laneChange.state !== 'none'),
-        )
-        .sort((a, b) => a.z - b.z || a.spawnOrder - b.spawnOrder)[0] ?? null
+      this.rampLeaders(section).sort(
+        (a, b) => toFacilityLocalZ(a.z) - toFacilityLocalZ(b.z) || a.spawnOrder - b.spawnOrder,
+      )[0] ?? null
     );
   }
 
@@ -946,7 +1130,8 @@ export class World {
     const sorted = [...evaluations].sort(
       (a, b) =>
         a.plan.targetPassTime - b.plan.targetPassTime ||
-        Math.abs(a.leader.z - CONST.MERGE_POINT_Z) - Math.abs(b.leader.z - CONST.MERGE_POINT_Z) ||
+        Math.abs(toFacilityLocalZ(a.leader.z) - CONST.MERGE_POINT_Z) -
+          Math.abs(toFacilityLocalZ(b.leader.z) - CONST.MERGE_POINT_Z) ||
         a.leader.spawnOrder - b.leader.spawnOrder,
     );
     for (const evaluation of sorted) {
@@ -960,10 +1145,13 @@ export class World {
           targetPassTime: 0,
           nextSource: null,
         });
+        this.syncLaneMembership(evaluation.leader);
         continue;
       }
       if (rear) reservedRears.add(rear);
       evaluation.leader.applyMergePlan(evaluation.plan);
+      this.syncLaneMembership(evaluation.leader);
+      if (rear) this.syncLaneMembership(rear);
     }
   }
 
@@ -971,8 +1159,8 @@ export class World {
     deltaTime: number,
     protectedOrders: ReadonlySet<number> = new Set(),
   ): void {
-    const leaders = (['L', 'R'] as const).map((section) => this.rampLeader(section));
-    const leaderSet = new Set(leaders.filter((vehicle): vehicle is Vehicle => vehicle !== null));
+    const leaders = (['L', 'R'] as const).flatMap((section) => this.rampLeaders(section));
+    const leaderSet = new Set(leaders);
     for (const vehicle of this.vehicles) {
       if (
         vehicle.waiting ||
@@ -984,22 +1172,22 @@ export class World {
     }
     const evaluations = leaders
       .filter(
-        (leader): leader is Vehicle =>
-          leader !== null &&
-          leader.mergePlan.state !== 'committed' &&
-          leader.mergePlan.certificate === null,
+        (leader) => leader.mergePlan.state !== 'committed' && leader.mergePlan.certificate === null,
       )
       .map((leader) => ({
         leader,
-        plan: leader.evaluateMergePlan(deltaTime, this.lastMergeSource[leader.section]),
+        plan: leader.evaluateMergePlan(
+          deltaTime,
+          this.lastMergeSourceByFacility[leader.section][facilityIndexForZ(leader.z)] ??
+            this.lastMergeSource[leader.section],
+        ),
       }));
     this.applyMergeEvaluations(evaluations);
     const activeRears = new Set(
       leaders
         .filter(
-          (leader): leader is Vehicle =>
-            leader !== null &&
-            (leader.mergePlan.state === 'coordinating' || leader.mergePlan.state === 'committed'),
+          (leader) =>
+            leader.mergePlan.state === 'coordinating' || leader.mergePlan.state === 'committed',
         )
         .map((leader) => leader.mergePlan.rear)
         .filter((rear): rear is Vehicle => rear !== null),
@@ -1020,7 +1208,7 @@ export class World {
   step(deltaTime: number): void {
     this.assertGoreInvariant('start');
     this.spawnAccumulator += deltaTime * 1000;
-    // rulesモードの流入間隔は、終端で流出する分(EXIT_RATIO)とつり合う需要に換算する。
+    // rulesモードの流入間隔は、施設出口で流出する分(EXIT_RATIO)とつり合う需要に換算する。
     // 「間隔が短い = 交通需要が多い」の意味は従来通り(密度は間隔に反比例)
     const pace =
       this.mode === 'absorb' ? this.spawnInterval : this.spawnInterval * CONST.INFLOW_PACE;
@@ -1066,13 +1254,14 @@ export class World {
       const motion = motionByOrder.get(vehicle.spawnOrder);
       if (motion) vehicle.applyReservedMotion(motion, deltaTime);
       else vehicle.update(deltaTime);
+      this.syncLaneMembership(vehicle);
     }
     // 合流評価と速度更新は移動前の位置と同じ時刻スナップショットで行い、
     // 全車両を次フレームの位置へ進めた後にシミュレーション時刻を更新する
     this.time += deltaTime;
     this.assertGoreInvariant('end');
     this.recordMergePasses();
-    // rulesモード: 出口まで走り切った車は流出する(捌けた分だけ出る)
+    // rulesモード: 施設の出口分岐へ入った車を流出として回収する。
     if (this.mode !== 'absorb') this.collectExited();
     // 待機車の有効化は移動後 snapshot から証明し、この tick の運動へ混ぜない。
     if (this.mode !== 'absorb') this.admitWaiting(this.captureSnapshot(), deltaTime);

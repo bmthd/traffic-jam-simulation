@@ -6,14 +6,21 @@
    ============================================================ */
 export {
   CONST,
+  FACILITIES,
+  FACILITY_SPACING,
+  facilityIndexForZ,
+  facilityWorldZ,
+  nextFacilityWorldZ,
   RAMP_GEOMETRY,
   rampBodyIntersectsGore,
   sectionTrackX,
+  toFacilityLocalZ,
   TYPES,
   TYPE_WEIGHTS,
 } from './constants';
 export type {
   GoreGeometry,
+  FacilityKind,
   Section,
   SimMode,
   NumericSimParam,

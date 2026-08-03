@@ -1,6 +1,7 @@
 /* ================= 道路・標識などの静的な情景 ================= */
 import * as THREE from 'three';
-import { CONST, RAMP_GEOMETRY, WRAP_LENGTH } from '../core';
+import { CONST, FACILITIES, FACILITY_SPACING, RAMP_GEOMETRY, WRAP_LENGTH } from '../core';
+import type { FacilityKind } from '../core';
 import type { Section } from '../core';
 import { scene } from './scene';
 import { asphaltTexture, delineatorMaterial, frontageAsphaltTexture } from './materials';
@@ -47,6 +48,8 @@ export function sectionX(section: Section, xInSectionFrame: number): number {
    そのまま加速車線になる。「合流開放区間」= 分離帯を置かない = 加速車線として本線に開く区間 */
 const MERGE_OPEN_START_Z = RAMP_GEOMETRY.gore.endZ; // 下流端(導流帯の終わり = 合流完了地点)
 const MERGE_OPEN_END_Z = RAMP_GEOMETRY.entryZ + 14; // 上流端(加速車線の始まり)
+const EXIT_OPEN_START_Z = CONST.EXIT_BRANCH_Z; // 下流端(分岐)
+const EXIT_OPEN_END_Z = CONST.EXIT_LANE_START_Z; // 上流端(減速車線の始まり)
 // 側道(=加速車線)の舗装帯。外側の端(-16.8)はR区間では区間の仕切りの基礎に接するため
 // これ以上外へは広げられない。代わりに内側を本線の外側線(-13)まで伸ばし、あわせて
 // 分離帯を本線寄りに移して側道の走行部を広げた (Issue #87)
@@ -124,10 +127,21 @@ function dashedLines(xPositions: number[]): void {
   scene.add(instancedAt(geometry, whiteLineMaterial, positions));
 }
 solidLines(SECTIONS.map((section) => sectionX(section, -1)));
-// 合流開放区間は実線を切り、既存の破線だけで本線と加速車線を区切る。
+// 合流・分流の開放区間は実線を切り、破線で本線と加減速車線を区切る。
 const mainOuterEdgeXs = SECTIONS.map((section) => sectionX(section, -13));
-solidLines(mainOuterEdgeXs, -WRAP_LENGTH / 2, MERGE_OPEN_START_Z);
-solidLines(mainOuterEdgeXs, MERGE_OPEN_END_Z, WRAP_LENGTH / 2);
+// 施設ローカルの閉鎖区間を2本に分け、入口と出口の両方で外側線を開放する。
+for (const facility of FACILITIES) {
+  solidLines(
+    mainOuterEdgeXs,
+    MERGE_OPEN_END_Z - FACILITY_SPACING + facility.offsetZ,
+    EXIT_OPEN_START_Z + facility.offsetZ,
+  );
+  solidLines(
+    mainOuterEdgeXs,
+    EXIT_OPEN_END_Z + facility.offsetZ,
+    MERGE_OPEN_START_Z + facility.offsetZ,
+  );
+}
 // 加速車線と路側帯の境界(外側線)は全長にわたって実線
 solidLines(SECTIONS.map((section) => sectionX(section, FRONTAGE_EDGE_LINE_X)));
 for (const section of SECTIONS) {
@@ -156,29 +170,87 @@ dashedLines(SECTIONS.flatMap((section) => [-5, -9].map((x) => sectionX(section, 
   const length = Math.hypot(dx, dz);
   const angle = Math.atan2(-dz, dx); // +X 方向の棒をテーパーの向きへ倒す角
   const geometry = new THREE.BoxGeometry(length, 0.02, 0.16);
-  const matrices = SECTIONS.map((section) =>
-    new THREE.Matrix4()
-      .makeRotationY(angle)
-      .setPosition(
-        sectionX(section, (gore.outerX + gore.mainX) / 2),
-        0.012,
-        (gore.startZ + gore.endZ) / 2,
+  const matrices = FACILITIES.flatMap((facility) =>
+    SECTIONS.flatMap((section) =>
+      loopCopies((gore.startZ + gore.endZ) / 2 + facility.offsetZ).map((z) =>
+        new THREE.Matrix4()
+          .makeRotationY(angle)
+          .setPosition(sectionX(section, (gore.outerX + gore.mainX) / 2), 0.012, z),
       ),
+    ),
   );
   scene.add(instancedWith(geometry, whiteLineMaterial, matrices));
 })();
 
-/* ---- 合流部マーキング ---- */
-for (const section of SECTIONS) {
+/* ---- 合流・分流部マーキング ---- */
+{
   const { gore } = RAMP_GEOMETRY;
-  const zTop = MERGE_OPEN_END_Z;
-  // 本線との境界は破線(合流可)
+  // 本線との境界は破線(車線変更可)。施設0のローカル座標で1セットだけ定義する。
   const dashGeometry = new THREE.BoxGeometry(0.15, 0.02, 3);
-  const dashPositions: [number, number, number][] = [];
-  for (let z = gore.startZ + 6; z < zTop - 6; z += 9)
-    dashPositions.push([sectionX(section, gore.mainX), 0.012, z]);
+  const localDashZ: number[] = [];
+  for (let z = gore.startZ + 6; z < MERGE_OPEN_END_Z - 6; z += 9) localDashZ.push(z);
+  for (let z = EXIT_OPEN_START_Z + 22; z < EXIT_OPEN_END_Z - 6; z += 9) localDashZ.push(z);
+  const dashPositions = FACILITIES.flatMap((facility) =>
+    SECTIONS.flatMap((section) =>
+      localDashZ.flatMap((localZ) =>
+        loopCopies(localZ + facility.offsetZ).map((z): [number, number, number] => [
+          sectionX(section, gore.mainX),
+          0.012,
+          z,
+        ]),
+      ),
+    ),
+  );
   scene.add(instancedAt(dashGeometry, whiteLineMaterial, dashPositions));
 }
+
+/* ---- 出口(分流部)の導流帯 ---- */
+(function buildExitGoreTriangle() {
+  const { gore } = RAMP_GEOMETRY;
+  const exitGoreTipZ = EXIT_OPEN_START_Z + (gore.startZ - gore.endZ);
+  const localTriangle = [
+    [gore.mainX, exitGoreTipZ],
+    [gore.mainX, EXIT_OPEN_START_Z],
+    [gore.outerX, EXIT_OPEN_START_Z],
+  ] as const;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      localTriangle.flatMap(([x, z]) => [x, 0.013, z]),
+      3,
+    ),
+  );
+  const material = new THREE.MeshBasicMaterial({ color: 0xf2f2f2, side: THREE.DoubleSide });
+  for (const facility of FACILITIES)
+    for (const section of SECTIONS)
+      for (const offset of loopCopies(facility.offsetZ)) {
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(CONST.SECTION_OFFSET_X[section], 0, offset);
+        scene.add(mesh);
+      }
+})();
+
+/* ---- 減速車線始点のテーパー(本線側から外側へ拡幅) ---- */
+(function buildExitTaperLine() {
+  const { gore } = RAMP_GEOMETRY;
+  const taperEndZ = EXIT_OPEN_END_Z - (gore.startZ - gore.endZ);
+  const dx = gore.outerX - gore.mainX;
+  const dz = taperEndZ - EXIT_OPEN_END_Z;
+  const length = Math.hypot(dx, dz);
+  const angle = Math.atan2(-dz, dx);
+  const geometry = new THREE.BoxGeometry(length, 0.02, 0.16);
+  const matrices = FACILITIES.flatMap((facility) =>
+    SECTIONS.flatMap((section) =>
+      loopCopies((EXIT_OPEN_END_Z + taperEndZ) / 2 + facility.offsetZ).map((z) =>
+        new THREE.Matrix4()
+          .makeRotationY(angle)
+          .setPosition(sectionX(section, (gore.mainX + gore.outerX) / 2), 0.012, z),
+      ),
+    ),
+  );
+  scene.add(instancedWith(geometry, whiteLineMaterial, matrices));
+})();
 
 /* ---- 区間の仕切り（ガードレール付き） ----
    両区間は同じ向きに走る独立した道路なので「中央分離帯」ではなく、
@@ -280,9 +352,22 @@ roadText('義務なし', sectionX('R', -7), -120);
 roadText('ゆずりあい', sectionX('L', -7), 60);
 roadText('マイペース', sectionX('R', -7), 60);
 
-/* ---- 頭上標識ゲート(カメラをどう回しても区間が分かるように両面・両端に設置) ---- */
-export const GANTRY_Z = [-300, -100, 100, 300];
-function makeSignTexture(title: string, subtitle: string, background: string): THREE.CanvasTexture {
+/* ---- 施設案内標識 ---- */
+const EXIT_SIGN_LOCAL_Z = CONST.EXIT_BRANCH_Z + 35;
+const ADVANCE_SIGN_DISTANCES = [500, 250] as const;
+const FACILITY_SIGN: Record<FacilityKind, { background: string; subtitle: string }> = {
+  IC: { background: '#168447', subtitle: '出口' },
+  PA: { background: '#168447', subtitle: 'P' },
+};
+const FACILITY_NAMES = ['青葉IC', 'みどりPA', '朝日IC', 'こもれびPA'] as const;
+export const SIGN_GLOW_SPECS: { x: number; y: number; z: number; width: number; height: number }[] =
+  [];
+function makeSignTexture(
+  title: string,
+  subtitle: string,
+  background: string,
+  arrow = false,
+): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 160;
@@ -294,46 +379,88 @@ function makeSignTexture(title: string, subtitle: string, background: string): T
   ctx.strokeRect(8, 8, 496, 144);
   ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
-  ctx.font = 'bold 64px sans-serif';
-  ctx.fillText(title, 256, 74);
-  ctx.font = 'bold 34px sans-serif';
-  ctx.fillText(subtitle, 256, 126);
+  ctx.font = 'bold 58px sans-serif';
+  ctx.fillText(title, 256, 68);
+  ctx.font = 'bold 32px sans-serif';
+  ctx.fillText(arrow ? `${subtitle}  ↓` : subtitle, 256, 124);
   return new THREE.CanvasTexture(canvas);
 }
-function buildGantry(section: Section, z: number): void {
-  const theme = SECTION_THEME[section];
-  const centerX = sectionX(section, -7);
-  const outerPostX = sectionX(section, -17.4);
-  const innerPostX = sectionX(section, -0.1);
-  const group = new THREE.Group();
-  const steel = new THREE.MeshLambertMaterial({ color: 0x99a1aa });
-  for (const postX of [outerPostX, innerPostX]) {
-    const post = new THREE.Mesh(new THREE.BoxGeometry(0.35, 6.6, 0.35), steel);
-    post.position.set(postX, 3.3, z);
-    post.castShadow = true;
-    group.add(post);
-  }
-  const beam = new THREE.Mesh(
-    new THREE.BoxGeometry(innerPostX - outerPostX + 0.7, 0.4, 0.4),
-    steel,
-  );
-  beam.position.set((outerPostX + innerPostX) / 2, 6.4, z);
-  beam.castShadow = true;
-  group.add(beam);
-  const texture = makeSignTexture(theme.title, theme.subtitle, theme.signBackground);
-  const boardGeometry = new THREE.PlaneGeometry(10.5, 3.3);
-  const boardMaterial = new THREE.MeshBasicMaterial({ map: texture });
+function addDoubleSidedBoard(
+  group: THREE.Group,
+  texture: THREE.CanvasTexture,
+  x: number,
+  y: number,
+  z: number,
+  width: number,
+  height: number,
+): void {
+  const geometry = new THREE.PlaneGeometry(width, height);
+  const material = new THREE.MeshBasicMaterial({ map: texture });
   for (const dir of [1, -1]) {
-    // 両面に設置(裏からも正しく読める)
-    const board = new THREE.Mesh(boardGeometry, boardMaterial);
-    board.position.set(centerX, 8.3, z + dir * 0.06);
+    const board = new THREE.Mesh(geometry, material);
+    board.position.set(x, y, z + dir * 0.06);
     if (dir === -1) board.rotation.y = Math.PI;
-    // 表裏の影はほぼ完全に重なるため、片面だけ描画してシャドウパスを抑える
     if (dir === 1) board.castShadow = true;
     group.add(board);
   }
+  SIGN_GLOW_SPECS.push({ x, y, z, width: width + 1, height: height + 1 });
+}
+function buildExitSign(section: Section, facilityIndex: number, z: number): void {
+  const facility = FACILITIES[facilityIndex];
+  const sign = FACILITY_SIGN[facility.kind];
+  const laneX = sectionX(section, -15);
+  const postX = sectionX(section, -17.25);
+  const group = new THREE.Group();
+  const steel = new THREE.MeshLambertMaterial({ color: 0x99a1aa });
+  const post = new THREE.Mesh(new THREE.BoxGeometry(0.3, 6.4, 0.3), steel);
+  post.position.set(postX, 3.2, z);
+  post.castShadow = true;
+  group.add(post);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(laneX - postX, 0.3, 0.3), steel);
+  arm.position.set((postX + laneX) / 2, 6.25, z);
+  arm.castShadow = true;
+  group.add(arm);
+  addDoubleSidedBoard(
+    group,
+    makeSignTexture(FACILITY_NAMES[facilityIndex], sign.subtitle, sign.background, true),
+    laneX,
+    7.6,
+    z,
+    4.2,
+    2.7,
+  );
   scene.add(group);
 }
-for (const section of SECTIONS) {
-  for (const gantryZ of GANTRY_Z) buildGantry(section, gantryZ);
+function buildAdvanceSign(
+  section: Section,
+  facilityIndex: number,
+  distance: number,
+  z: number,
+): void {
+  const group = new THREE.Group();
+  const postX = sectionX(section, -17.25);
+  const steel = new THREE.MeshLambertMaterial({ color: 0x99a1aa });
+  const post = new THREE.Mesh(new THREE.BoxGeometry(0.24, 3.8, 0.24), steel);
+  post.position.set(postX, 1.9, z);
+  post.castShadow = true;
+  group.add(post);
+  addDoubleSidedBoard(
+    group,
+    makeSignTexture(FACILITY_NAMES[facilityIndex], `${distance} m`, '#168447'),
+    postX,
+    4.8,
+    z,
+    4.4,
+    2.15,
+  );
+  scene.add(group);
+}
+for (const facility of FACILITIES) {
+  for (const section of SECTIONS) {
+    for (const z of loopCopies(EXIT_SIGN_LOCAL_Z + facility.offsetZ))
+      buildExitSign(section, facility.index, z);
+    for (const distance of ADVANCE_SIGN_DISTANCES)
+      for (const z of loopCopies(CONST.EXIT_BRANCH_Z + distance + facility.offsetZ))
+        buildAdvanceSign(section, facility.index, distance, z);
+  }
 }

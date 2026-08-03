@@ -2,7 +2,7 @@
    道路施設(track.js)とは別の「風景」を担当する。
    山・雲のマテリアルは materials.js にあり、昼夜の色は theme.js が補間する */
 import * as THREE from 'three';
-import { WRAP_LENGTH } from '../core';
+import { CONST, FACILITIES, WRAP_LENGTH } from '../core';
 import { backgroundAnchor, scene } from './scene';
 import { mountainFarMaterial, mountainNearMaterial, cloudMaterial } from './materials';
 import { instancedAt } from './instancing';
@@ -63,6 +63,7 @@ import { loopCopies } from './looping';
 
 /* ---- 並木・雑木林(InstancedMeshで軽量に大量配置) ---- */
 (function buildTrees() {
+  // 総延長4倍と前後周回の複製で負荷が増えるため、延長前と同じ総数に制限する。
   const treeCount = 130;
   const trunkGeometry = new THREE.CylinderGeometry(0.1, 0.18, 1, 5);
   trunkGeometry.translate(0, 0.5, 0);
@@ -106,6 +107,60 @@ import { loopCopies } from './looping';
     });
   }
   scene.add(trunks, canopies);
+})();
+
+/* ---- PAの付帯景観(車両は進入しない描画専用の外景) ---- */
+(function buildParkingAreas() {
+  const paFacilities = FACILITIES.filter((facility) => facility.kind === 'PA');
+  const paLocalZ = (CONST.RAMP_Z_TOP + CONST.RAMP_Z_END) / 2;
+  const parkingGeometry = new THREE.BoxGeometry(24, 0.1, 28);
+  const parkingMaterial = new THREE.MeshLambertMaterial({ color: 0x596064 });
+  const buildingGeometry = new THREE.BoxGeometry(20, 5.5, 12);
+  const buildingMaterial = new THREE.MeshLambertMaterial({ color: 0xe8e1d2 });
+  const roofGeometry = new THREE.BoxGeometry(21, 0.8, 13);
+  const roofMaterial = new THREE.MeshLambertMaterial({ color: 0x4d6f78 });
+  const parkingLineGeometry = new THREE.BoxGeometry(0.12, 0.02, 5.4);
+  const parkingLineMaterial = new THREE.MeshBasicMaterial({ color: 0xf4f4f0 });
+  const lightPoleGeometry = new THREE.CylinderGeometry(0.08, 0.1, 5.5, 6);
+  const lightPoleMaterial = new THREE.MeshLambertMaterial({ color: 0x89939c });
+  const lightHeadGeometry = new THREE.BoxGeometry(1.2, 0.18, 0.5);
+  const lightHeadMaterial = new THREE.MeshBasicMaterial({ color: 0xffefb0 });
+  const parkingLines: [number, number, number][] = [];
+  const lightPoles: [number, number, number][] = [];
+  const lightHeads: [number, number, number][] = [];
+
+  for (const facility of paFacilities) {
+    for (const facilityZ of loopCopies(paLocalZ + facility.offsetZ)) {
+      // 両道路のさらに外側へ同じPA景観を置き、走行空間には重ねない。
+      for (const side of [-1, 1]) {
+        const centerX = side * 52;
+        const parking = new THREE.Mesh(parkingGeometry, parkingMaterial);
+        parking.position.set(centerX, -0.08, facilityZ - 2);
+        parking.receiveShadow = true;
+        scene.add(parking);
+        const building = new THREE.Mesh(buildingGeometry, buildingMaterial);
+        building.position.set(centerX, 2.75, facilityZ + 18);
+        building.castShadow = true;
+        building.receiveShadow = true;
+        scene.add(building);
+        const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+        roof.position.set(centerX, 5.8, facilityZ + 18);
+        roof.castShadow = true;
+        scene.add(roof);
+        for (let space = -4; space <= 4; space++)
+          parkingLines.push([centerX + space * 2.2, 0.015, facilityZ - 3]);
+        for (const zOffset of [-10, 6]) {
+          lightPoles.push([centerX, 2.75, facilityZ + zOffset]);
+          lightHeads.push([centerX, 5.55, facilityZ + zOffset]);
+        }
+      }
+    }
+  }
+  scene.add(instancedAt(parkingLineGeometry, parkingLineMaterial, parkingLines));
+  const lights = instancedAt(lightPoleGeometry, lightPoleMaterial, lightPoles);
+  lights.castShadow = true;
+  scene.add(lights);
+  scene.add(instancedAt(lightHeadGeometry, lightHeadMaterial, lightHeads));
 })();
 
 /* ---- 遠景: 山並み(霧の外に置く書割り) ---- */

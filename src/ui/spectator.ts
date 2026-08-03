@@ -9,12 +9,14 @@ import {
   onSpectatorChange,
   onSpectatorProgress,
   resetCameraAdjustment,
+  selectCameraFacility,
   selectCameraSection,
   selectNextFollowVehicle,
   selectSpectatorMode,
   selectVariation,
 } from '../render/camera';
 import type { SpectatorStatus } from '../render/camera';
+import { FACILITIES } from '../core';
 import { icon, renderIcons } from './icons';
 
 const MODE_LABEL_DURATION_MS = 3000;
@@ -30,6 +32,7 @@ export function setupSpectator(): void {
   const resetButton = document.getElementById('cameraResetBtn')!;
   const panHint = document.getElementById('cameraPanHint')!;
   const vehicleBar = document.getElementById('vehicleCameraBar')!;
+  const facilityBar = document.getElementById('facilityCameraBar')!;
   const variationContainer = document.getElementById('variationBar')!;
   let labelTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -37,7 +40,12 @@ export function setupSpectator(): void {
     button.innerHTML = icon(status.mode.icon);
     button.classList.toggle('on', status.enabled);
     button.classList.toggle('auto', status.auto);
-    label.textContent = status.mode.label;
+    const showsFacility = status.mode.id === 'fixed' && status.variation?.id === 'ramp';
+    const facility = FACILITIES[status.facilityIndex];
+    const facilityLabel = showsFacility
+      ? ` 施設${status.facilityIndex + 1}/${FACILITIES.length} (${facility.kind})`
+      : '';
+    label.textContent = status.mode.label + facilityLabel;
     label.classList.toggle('show', showLabel);
     clearTimeout(labelTimer);
     if (showLabel) {
@@ -45,7 +53,8 @@ export function setupSpectator(): void {
         label.classList.remove('show');
       }, MODE_LABEL_DURATION_MS);
     }
-    const title = 'カメラ: ' + status.mode.label + '(押して切替)';
+    const detail = showsFacility ? ` 施設${status.facilityIndex + 1} (${facility.kind})` : '';
+    const title = 'カメラ: ' + status.mode.label + detail + '(押して切替)';
     button.title = title;
     button.setAttribute('aria-label', title);
     menu.querySelectorAll<HTMLButtonElement>('[data-camera-mode]').forEach((item) => {
@@ -55,6 +64,10 @@ export function setupSpectator(): void {
     panHint.hidden = !isFixedMode(status.mode.id);
     vehicleBar.hidden = !isFixedMode(status.mode.id) && status.mode.id !== 'tracking';
     document.getElementById('nextVehicleBtn')!.hidden = status.mode.id !== 'tracking';
+    facilityBar.hidden = !showsFacility;
+    facilityBar.querySelectorAll<HTMLButtonElement>('[data-facility]').forEach((item) => {
+      item.classList.toggle('selected', Number(item.dataset.facility) === status.facilityIndex);
+    });
     vehicleBar.querySelectorAll<HTMLButtonElement>('[data-section]').forEach((item) => {
       item.classList.toggle('selected', item.dataset.section === status.section);
     });
@@ -85,6 +98,10 @@ export function setupSpectator(): void {
     (mode) =>
       `<button type="button" data-camera-mode="${mode.id}">${icon(mode.icon)}<span>${mode.label}</span></button>`,
   ).join('');
+  facilityBar.innerHTML = FACILITIES.map(
+    (facility, index) =>
+      `<button type="button" data-facility="${index}">施設${index + 1} ${facility.kind}</button>`,
+  ).join('');
 
   button.addEventListener('click', () => {
     const open = menu.classList.toggle('open');
@@ -108,6 +125,10 @@ export function setupSpectator(): void {
     button.setAttribute('aria-expanded', 'false');
   });
   resetButton.addEventListener('click', resetCameraAdjustment);
+  facilityBar.addEventListener('click', (event) => {
+    const item = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-facility]');
+    if (item) selectCameraFacility(Number(item.dataset.facility));
+  });
   vehicleBar.addEventListener('click', (event) => {
     const target = event.target as HTMLElement;
     const sectionButton = target.closest<HTMLButtonElement>('[data-section]');
