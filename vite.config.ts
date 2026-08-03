@@ -31,7 +31,7 @@ export default defineConfig({
   },
   test: {
     // 4倍延長後は同じ密度で車両数も4倍になり、長時間監査が大幅に重くなる。
-    testTimeout: 1_000_000,
+    testTimeout: 1_200_000,
   },
   // コミット時 (pre-commit hook → `vp staged`) にステージ済みファイルをフォーマットする。
   // hooks 本体は `vp config` (pnpm install の prepare で自動実行) が .vite-hooks に導入する

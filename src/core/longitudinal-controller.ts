@@ -242,6 +242,11 @@ export class LongitudinalController {
         this.vehicle.speed - decel * deltaTime,
       );
     }
+    if (ahead) {
+      // 最大制動でも次tickまでに止まり切れない場合は、残存車間を越えて進ませない。
+      // 追従車が先に更新される順序でも、前方車の後続移動ぶんだけ安全側に倒れる。
+      this.vehicle.speed = Math.min(this.vehicle.speed, Math.max(0, ahead.gap) / deltaTime);
+    }
     // 連鎖反応(力学)用の瞬時信号は従来どおり
     this.vehicle.brakeChainSignal = speedDiff < -1.5 || this.vehicle.emergency;
     // ブレーキ灯(見た目): 実際にブレーキ相当の減速をしている時だけ点け、点いたら
